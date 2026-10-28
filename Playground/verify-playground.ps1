@@ -149,6 +149,22 @@ try {
     }
     Write-Host "[PASS] 7. CRUD and where() operations verified." -ForegroundColor Green
 
+    # 7b. Verify multiline chaining and auto-normalization
+    $multilineSnippet = @'
+$script:db.collection('users')
+    .where('age', '>=', 40)
+    .orderBy('age', 'desc')
+    .limit(5)
+    .get()
+'@
+    $normalizedSnippet = $multilineSnippet -replace "(?m)(?<![.`])\r?\n(\s*)\.([a-zA-Z_]\w*\s*\()", ".`r`n`$1`$2"
+    $sb = [scriptblock]::Create($normalizedSnippet)
+    $chainRes = & $sb
+    if ($chainRes.name -ne "Bill") {
+        throw "Failed multiline chaining query execution"
+    }
+    Write-Host "[PASS] 7b. Multiline method chaining & auto-normalization verified." -ForegroundColor Green
+
     # 8. Verify WAL Checkpoint
     $script:db._ExecuteDirectSql("PRAGMA wal_checkpoint(TRUNCATE);")
     Write-Host "[PASS] 8. WAL Checkpoint executed cleanly." -ForegroundColor Green

@@ -953,7 +953,9 @@ function Start-PlaygroundApp {
 
         try {
             $db = $script:db
-            $scriptBlock = [scriptblock]::Create($Code)
+            # Auto-normalize leading dots on multiline method chaining (PowerShell syntax requirement)
+            $normalizedCode = $Code -replace "(?m)(?<![.`])\r?\n(\s*)\.([a-zA-Z_]\w*\s*\()", ".`r`n`$1`$2"
+            $scriptBlock = [scriptblock]::Create($normalizedCode)
             $res = & $scriptBlock
             $sw.Stop()
 
@@ -1071,11 +1073,11 @@ function Start-PlaygroundApp {
 
                 $lblCard3Title.Text = "Filter with Where, OrderBy & Limit"
                 $txtCodeCard3.Text = @"
-`$db.collection('$coll')
-    .where('id', '>=', 1)
-    .orderBy('id', 'asc')
-    .limit(10)
-    .get()
+`$db.collection('$coll').
+    where('id', '>=', 1).
+    orderBy('id', 'asc').
+    limit(10).
+    get()
 "@
             }
             "Updating Data" {
