@@ -40,6 +40,8 @@
 
 Explore, query, test, and inspect your database visually in a single self-contained WPF application:
 
+![PSLocalBase Playground](Playground/screenshots/dark-mode.png)
+
 ```powershell
 # Launch the interactive GUI Playground (PowerShell 7+ or Windows PowerShell 5.1):
 pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
@@ -47,7 +49,7 @@ pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 ```
 
-For full details and walkthroughs, see the [Playground Documentation](Playground/README.md).
+Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid inspection, interactive code tutorial cards, and an integrated execution console. For full details and Light Mode preview, see the [Playground Documentation](Playground/README.md).
 
 
 ---

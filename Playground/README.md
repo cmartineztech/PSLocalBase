@@ -10,6 +10,25 @@ Features a modern dual-pane desktop workspace built entirely with native **Power
   * **Database Explorer:** Multi-collection inspector (`users`, `products`, `orders`), live DataGrid with `#`, `Document ID / Key`, and formatted JSON payloads, real-time search by key or text value, and double-click document inspection.
   * **Execution Console:** Real-time log stream showing formatted JSON representations, execution timestamps, status badges, and sub-millisecond execution times.
   * **Live CLI Prompt:** Type any ad-hoc `$db` expression at the bottom `>` prompt and press <kbd>Enter</kbd> to execute immediately!
+* **Full Path Display:** The footer status bar and storage metrics explicitly display the canonical full path to the active SQLite database file.
+
+---
+
+## Visual Tour & Theme Engine
+
+PSLocalBase Playground includes an integrated, zero-dependency dual-theme engine conforming to modern Windows 11 enterprise design guidelines.
+
+### Dark Mode (Enterprise High-Contrast)
+
+Default dark aesthetic built with deep slate canvas (`#121418`), rich surface cards (`#1C1F26`), crisp borders (`#2C313A`), and vibrant cobalt accents (`#3B82F6`):
+
+![PSLocalBase Playground Dark Mode](screenshots/dark-mode.png)
+
+### Light Mode (Clean Daylight Workspace)
+
+Daylight theme optimized for high-readability environments with cool blue-gray canvas (`#F0F4FA`), pure white cards (`#FFFFFF`), subtle borders (`#D0DAE6`), and classic royal blue accents (`#2F6FED`):
+
+![PSLocalBase Playground Light Mode](screenshots/light-mode.png)
 
 ---
 
@@ -22,7 +41,7 @@ From PowerShell 7+ or Windows PowerShell 5.1:
 pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 
 # Launch explicitly in Dark Mode:
-pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DarkMode
+pwsh -File .\Playground\Playground.ps1 -DarkMode
 
 # Windows PowerShell 5.1:
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
@@ -35,21 +54,21 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 1. **Enterprise Design System & Theme Engine:**
    * **Full Dark Mode:** Rich dark theme (`#121418` canvas, `#1C1F26` surface cards, `#2C313A` borders, `#3B82F6` accents).
    * **Clean Light Mode:** Crisp enterprise light theme (`#F0F4FA` canvas, `#FFFFFF` cards, `#D0DAE6` borders, `#2F6FED` accents).
-   * **Instant Theme Switching:** Toggle between Light and Dark mode without restarting the application.
+   * **Instant Theme Switching:** Toggle between Light and Dark mode without restarting the application via the top-right theme button.
    * **Custom Dropdown Styling:** Clean ComboBox with custom SVG chevron arrow, high-contrast text, and hover item animations.
 
 2. **Interactive Database Operations:**
    * **Adding Data:** Test `.add()` (auto-GUID), `.set()` (custom key) directly against the active collection, and `.create()` for explicit collection table creation.
    * **Getting Data:** Test `.get()`, `.where()`, `.orderBy()`, and `.limit()`.
    * **Updating Data:** Test `.update()` recursive deep merge and `.set()` complete document replacement.
-   * **Deleting Data:** Test single document deletion, collection purging via `.delete()`, and `.collectionExists()` checks.
+   * **Deleting Data:** Test single document deletion, collection purging via `.delete()`, `.drop()`, and `.collectionExists()` checks.
    * **Custom PowerShell:** An open script editor with full access to `$db` for custom pipelines, filters, and loops.
 
 3. **Database Explorer:**
    * **Collection Switcher:** Instant switching between `users`, `products`, `orders`, or newly created collections.
    * **Live Search Filter:** High-speed filter by document key or any substring inside the document JSON.
    * **Double-Click Inspection:** Double-click any row in the DataGrid to inspect its full JSON payload in the console.
-   * **Toolbar Actions:** Seed Demo Data, Flush WAL Checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), Refresh, `+ New` Collection modal dialog, Delete Collection, and Delete Selected Document.
+   * **Toolbar Actions:** Seed Demo Data (with overwrite safety confirmation), Flush WAL Checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), Refresh, `+ New` Collection modal dialog, Delete Collection, and Delete Selected Document.
 
 4. **Execution Output & Console:**
    * **Real-Time Logging:** Color-coded execution badges (`Success` in forest green, `Error` in crimson) with execution duration in milliseconds.
