@@ -7,7 +7,9 @@
 
 > **PSLocalBase** is a lightweight, zero-dependency embedded document (NoSQL / Key-Value) database engine for PowerShell, inspired by the JavaScript library [Localbase](https://github.com/samuk190/localbase).<br>
 >
-> Under the hood, it operates as a native NoSQL Document Store built on top of Windows' pre-installed SQLite engine (`winsqlite3.dll`) using its built-in JSON functions. It incurs zero overhead by running in-memory P/Invoke directly in C, returns native PowerShell objects (`[PSCustomObject]`) with seamless dot-notation access, and provides full support for arrays and nested document structures.
+> Under the hood, it operates as a native NoSQL Document Store built on top of Windows' pre-installed SQLite engine (`winsqlite3.dll`) using its built-in JSON functions. It incurs zero overhead by running in-memory P/Invoke directly in C, returns native PowerShell objects (`[PSCustomObject]`) with seamless dot-notation access, and provides full support for arrays and nested document structures.<br>
+>
+> 📖 **Quick Start:** For step-by-step walkthroughs, full code examples, and advanced usage, see the complete [Quick Start Guide (_DOCS/QUICKSTART.md)](_DOCS/QUICKSTART.md).
 
 ---
 
@@ -96,6 +98,8 @@ $admins | Format-Table name, role, active
 # 6. Clean close
 $db.close()
 ```
+
+> 💡 For comprehensive step-by-step guides, pagination, bulk operations, and deep merge updates, see the complete [Quick Start Guide (`_DOCS/QUICKSTART.md`)](_DOCS/QUICKSTART.md).
 
 ---
 
