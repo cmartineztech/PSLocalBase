@@ -200,6 +200,10 @@ class PSLocalBase : System.IDisposable {
     }
 
     [PSLocalBase] doc([object]$keyOrCriteria) {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .doc().")
+        }
         if ($null -eq $keyOrCriteria) {
             throw [System.ArgumentException]::new("Document key cannot be null.")
         }
@@ -238,6 +242,7 @@ class PSLocalBase : System.IDisposable {
         }
 
         $this.CurrentKey = $resolvedKey
+        $this._EnsureCollectionTable()
         return $this
     }
 

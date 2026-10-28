@@ -97,7 +97,7 @@ $db = New-LocalBase
 
 ## 3. Working with Collections & Documents
 
-Collections are created automatically upon first write, or explicitly via `.create()`. Navigating via `$db.collection("name")` is lazy and will not create empty tables in SQLite.
+Collections are created automatically upon explicitly targeting a document (`.doc()`, `.add()`), writing data, or explicitly calling `.create()`. Mere navigation via `$db.collection("name")` or read queries (`.get()`, `.count()`) are lazy and will not create empty/ghost tables in SQLite.
 
 ### Explicit Collection Creation (`create`)
 If you want to pre-provision an empty collection table before inserting records:

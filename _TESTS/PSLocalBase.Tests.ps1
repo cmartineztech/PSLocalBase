@@ -944,6 +944,13 @@ Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation
         if ($collsAfterWrite.Count -ne 1 -or $collsAfterWrite[0] -ne "auto_on_write") {
             throw "Write operation failed to auto-create collection table."
         }
+
+        # 6. Explicit .doc() targeting provisions table automatically
+        [void]$db.collection("auto_on_doc").doc("doc1")
+        $collsAfterDoc = @($db.listCollections())
+        if ($collsAfterDoc.Count -ne 2 -or -not ($collsAfterDoc -contains "auto_on_doc")) {
+            throw "Explicit .doc() failed to auto-create collection table."
+        }
     } finally {
         $db.close()
     }

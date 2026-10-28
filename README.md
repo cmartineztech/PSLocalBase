@@ -148,7 +148,7 @@ if (-not $db.collectionExists("users")) {
 ```
 
 #### `doc([object]$keyOrCriteria)`
-Targets a specific document by its key or an object/hashtable criteria.
+Targets a specific document by its key or an object/hashtable criteria. If the collection does not yet exist, targeting with `.doc()` (or creating with `.add()`) automatically provisions the collection table in SQLite.
 ```powershell
 # By string key
 $db.collection("orders").doc("ord-001")

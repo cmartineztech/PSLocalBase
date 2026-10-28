@@ -175,7 +175,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 * **`[PSLocalBase] create()` / `[PSLocalBase] createCollection([string]$name)`**
   * Explicitly provisions the collection table in SQLite immediately, matching the counterpart `.delete()` method.
 * **`[PSLocalBase] doc([object]$keyOrCriteria)`**
-  * Resolves key from string, number, hashtable, or criteria object.
+  * Resolves key from string, number, hashtable, or criteria object, and automatically provisions the collection table in SQLite if it does not already exist.
 
 #### Writing
 * **`[void] set([object]$data, [hashtable]$options)`**
