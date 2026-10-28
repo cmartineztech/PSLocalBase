@@ -388,26 +388,20 @@ For the complete breakdown of all 26 verified acceptance criteria, test categori
 
 ## Architecture & Performance
 
-```
-+-------------------------------------------------------------+
-|                      PowerShell Host                        |
-|   (Windows PowerShell 5.1 Desktop  /  PowerShell 7+ Core)   |
-+-------------------------------------------------------------+
-                              |
-                     [PSLocalBase] Class
-       (Fluent API: collection, doc, set, add, update, get)
-                              |
-                  WinSqlite3 Interop Layer
-         (P/Invoke C# with Unicode UTF-16 Bindings)
-                              |
-               C:\Windows\System32\winsqlite3.dll
-            (Zero Dependencies Native Windows SQLite)
-                              |
-          +-------------------+-------------------+
-          |                                       |
-    [database.db]                     [database.db-wal]
-  Standard SQLite DB                 Write-Ahead Logging
- (Key-Value JSON Store)              (Non-Blocking Read/Write)
+```mermaid
+flowchart TD
+    Host["PowerShell Host<br/>(Windows PowerShell 5.1 / PowerShell 7+)"]
+    API["PSLocalBase Class<br/>(Fluent NoSQL API: collection, doc, set, add, update, get)"]
+    Interop["WinSqlite3 Interop Layer<br/>(In-Memory C# P/Invoke with UTF-16 Bindings)"]
+    Native["C:\Windows\System32\winsqlite3.dll<br/>(Zero-Dependency Native Windows SQLite)"]
+    DB[("database.db<br/>(Primary Key-Value JSON Store)")]
+    WAL[("database.db-wal<br/>(Write-Ahead Logging / Concurrency)")]
+
+    Host --> API
+    API --> Interop
+    Interop --> Native
+    Native --> DB
+    Native --> WAL
 ```
 
 ### Native SQLite 3 & NoSQL Architecture Highlights
