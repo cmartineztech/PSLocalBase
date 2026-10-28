@@ -1,4 +1,4 @@
-﻿# Security Policy
+# Security Policy
 
 ## Supported Versions
 
@@ -19,16 +19,17 @@
 
 ## Defensive Security Architecture
 
-### 1. Zero External Dependencies
+### 1. Zero External Dependencies & System32 Search Path Isolation
 - Relies exclusively on `winsqlite3.dll`, a trusted native Windows system binary maintained and patched directly by Microsoft via Windows Update.
 - Eliminates software supply chain risks associated with third-party NuGet packages, external binaries, or unsigned dependencies.
+- Enforces assembly-level `[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]` to completely eliminate DLL preloading and search-order hijacking vulnerabilities.
 
-### 2. Complete Anti-SQL Injection Defense (10/10)
+### 2. Complete Anti-SQL Injection Defense
 - **Parameterized Query Binding:** All document writes (`.set()`, `.add()`, `.update()`) and filter queries (`.where()`) utilize parameterized `?` placeholders bound via native `sqlite3_bind_text16` in unmanaged memory.
 - **Strict Identifier Whitelisting:**
   - Collection names: enforced via regex `^[a-zA-Z0-9_]+$`
-  - Field paths: enforced via regex `^[a-zA-Z0-9_.]+$`
-  - Query operators: restricted to a strict whitelist (`=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`)
+  - Field paths: enforced via regex `^[a-zA-Z0-9_.\[\]]+$` with balanced bracket validation
+  - Query operators: restricted to a strict whitelist (`=`, `==`, `!=`, `<>`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`)
   - Sorting directions: restricted strictly to `ASC` or `DESC`
 - **Payload Safety:** Arbitrary user strings (including SQL syntax such as `' OR '1'='1` or `'; DROP TABLE; --`) are treated strictly as harmless literal text.
 
@@ -36,8 +37,11 @@
 - Field values containing complex scripts, code snippets (PowerShell, Python, SQL), nested quotes, backslashes, dollar signs, and multiline strings are stored and retrieved byte-for-byte identical without interpretation or corruption.
 
 ### 4. Memory Safety & Handle Lifecycle
-- **Native Unicode Marshaling:** Dynamic P/Invoke layer uses UTF-16 Unicode variants (`sqlite3_open16`, `sqlite3_prepare16_v2`, `sqlite3_bind_text16`, `sqlite3_column_text16`) matching Windows' and .NET's native string format to prevent encoding desynchronization or buffer overflows.
+- **Native Unicode Marshaling:** Dynamic P/Invoke layer uses UTF-16 Unicode variants (`sqlite3_open16`, `sqlite3_prepare16_v2`, `sqlite3_bind_text16`, `sqlite3_column_text16`, `sqlite3_errmsg16`) matching Windows' and .NET's native string format to prevent encoding desynchronization or buffer overflows.
 - **Leak Prevention:** All prepared SQLite statement pointers are scoped inside `try { ... } finally { [WinSqlite3]::Finalize($stmt) }` blocks to guarantee immediate destruction of unmanaged structures.
+- **Fluent API State Isolation:** Document targets (`CurrentKey`) are cleared across query executions in `try/finally` blocks and reset when chaining filters, preventing accidental cross-query state leakage.
+- **WAL Storage Boundary Validation:** Explicitly rejects UNC paths (`\\server\share`) and mapped network drives (`DriveType.Network`) to prevent SQLite shared-memory (`-shm`) corruption over SMB shares.
+- **Safe Transaction Rollback Isolation:** Handlers wrap rollback calls in guarded blocks to ensure engine-level auto-rollbacks (e.g. `SQLITE_FULL`) do not mask root exceptions.
 - **Non-blocking Concurrency:** Implements Write-Ahead Logging (`WAL`), `synchronous = NORMAL`, and a 5,000 ms busy handler to eliminate locking deadlocks across concurrent scripts.
 
 ---

@@ -44,7 +44,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 * **Interactive Query Builder:** Build and execute `.where()`, `.orderBy()`, `.limit()`, and `.count()` with immediate feedback.
 * **Live PowerShell Code Snippets:** Copy generated PowerShell syntax directly to your clipboard.
 * **Seed Demo Data:** 1-click loading of realistic users, products, and orders datasets.
-* **Theme Switching:** Sleek dark and light themes inspired by LiteDeploy.
+* **Theme Switching:** Sleek dark and light themes with automatic Windows OS theme detection.
 
 ---
 
@@ -69,10 +69,17 @@ Compatible with:
 Creates or opens a SQLite database file on disk. Parent directories are created automatically if they do not exist.
 
 ```powershell
-# Method A: Using the class constructor
+# Method A: Using the standard class constructor
 $db = [PSLocalBase]::new(".\app_data.db")
 
-# Method B: Using the helper cmdlet
+# Method B: With performance & serialization tuning options
+$db = [PSLocalBase]::new(".\app_data.db", @{
+    cacheSizeMB = 32      # 32 MB warm page cache
+    wal         = $true   # Write-Ahead Logging (default: true)
+    depth       = 20      # JSON serialization depth limit
+})
+
+# Method C: Using the helper cmdlet
 $db = New-LocalBase -Path ".\app_data.db"
 ```
 

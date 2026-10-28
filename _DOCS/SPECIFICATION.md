@@ -1,4 +1,4 @@
-﻿# Technical Specification: PSLocalBase
+# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -117,11 +117,11 @@ public class WinSqlite3 {
   PRAGMA temp_store = MEMORY;
   PRAGMA cache_size = -16000;
   ```
-  - **WAL (Write-Ahead Logging):** Eliminates reader/writer concurrency lock contention.
+  - **WAL (Write-Ahead Logging):** Eliminates reader/writer concurrency lock contention. Note: WAL requires shared-memory (`-shm`) locking; therefore, UNC network paths (`\\server\share`) and mapped network drives are strictly rejected to prevent silent data corruption over SMB.
   - **synchronous = NORMAL:** Maximizes throughput while retaining crash resilience.
   - **busy_timeout = 5000:** Automatically sleeps and retries up to 5,000 ms on write collisions.
   - **temp_store = MEMORY:** Performs sorting and temporary indices directly in RAM.
-  - **cache_size = -16000:** Allocates up to 16 MB of warm page cache memory.
+  - **cache_size = -16000 / configurable:** Allocates warm page cache memory (configurable via `cacheSizeMB` option).
 
 ### 4.2. Collection Schema
 Each collection referenced via `.collection("name")` maps to an independent SQLite table:
@@ -162,11 +162,11 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 ### 5.2. Core Method Signatures
 
 #### Lifecycle & Navigation
-* **`PSLocalBase([string]$filePath)` / `PSLocalBase()`**
-  * Initializes connection, verifies directories, sets busy handlers, and runs startup PRAGMAs.
+* **`PSLocalBase([string]$filePath, [hashtable]$options)` / `PSLocalBase([string]$filePath)` / `PSLocalBase()`**
+  * Initializes connection, verifies directories, sets busy handlers, checks network storage boundaries, and runs startup PRAGMAs. Accepts configuration options (`cacheSizeMB`, `wal`, `depth`).
 * **`[void] close()` & `[void] Dispose()`**
   * Finalizes pending statements, invokes `sqlite3_close` (with `sqlite3_close_v2` fallback), and sets `$DbHandle = [IntPtr]::Zero`.
-* **`[string[]] getCollections()`**
+* **`[string[]] listCollections()` / `[string[]] getCollections()`**
   * Returns an array of all active collection names found in the database.
 * **`[PSLocalBase] collection([string]$name)`**
   * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, resets query state, and auto-provisions the underlying table.
@@ -214,13 +214,13 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 21 out of 21 tests on both PowerShell 5.1 and PowerShell 7+:
+The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 26 out of 26 tests on both PowerShell 5.1 and PowerShell 7+:
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
 | **TC-01** | **Zero Dependencies** | Imports cleanly without NuGet, external assemblies, or network access | **PASSED** |
 | **TC-02** | **PSCustomObject Typing** | All queries return `[PSCustomObject]` with deep dot-notation navigation | **PASSED** |
-| **TC-03** | **Unicode Integrity** | Diacritics, nested quotes, and multi-byte emojis (🚀🔥) stored and retrieved losslessly | **PASSED** |
+| **TC-03** | **Unicode Integrity** | Diacritics, nested quotes, and multi-byte emojis (🚀🔥🌙) stored and retrieved losslessly | **PASSED** |
 | **TC-04** | **Concurrency** | Concurrent multi-process reads and writes operate without `SQLITE_BUSY` contention | **PASSED** |
 | **TC-05** | **Pointer Release** | Calling `.close()` unbinds file handles so `Remove-Item` succeeds immediately | **PASSED** |
 | **TC-06** | **Auto & Custom Keys** | Generates GUIDs or accepts custom keys via `.add()` | **PASSED** |
@@ -239,6 +239,11 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-19** | **Pagination (Skip & Limit)**| Offset-based pagination with `.skip($n)` and `.limit($n)` | **PASSED** |
 | **TC-20** | **Configurable Depth** | Deep serialization (> 10 levels) without stringification or truncation | **PASSED** |
 | **TC-21** | **Native Memory Safety** | `sqlite3_free` memory reclamation on failed queries and platform gating | **PASSED** |
+| **TC-22** | **Query Step Validation** | Checks return codes on `sqlite3_step` and surfaces `SQLITE_BUSY` or iteration errors | **PASSED** |
+| **TC-23** | **Fluent State Isolation** | Resets `CurrentKey` across `.set()`, `.get()`, and `.update()` in `try/finally` | **PASSED** |
+| **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
+| **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
+| **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |
 
 ---
 
