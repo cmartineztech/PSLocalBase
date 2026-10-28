@@ -1,6 +1,6 @@
 # PSLocalBase Playground
 
-An interactive Windows desktop visual playground for **PSLocalBase** inspired by Danny Connell's Localbase Playground and built with a clean, modern Windows enterprise design system.
+An interactive Windows desktop visual playground for **PSLocalBase** inspired by Danny Connell's Localbase Playground (from the JavaScript library) and built with a clean, modern Windows enterprise design system.
 
 Features a modern dual-pane desktop workspace built entirely with native **PowerShell + WPF**:
 * **Theme Engine (Dark & Light Mode):** 100% full Dark Mode and Light Mode support with 1-click live toggle (`🌙 Dark Mode` / `☀️ Light Mode`), auto-detection of Windows OS dark theme preference, and `-DarkMode` launch switch.
