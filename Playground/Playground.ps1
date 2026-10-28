@@ -47,6 +47,7 @@ function Start-PlaygroundApp {
 
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
+    $dbFileExisted = (Test-Path $resolvedDbPath) -and ((Get-Item $resolvedDbPath).Length -gt 0)
     $script:db = [PSLocalBase]::new($resolvedDbPath, @{
         cacheSizeMB = 32
         wal         = $true
@@ -1323,6 +1324,7 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
 
     $script:window.Add_Closed({
         if ($null -ne $script:db) {
+            try { $script:db._ExecuteDirectSql("PRAGMA wal_checkpoint(TRUNCATE);") } catch { }
             $script:db.close()
         }
     })
@@ -1344,8 +1346,8 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     Set-AppTheme $initialDark
     Set-PlaygroundCategory "Adding Data"
 
-    $initialColls = @($script:db.listCollections())
-    if ($initialColls.Count -eq 0 -or ($script:db.collection("users").count() -eq 0)) {
+    if (-not $dbFileExisted) {
+        # Only seed demo data on fresh creation of playground.db
         Seed-DefaultData
     } else {
         Refresh-DatabaseState
