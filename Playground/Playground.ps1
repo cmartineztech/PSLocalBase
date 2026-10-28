@@ -47,13 +47,33 @@ function Start-PlaygroundApp {
 
     # Ensure dynamic runtime parity even if loaded in a session with a stale pre-compiled class
     try {
+        if ($null -eq ([PSLocalBase].GetMethod('_CollectionExists'))) {
+            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _CollectionExists -Value {
+                param([string]$name)
+                $this._EnsureOpen()
+                if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1;", @($name))
+                return ($rows.Count -gt 0)
+            } -Force
+        }
+        if ($null -eq ([PSLocalBase].GetMethod('_EnsureCollectionTable'))) {
+            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _EnsureCollectionTable -Value {
+                $this._EnsureOpen()
+                if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                    throw [System.InvalidOperationException]::new("No collection specified.")
+                }
+                $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+                $this._ExecuteDirectSql($createSql)
+            } -Force
+        }
         if ($null -eq ([PSLocalBase].GetMethod('create'))) {
             Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName create -Value {
                 $this._EnsureOpen()
                 if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
                     throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
                 }
-                $this._EnsureCollectionTable()
+                $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+                $this._ExecuteDirectSql($createSql)
                 return $this
             } -Force
         }
@@ -66,7 +86,10 @@ function Start-PlaygroundApp {
         if ($null -eq ([PSLocalBase].GetMethod('collectionExists'))) {
             Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionExists -Value {
                 param([string]$name)
-                return $this._CollectionExists($name)
+                $this._EnsureOpen()
+                if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1;", @($name))
+                return ($rows.Count -gt 0)
             } -Force
         }
     } catch { }
