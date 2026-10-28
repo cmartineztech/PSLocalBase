@@ -1,0 +1,30 @@
+name: PSLocalBase CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  test-windows:
+    name: Test Windows (PS 7 & PS 5.1)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Test Suite (PowerShell 7)
+        shell: pwsh
+        run: |
+          ./_TESTS/run-tests.ps1
+
+      - name: Run Test Suite (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          ./_TESTS/run-tests.ps1
+
+      - name: Verify Playground Automation
+        shell: pwsh
+        run: |
+          ./Playground/verify-playground.ps1

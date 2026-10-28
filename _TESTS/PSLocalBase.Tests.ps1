@@ -1122,6 +1122,337 @@ Assert-Test "TC-30: Multiple Collection Isolation & Relational Integrity" {
 }
 
 # ---------------------------------------------------------------------------
+# TC-31: Isolated Collection State Reference Independence
+# ---------------------------------------------------------------------------
+Assert-Test "TC-31: Isolated Collection State Reference Independence" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $users = $db.collection("users")
+        $orders = $db.collection("orders")
+
+        $users.doc("u-1").set(@{ name = "Ana"; role = "Developer" })
+        $orders.doc("o-1").set(@{ orderId = "ORD-99"; total = 150 })
+
+        if ($users.count() -ne 1) {
+            throw "Expected 1 document in 'users', got $($users.count())"
+        }
+        if ($orders.count() -ne 1) {
+            throw "Expected 1 document in 'orders', got $($orders.count())"
+        }
+
+        $userDoc = $users.doc("u-1").get()
+        if ($null -eq $userDoc -or $userDoc.name -ne "Ana") {
+            throw "Document u-1 not found in 'users' collection."
+        }
+        $orderDoc = $orders.doc("o-1").get()
+        if ($null -eq $orderDoc -or $orderDoc.orderId -ne "ORD-99") {
+            throw "Document o-1 not found in 'orders' collection."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-32: Accidental Drop Protection & Explicit .drop()
+# ---------------------------------------------------------------------------
+Assert-Test "TC-32: Accidental Drop Protection & Explicit .drop()" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("critical_data")
+        $col.doc("doc-1").set(@{ val = "important" })
+        $col.doc("doc-2").set(@{ val = "vital" })
+
+        # Calling .delete() with limit() must be rejected with InvalidOperationException
+        $exceptionThrown = $false
+        try {
+            $col.doc("doc-1").limit(1).delete()
+        } catch [System.InvalidOperationException] {
+            $exceptionThrown = $true
+        }
+
+        if (-not $exceptionThrown) {
+            throw "Expected .limit().delete() to throw InvalidOperationException!"
+        }
+
+        # Verify collection and both documents were NOT dropped or deleted
+        if (-not $db.collectionExists("critical_data")) {
+            throw "critical_data table was accidentally dropped!"
+        }
+        if ($db.collection("critical_data").count() -ne 2) {
+            throw "Documents were corrupted or deleted during rejected delete!"
+        }
+
+        # Explicit .drop() must cleanly remove the collection
+        $db.collection("critical_data").drop()
+        if ($db.collectionExists("critical_data")) {
+            throw "Collection should have been dropped by explicit .drop()."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-33: Case-Insensitive Collection Schema Resolution
+# ---------------------------------------------------------------------------
+Assert-Test "TC-33: Case-Insensitive Collection Schema Resolution" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # Create with uppercase
+        $db.collection("Customers").doc("c-1").set(@{ name = "Carlos"; role = "Architect"; active = $true })
+
+        # Update using lowercase collection reference
+        $db.collection("customers").doc("c-1").update(@{ age = 35 })
+
+        # Retrieve and verify deep merge preserved original fields
+        $doc = $db.collection("Customers").doc("c-1").get()
+        if ($null -eq $doc) {
+            throw "Document c-1 not found after case-insensitive update."
+        }
+        if ($doc.name -ne "Carlos" -or $doc.role -ne "Architect" -or $doc.active -ne $true -or $doc.age -ne 35) {
+            throw "Fields were lost during case-insensitive update! Retrieved: $(ConvertTo-Json -InputObject $doc -Compress)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-34: NUL Byte Key Defense
+# ---------------------------------------------------------------------------
+Assert-Test "TC-34: NUL Byte Key Defense" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        [void]$db.collection("null_defense").create()
+
+        # Reject NUL character in .doc()
+        $nulDocRejected = $false
+        try {
+            $db.collection("null_defense").doc("alice`0admin").set(@{ role = "attacker" })
+        } catch [System.ArgumentException] {
+            $nulDocRejected = $true
+        }
+        if (-not $nulDocRejected) {
+            throw "Expected key with embedded null character to be rejected in .doc()!"
+        }
+
+        # Reject NUL character in .add()
+        $nulAddRejected = $false
+        try {
+            [void]$db.collection("null_defense").add(@{ val = 1 }, "bob`0attacker")
+        } catch [System.ArgumentException] {
+            $nulAddRejected = $true
+        }
+        if (-not $nulAddRejected) {
+            throw "Expected key with embedded null character to be rejected in .add()!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-35: Bulk Set SAVEPOINT Isolation in External Transactions
+# ---------------------------------------------------------------------------
+Assert-Test "TC-35: Bulk Set SAVEPOINT Isolation in External Transactions" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("inventory").doc("item-1").set(@{ name = "Initial Item"; qty = 10 })
+
+        # Start outer transaction
+        $db.beginTransaction()
+        $bulkFailed = $false
+        try {
+            # Provide batch with duplicate keys
+            $db.collection("inventory").set(@(
+                @{ id = "dup-key"; name = "First Valid" },
+                @{ id = "dup-key"; name = "Second Collision" }
+            ))
+        } catch {
+            $bulkFailed = $true
+        }
+
+        if (-not $bulkFailed) {
+            throw "Expected duplicate key in bulk set to throw constraint error!"
+        }
+
+        # Commit outer transaction - savepoint should have rolled back the failed bulk set
+        $db.commit()
+
+        $items = @($db.collection("inventory").get())
+        if ($items.Count -ne 1 -or $items[0].name -ne "Initial Item") {
+            throw "Initial record was lost or partial bulk inserts leaked into outer transaction!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-36: Safe Handle Release on Constructor PRAGMA Failure
+# ---------------------------------------------------------------------------
+Assert-Test "TC-36: Safe Handle Release on Constructor PRAGMA Failure" {
+    $tempCorruptFile = Join-Path ([System.IO.Path]::GetTempPath()) "pslocalbase_corrupt_$([Guid]::NewGuid().ToString('N')).bin"
+    [System.IO.File]::WriteAllText($tempCorruptFile, "THIS IS AN INVALID DATABASE FILE HEADER")
+    try {
+        $constructorFailed = $false
+        try {
+            [void][PSLocalBase]::new($tempCorruptFile)
+        } catch {
+            $constructorFailed = $true
+        }
+
+        if (-not $constructorFailed) {
+            throw "Expected corrupt file opening to fail during constructor!"
+        }
+
+        # Attempt to delete file immediately - if handle leaked, IOException will occur
+        [System.IO.File]::Delete($tempCorruptFile)
+        if (Test-Path $tempCorruptFile) {
+            throw "Corrupt file still exists after deletion attempt!"
+        }
+    } finally {
+        if (Test-Path $tempCorruptFile) {
+            Remove-Item $tempCorruptFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-37: Constructor Options Enforcement
+# ---------------------------------------------------------------------------
+Assert-Test "TC-37: Constructor Options Enforcement" {
+    $tempDb = Join-Path ([System.IO.Path]::GetTempPath()) "pslocalbase_cfg_$([Guid]::NewGuid().ToString('N')).db"
+    try {
+        $db = [PSLocalBase]::new($tempDb, @{
+            wal         = $false
+            cacheSizeMB = 32
+            busyTimeout = 8000
+        })
+
+        $jm = ($db.query("PRAGMA journal_mode;"))[0].journal_mode
+        $cs = ($db.query("PRAGMA cache_size;"))[0].cache_size
+        $bt = ($db.query("PRAGMA busy_timeout;"))[0].timeout
+
+        # journal_mode should be delete (non-WAL)
+        if ($jm.ToString().ToLowerInvariant() -ne "delete") {
+            throw "Expected journal_mode 'delete', got '$jm'"
+        }
+        # 32 MB = 32 * 1024 = 32768 KiB (-32768)
+        if ([int]$cs -ne -32768) {
+            throw "Expected cache_size -32768, got '$cs'"
+        }
+        if ([int]$bt -ne 8000) {
+            throw "Expected busy_timeout 8000, got '$bt'"
+        }
+
+        $db.close()
+    } finally {
+        if (Test-Path $tempDb) { Remove-Item $tempDb -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-38: Atomic update() Isolation
+# ---------------------------------------------------------------------------
+Assert-Test "TC-38: Atomic update() Isolation" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("accounts").doc("acc-1").set(@{ balance = 1000; status = "active"; tier = "silver" })
+
+        # Atomic partial update
+        $db.collection("accounts").doc("acc-1").update(@{ tier = "gold"; points = 500 })
+
+        $acc = $db.collection("accounts").doc("acc-1").get()
+        if ($acc.balance -ne 1000 -or $acc.status -ne "active" -or $acc.tier -ne "gold" -or $acc.points -ne 500) {
+            throw "Update did not preserve unmutated fields or failed to merge new fields!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-39: Real-time InTransaction Ground Truth via sqlite3_get_autocommit
+# ---------------------------------------------------------------------------
+Assert-Test "TC-39: Real-time InTransaction Ground Truth" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        if ($db.InTransaction) {
+            throw "InTransaction should be false initially."
+        }
+
+        $db.beginTransaction()
+        if (-not $db.InTransaction) {
+            throw "InTransaction should be true after beginTransaction()."
+        }
+
+        $db.commit()
+        if ($db.InTransaction) {
+            throw "InTransaction should be false after commit()."
+        }
+
+        # Raw SQL BEGIN check
+        $db._ExecuteDirectSql("BEGIN;")
+        if (-not $db.InTransaction) {
+            throw "InTransaction should detect raw SQL BEGIN via sqlite3_get_autocommit."
+        }
+
+        $db._ExecuteDirectSql("ROLLBACK;")
+        if ($db.InTransaction) {
+            throw "InTransaction should detect raw SQL ROLLBACK."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-40: Strongly-Typed Query Results & Clean Wrapper Unwrapping
+# ---------------------------------------------------------------------------
+Assert-Test "TC-40: Strongly-Typed Query Results & Clean Wrapper Unwrapping" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Strongly typed SQL query
+        $res = $db.query("SELECT 42 as num, 3.14 as flt, 'hello' as str, NULL as nil;")
+        if ($res.Count -ne 1) { throw "Expected 1 row from query." }
+        if ($res[0].num -ne 42 -or ($res[0].num -isnot [long] -and $res[0].num -isnot [int])) {
+            throw "num column is not a strongly-typed integer."
+        }
+        if ($res[0].flt -ne 3.14 -or $res[0].flt -isnot [double]) {
+            throw "flt column is not a strongly-typed double."
+        }
+        if ($res[0].str -ne "hello" -or $res[0].str -isnot [string]) {
+            throw "str column is not a string."
+        }
+        if ($null -ne $res[0].nil) {
+            throw "nil column should be null."
+        }
+
+        # 2. Clean export and re-import with keys (no wrapper nesting)
+        $db.collection("source_col").doc("doc-a").set(@{ title = "Article A"; views = 100 })
+        $exported = $db.collection("source_col").get(@{ keys = $true })
+
+        # Re-import into target_col using keys option
+        $db.collection("target_col").set($exported, @{ keys = $true })
+
+        $importedDoc = $db.collection("target_col").doc("doc-a").get()
+        if ($null -eq $importedDoc) {
+            throw "Imported document doc-a not found in target_col."
+        }
+        if ($importedDoc.title -ne "Article A" -or $importedDoc.views -ne 100) {
+            throw "Imported document corrupted or wrapped: $(ConvertTo-Json -InputObject $importedDoc -Compress)"
+        }
+        # Verify it was not wrapped in .data
+        if ($importedDoc.PSObject.Properties["data"]) {
+            throw "Document data was improperly nested in a 'data' wrapper property!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan

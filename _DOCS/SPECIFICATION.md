@@ -1,4 +1,4 @@
-# Technical Specification: PSLocalBase
+﻿# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -118,7 +118,7 @@ public class WinSqlite3 {
   PRAGMA cache_size = -16000;
   ```
   - **WAL (Write-Ahead Logging):** Eliminates reader/writer concurrency lock contention. Note: WAL requires shared-memory (`-shm`) locking; therefore, UNC network paths (`\\server\share`) and mapped network drives are strictly rejected to prevent silent data corruption over SMB.
-  - **synchronous = NORMAL:** Maximizes throughput while retaining crash resilience.
+  - **synchronous = NORMAL:** Maximizes throughput while retaining crash resilience against process crashes. (Note: in WAL mode, fsync to physical platter/flash occurs primarily during checkpoints, providing complete crash-safety from application termination while optimizing disk I/O).
   - **busy_timeout = 5000:** Automatically sleeps and retries up to 5,000 ms on write collisions.
   - **temp_store = MEMORY:** Performs sorting and temporary indices directly in RAM.
   - **cache_size = -16000 / configurable:** Allocates warm page cache memory (configurable via `cacheSizeMB` option).

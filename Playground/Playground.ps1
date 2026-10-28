@@ -1060,7 +1060,8 @@ function Start-PlaygroundApp {
         $filterKey = $txtKeySearch.Text.Trim()
         if ($filterKey -eq "Search key or text...") { $filterKey = "" }
 
-        $docsWithKeys = @($script:db.collection($CollectionName).get(@{ keys = $true }))
+                $totalInDb = $script:db.collection($CollectionName).count()
+        $docsWithKeys = @($script:db.collection($CollectionName).limit(500).get(@{ keys = $true }))
         $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
 
         for ($i = 0; $i -lt $docsWithKeys.Count; $i++) {
@@ -1355,9 +1356,23 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     # Initial Demo Seeding (Users, Products, Orders)
     # -----------------------------------------------------------------------
     function Seed-DefaultData {
-        $null = $script:db.collection("users").delete()
-        $null = $script:db.collection("products").delete()
-        $null = $script:db.collection("orders").delete()
+        $existingCount = 0
+        foreach ($c in @("users", "products", "orders")) {
+            if ($script:db.collectionExists($c)) {
+                $existingCount += $script:db.collection($c).count()
+            }
+        }
+        if ($existingCount -gt 0) {
+            $msg = "Seeding demo data will reset and overwrite existing documents in 'users', 'products', and 'orders'. Proceed?"
+            $confirm = [System.Windows.MessageBox]::Show($msg, "Confirm Seed Demo Data", "YesNo", "Warning")
+            if ($confirm -ne "Yes") {
+                Log-ToConsole "Seed demo cancelled by user."
+                return
+            }
+        }
+        $null = $script:db.collection("users").drop()
+        $null = $script:db.collection("products").drop()
+        $null = $script:db.collection("orders").drop()
 
         $sampleUsers = @(
             @{ id = 1; name = "Bill"; age = 47; role = "Admin"; city = "Seattle" },
@@ -1408,10 +1423,24 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     $btnSeedDemo.add_Click({ Seed-DefaultData })
 
     $btnCheckpointWal.add_Click({
-        $null = $script:db._ExecuteDirectSql("PRAGMA wal_checkpoint(TRUNCATE);")
-        Log-ToConsole "WAL checkpoint executed cleanly (dirty pages synced to disk)."
-        Refresh-DatabaseState
-        [System.Windows.MessageBox]::Show("WAL checkpoint flushed cleanly to persistent disk!", "WAL Sync", "OK", "Information")
+        $chkRows = $script:db.query("PRAGMA wal_checkpoint(TRUNCATE);")
+        $isBusy = $false
+        $logPages = 0
+        $checkpointed = 0
+        if ($chkRows.Count -gt 0) {
+            $isBusy = ($chkRows[0].busy -eq 1 -or [string]$chkRows[0].busy -eq "1")
+            $logPages = $chkRows[0].log
+            $checkpointed = $chkRows[0].checkpointed
+        }
+        if ($isBusy) {
+            Log-ToConsole "WAL checkpoint incomplete: Active readers prevented full truncation (Busy: 1, Log: $logPages, Synced: $checkpointed)."
+            Refresh-DatabaseState
+            [System.Windows.MessageBox]::Show("WAL checkpoint could not fully truncate because an active reader lock is open. Synced $checkpointed / $logPages frames.", "WAL Busy", "OK", "Warning")
+        } else {
+            Log-ToConsole "WAL checkpoint executed cleanly (dirty pages synced to disk, $checkpointed frames truncated)."
+            Refresh-DatabaseState
+            [System.Windows.MessageBox]::Show("WAL checkpoint flushed cleanly to persistent disk!", "WAL Sync", "OK", "Information")
+        }
     })
 
     $btnResetDatabase.add_Click({
@@ -1604,12 +1633,14 @@ if ($isSta) {
     $rs.ApartmentState = [System.Threading.ApartmentState]::STA
     $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
     $rs.Open()
-    $ps = [System.Management.Automation.PowerShell]::Create()
-    $ps.Runspace = $rs
     $scriptPath = $MyInvocation.MyCommand.Path
     if (-not $scriptPath) {
         $scriptPath = Join-Path $PSScriptRoot "Playground.ps1"
     }
+    $scriptDir = Split-Path $scriptPath -Parent
+    $rs.SessionStateProxy.SetVariable('PSScriptRoot', $scriptDir)
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $ps.Runspace = $rs
     [void]$ps.AddScript((Get-Content -Path $scriptPath -Raw))
     [void]$ps.AddParameter('DatabasePath', $DatabasePath)
     if ($DarkMode) {
@@ -1618,6 +1649,7 @@ if ($isSta) {
     [void]$ps.Invoke()
     if ($ps.HadErrors) {
         $ps.Streams.Error | ForEach-Object { Write-Error $_ }
+        exit 1
     }
     $ps.Dispose()
     $rs.Close()
