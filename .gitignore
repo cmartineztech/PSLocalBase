@@ -1,0 +1,25 @@
+# SQLite database files and runtime journals
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Temporary and log files
+*.tmp
+*.log
+scratch/
+
+# PowerShell temporary artifacts
+*.ps1~
+*.psm1~
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+
+# Windows OS metadata
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
