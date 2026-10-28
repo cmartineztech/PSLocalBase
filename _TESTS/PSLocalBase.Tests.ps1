@@ -670,27 +670,229 @@ Assert-Test "TC-20: Configurable Serialization Depth" {
 }
 
 # ---------------------------------------------------------------------------
-# TC-21: Native Memory Reclamation (sqlite3_free)
+# TC-21: Native Memory Reclamation & UTF-8 Error Marshalling
 # ---------------------------------------------------------------------------
-Assert-Test "TC-21: Native Memory Reclamation (sqlite3_free)" {
+Assert-Test "TC-21: Native Memory Reclamation & UTF-8 Error Marshalling" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        # Verify [WinSqlite3]::Free([IntPtr]::Zero) is a safe no-op
+        # Verify [WinSqlite3]::Free([IntPtr]::Zero) and GetUtf8String([IntPtr]::Zero) are safe
         [WinSqlite3]::Free([IntPtr]::Zero)
+        if ($null -ne [WinSqlite3]::GetUtf8String([IntPtr]::Zero)) {
+            throw "Expected GetUtf8String(IntPtr.Zero) to return null."
+        }
 
-        # Trigger a direct SQL error to ensure sqlite3_free correctly executes
+        # Trigger a direct SQL error and verify UTF-8 error text is decoded cleanly (not garbled UTF-16)
         $errorThrown = $false
         try {
-            # Deliberately malformed SQL DDL
             $db._ExecuteDirectSql("CREATE SYNTAX ERROR TABLE ;")
         } catch {
             $errorThrown = $true
-            if ($_.Exception.Message -notmatch "SQLite execution error") {
-                throw "Expected SQLite execution error message, got: $($_.Exception.Message)"
+            if ($_.Exception.Message -notmatch "SQLite execution error" -or $_.Exception.Message -notmatch "syntax error") {
+                throw "Expected readable UTF-8 SQLite syntax error message, got: $($_.Exception.Message)"
             }
         }
         if (-not $errorThrown) {
             throw "Expected malformed SQL to throw exception!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-22: Custom Query Step & Parameter Binding Validation
+# ---------------------------------------------------------------------------
+Assert-Test "TC-22: Custom Query Step & Parameter Binding Validation" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("events").doc("e1").set(@{ type = "login"; user = "alice" })
+        $db.collection("events").doc("e2").set(@{ type = "logout"; user = "bob" })
+
+        # Parameterized custom query
+        $rows = $db.query("SELECT key, json_extract(doc, '$.user') AS usr FROM [events] WHERE json_extract(doc, '$.type') = ?;", @("login"))
+        if ($rows.Count -ne 1 -or $rows[0].usr -ne "alice") {
+            throw "Parameterized query() failed to return expected row."
+        }
+
+        # Excess bound parameters beyond placeholders must throw InvalidOperationException (SQLITE_RANGE = 25)
+        $bindErrThrown = $false
+        try {
+            [void]$db.query("SELECT key FROM [events];", @("unexpected_param"))
+        } catch [System.InvalidOperationException] {
+            $bindErrThrown = $true
+        }
+        if (-not $bindErrThrown) {
+            throw "Expected BindText out-of-range parameter to throw InvalidOperationException."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-23: Fluent State Isolation & CurrentKey Reset
+# ---------------------------------------------------------------------------
+Assert-Test "TC-23: Fluent State Isolation & CurrentKey Reset" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("tasks")
+        $col.doc("t1").set(@{ title = "Task 1"; done = $false })
+        $col.doc("t2").set(@{ title = "Task 2"; done = $true })
+        $col.doc("t3").set(@{ title = "Task 3"; done = $true })
+
+        if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
+            throw "CurrentKey was not cleared after .set()!"
+        }
+
+        # Point get followed by collection get on the same reference must return all documents
+        $single = $col.doc("t1").get()
+        if ($null -eq $single -or $single.title -ne "Task 1") {
+            throw "Point lookup for t1 failed."
+        }
+        if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
+            throw "CurrentKey was not cleared after .get()!"
+        }
+
+        $allAfterGet = $col.get()
+        if ($allAfterGet.Count -ne 3) {
+            throw "Collection .get() after .doc().get() returned $($allAfterGet.Count) items instead of 3."
+        }
+
+        # Point update followed by filtered delete must not delete the updated key
+        $col.doc("t1").update(@{ title = "Task 1 Updated" })
+        if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
+            throw "CurrentKey was not cleared after .update()!"
+        }
+
+        # Even if .doc() is called before .where(), .where() must clear CurrentKey
+        $col.doc("t1").where("done", "=", $true).delete()
+        $remaining = $col.get()
+        if ($remaining.Count -ne 1 -or $remaining[0].title -ne "Task 1 Updated") {
+            throw "Filtered delete polluted by CurrentKey! Remaining count: $($remaining.Count)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-24: Reject UNC & Network Paths for WAL Mode
+# ---------------------------------------------------------------------------
+Assert-Test "TC-24: Reject UNC & Network Paths for WAL Mode" {
+    $uncThrown = $false
+    try {
+        [void][PSLocalBase]::new("\\server\share\pslocalbase.db")
+    } catch [System.InvalidOperationException] {
+        $uncThrown = $true
+    }
+    if (-not $uncThrown) {
+        throw "Expected UNC path '\\server\share\pslocalbase.db' to be rejected with InvalidOperationException."
+    }
+
+    $fwdUncThrown = $false
+    try {
+        [void][PSLocalBase]::new("//server/share/pslocalbase.db")
+    } catch [System.InvalidOperationException] {
+        $fwdUncThrown = $true
+    }
+    if (-not $fwdUncThrown) {
+        throw "Expected forward-slash UNC path '//server/share/pslocalbase.db' to be rejected with InvalidOperationException."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-25: Transaction Tracking & Safe Rollback on Bulk Set
+# ---------------------------------------------------------------------------
+Assert-Test "TC-25: Transaction Tracking & Safe Rollback on Bulk Set" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # Bulk .set() within an existing caller-managed transaction must not fail on nested BEGIN
+        $db.beginTransaction()
+        if (-not $db.InTransaction) {
+            throw "Expected InTransaction to be true after beginTransaction()."
+        }
+        $db.collection("batch").set(@(
+            @{ id = "b1"; name = "Item 1" },
+            @{ id = "b2"; name = "Item 2" }
+        ))
+        if (-not $db.InTransaction) {
+            throw "Expected InTransaction to remain true before caller commit()."
+        }
+        $db.commit()
+        if ($db.InTransaction) {
+            throw "Expected InTransaction to be false after commit()."
+        }
+
+        if ($db.collection("batch").count() -ne 2) {
+            throw "Expected 2 items committed in batch collection."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-26: System32 DLL Search Path, Balanced Field Regex & Scalar/Empty IN
+# ---------------------------------------------------------------------------
+Assert-Test "TC-26: System32 DLL Search Path, Balanced Field Regex & Scalar/Empty IN" {
+    # 1. Verify DefaultDllImportSearchPaths(DllImportSearchPath.System32) attribute on WinSqlite3 assembly
+    $attr = [WinSqlite3].Assembly.GetCustomAttributes([System.Runtime.InteropServices.DefaultDllImportSearchPathsAttribute], $false)
+    if ($null -eq $attr -or $attr.Count -eq 0) {
+        throw "WinSqlite3 assembly is missing [DefaultDllImportSearchPaths] attribute."
+    }
+    if ($attr[0].Paths -ne [System.Runtime.InteropServices.DllImportSearchPath]::System32) {
+        throw "WinSqlite3 DefaultDllImportSearchPaths is not set to System32. Actual: $($attr[0].Paths)"
+    }
+
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("items").doc("i1").set(@{ category = "Tech"; rank = 2 })
+        $db.collection("items").doc("i2").set(@{ category = "Office"; rank = 1 })
+
+        # 2. Trimmed field name in where() and orderBy() + scalar IN clause
+        $scalarIn = $db.collection("items").where("  category  ", "IN", "Tech").orderBy("  rank  ", "asc").get()
+        if ($scalarIn.Count -ne 1 -or $scalarIn[0].category -ne "Tech") {
+            throw "Trimmed field or scalar IN clause failed."
+        }
+
+        # 3. Empty array IN clause returns 0 matches cleanly
+        $emptyIn = $db.collection("items").where("category", "IN", @()).get()
+        if ($emptyIn.Count -ne 0) {
+            throw "Empty array IN clause should return 0 items."
+        }
+
+        # 4. Null IN value throws ArgumentException
+        $nullInThrown = $false
+        try {
+            [void]$db.collection("items").where("category", "IN", $null)
+        } catch [System.ArgumentException] {
+            $nullInThrown = $true
+        }
+        if (-not $nullInThrown) {
+            throw "Expected null value with IN operator to throw ArgumentException."
+        }
+
+        # 5. Unbalanced array brackets in where() and orderBy() are rejected
+        foreach ($badField in @("tags[[0]", "tags[0]]", "tags[]", ".leading", "trailing.", "a..b")) {
+            $whereRejected = $false
+            try {
+                [void]$db.collection("items").where($badField, "=", "x")
+            } catch [System.ArgumentException] {
+                $whereRejected = $true
+            }
+            if (-not $whereRejected) {
+                throw "Malformed field '$badField' was not rejected in where()."
+            }
+
+            $orderRejected = $false
+            try {
+                [void]$db.collection("items").orderBy($badField, "asc")
+            } catch [System.ArgumentException] {
+                $orderRejected = $true
+            }
+            if (-not $orderRejected) {
+                throw "Malformed field '$badField' was not rejected in orderBy()."
+            }
         }
     } finally {
         $db.close()

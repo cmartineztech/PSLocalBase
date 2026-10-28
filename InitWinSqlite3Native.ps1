@@ -1,4 +1,4 @@
-﻿# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # InitWinSqlite3Native.ps1
 # P/Invoke bridge targeting Windows native winsqlite3.dll
 # ---------------------------------------------------------------------------
@@ -17,6 +17,7 @@ if (-not ('WinSqlite3' -as [type])) {
 using System;
 using System.Runtime.InteropServices;
 
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 public class WinSqlite3 {
     public const int SQLITE_OK = 0;
     public const int SQLITE_BUSY = 5;
@@ -73,16 +74,37 @@ public class WinSqlite3 {
     public static extern int BusyTimeout(IntPtr db, int ms);
 
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_exec", CallingConvention = CallingConvention.Cdecl)]
-    public static extern int Exec(IntPtr db, string sql, IntPtr callback, IntPtr arg, out IntPtr errmsg);
+    private static extern int NativeExec(IntPtr db, byte[] sqlUtf8, IntPtr callback, IntPtr arg, out IntPtr errmsg);
+
+    public static int Exec(IntPtr db, string sql, IntPtr callback, IntPtr arg, out IntPtr errmsg) {
+        string text = sql ?? string.Empty;
+        int byteCount = System.Text.Encoding.UTF8.GetByteCount(text);
+        byte[] utf8Bytes = new byte[byteCount + 1];
+        System.Text.Encoding.UTF8.GetBytes(text, 0, text.Length, utf8Bytes, 0);
+        return NativeExec(db, utf8Bytes, callback, arg, out errmsg);
+    }
 
     // Memory reclamation
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_free", CallingConvention = CallingConvention.Cdecl)]
     public static extern void Free(IntPtr ptr);
 
-    // String conversion from unmanaged memory
+    // UTF-16 string conversion from unmanaged memory (sqlite3_*16 APIs)
     public static string GetString(IntPtr ptr) {
         if (ptr == IntPtr.Zero) return null;
         return Marshal.PtrToStringUni(ptr);
+    }
+
+    // UTF-8 string conversion from unmanaged memory (sqlite3_exec errmsg)
+    public static string GetUtf8String(IntPtr ptr) {
+        if (ptr == IntPtr.Zero) return null;
+        int len = 0;
+        while (Marshal.ReadByte(ptr, len) != 0) {
+            len++;
+        }
+        if (len == 0) return string.Empty;
+        byte[] buffer = new byte[len];
+        Marshal.Copy(ptr, buffer, 0, len);
+        return System.Text.Encoding.UTF8.GetString(buffer);
     }
 
     public static string GetErrorMessage(IntPtr db) {
