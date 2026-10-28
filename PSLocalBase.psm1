@@ -1046,6 +1046,36 @@ try {
 }
 
 # ---------------------------------------------------------------------------
+# 4b. Dynamic Method Fallbacks (Ensures hot-reload parity in warm sessions)
+# ---------------------------------------------------------------------------
+try {
+    if ($null -eq ([PSLocalBase].GetMethod('create'))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName create -Value {
+            $this._EnsureOpen()
+            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
+            }
+            $this._EnsureCollectionTable()
+            return $this
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('createCollection'))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName createCollection -Value {
+            param([string]$name)
+            return $this.collection($name).create()
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('collectionExists'))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionExists -Value {
+            param([string]$name)
+            return $this._CollectionExists($name)
+        } -Force
+    }
+} catch { }
+
+# ---------------------------------------------------------------------------
 # 5. Clean Module Unload
 # ---------------------------------------------------------------------------
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {

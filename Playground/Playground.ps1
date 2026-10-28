@@ -45,6 +45,32 @@ function Start-PlaygroundApp {
     }
     Import-Module $modulePsd1 -Force
 
+    # Ensure dynamic runtime parity even if loaded in a session with a stale pre-compiled class
+    try {
+        if ($null -eq ([PSLocalBase].GetMethod('create'))) {
+            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName create -Value {
+                $this._EnsureOpen()
+                if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                    throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
+                }
+                $this._EnsureCollectionTable()
+                return $this
+            } -Force
+        }
+        if ($null -eq ([PSLocalBase].GetMethod('createCollection'))) {
+            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName createCollection -Value {
+                param([string]$name)
+                return $this.collection($name).create()
+            } -Force
+        }
+        if ($null -eq ([PSLocalBase].GetMethod('collectionExists'))) {
+            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionExists -Value {
+                param([string]$name)
+                return $this._CollectionExists($name)
+            } -Force
+        }
+    } catch { }
+
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
     $dbFileExisted = (Test-Path $resolvedDbPath) -and ((Get-Item $resolvedDbPath).Length -gt 0)
