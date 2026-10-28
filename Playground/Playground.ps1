@@ -96,6 +96,7 @@ function Start-PlaygroundApp {
 
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
+    $script:fullDbPath = [System.IO.Path]::GetFullPath($resolvedDbPath)
     $dbFileExisted = (Test-Path $resolvedDbPath) -and ((Get-Item $resolvedDbPath).Length -gt 0)
     $script:db = [PSLocalBase]::new($resolvedDbPath, @{
         cacheSizeMB = 32
@@ -700,8 +701,12 @@ function Start-PlaygroundApp {
 
                         <!-- Explorer Footer -->
                         <Grid Grid.Row="3" Margin="0,8,0,0">
-                            <TextBlock Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
-                            <TextBlock Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="10,0,0,0"/>
                         </Grid>
                     </Grid>
                 </Border>
@@ -768,11 +773,15 @@ function Start-PlaygroundApp {
 
         <!-- Row 3: Windows Status Strip -->
         <Grid Grid.Row="3" Margin="4,6,4,0">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="&#x25CF;" FontSize="10" Foreground="#2E7D32" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | Database: playground.db" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center"/>
+                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | DB: playground.db" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
-            <TextBlock Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="1" Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </Grid>
     </Grid>
 </Window>
@@ -842,6 +851,10 @@ function Start-PlaygroundApp {
     $txtStatusBadge   = $script:window.FindName("txtStatusBadge")
     $txtStatusMsg     = $script:window.FindName("txtStatusMsg")
     $txtMemoryUsage   = $script:window.FindName("txtMemoryUsage")
+    if ($null -ne $txtStatusMsg) {
+        $txtStatusMsg.Text = "Connected: winsqlite3.dll | DB: $script:fullDbPath"
+        $txtStatusMsg.ToolTip = $script:fullDbPath
+    }
 
     $script:activeCollection = "users"
     $script:currentCategory = "Adding Data"
@@ -1090,7 +1103,15 @@ function Start-PlaygroundApp {
         $dbFile = Join-Path $PSScriptRoot $DbPath
         if (Test-Path $dbFile) {
             $kb = [math]::Round((Get-Item $dbFile).Length / 1KB, 1)
-            $lblDbMetrics.Text = "Storage: $($DbPath) ($kb KB | WAL Mode)"
+            $lblDbMetrics.Text = "Storage: $($script:fullDbPath) ($kb KB | WAL Mode)"
+            $lblDbMetrics.ToolTip = $script:fullDbPath
+        } else {
+            $lblDbMetrics.Text = "Storage: $($script:fullDbPath) (WAL Mode)"
+            $lblDbMetrics.ToolTip = $script:fullDbPath
+        }
+        if ($null -ne $txtStatusMsg) {
+            $txtStatusMsg.Text = "Connected: winsqlite3.dll | DB: $script:fullDbPath"
+            $txtStatusMsg.ToolTip = $script:fullDbPath
         }
 
         # CLR memory
