@@ -44,7 +44,7 @@ try {
         'lblCard1Status', 'lblCard2Status', 'lblCard3Status',
         'dgDocuments', 'lblTotalEntries', 'lblDbMetrics',
         'btnRefreshTable', 'btnClearCollection', 'btnDeleteDoc',
-        'panelConsoleLogs', 'scrollConsole', 'btnClearLogs',
+        'panelConsoleLogs', 'scrollConsole', 'btnCopyLogs', 'btnClearLogs',
         'txtConsoleInput', 'txtConsolePerf', 'txtStatusBadge',
         'txtStatusMsg', 'txtMemoryUsage'
     )

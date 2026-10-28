@@ -580,32 +580,43 @@ function Start-PlaygroundApp {
                 <Border Grid.Row="0" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="10" Padding="16,14">
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/> <!-- Explorer Header & Toolbar -->
-                            <RowDefinition Height="*"/>    <!-- DataGrid -->
-                            <RowDefinition Height="Auto"/> <!-- Explorer Footer -->
+                            <RowDefinition Height="Auto"/> <!-- Row 0: Title, Collection Selector & Refresh -->
+                            <RowDefinition Height="Auto"/> <!-- Row 1: Search & Action Toolbar -->
+                            <RowDefinition Height="*"/>    <!-- Row 2: DataGrid -->
+                            <RowDefinition Height="Auto"/> <!-- Row 3: Explorer Footer -->
                         </Grid.RowDefinitions>
 
-                        <!-- Explorer Header Toolbar -->
-                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <!-- Row 0: Explorer Title, Collection Selector & Refresh -->
+                        <Grid Grid.Row="0" Margin="0,0,0,10">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 <TextBlock Text="Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}" Margin="0,0,10,0"/>
+                                <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}"/>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBox Name="txtKeySearch" Width="140" Height="30" FontSize="11.5" Padding="8,5" Margin="0,0,8,0"
-                                         Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}"
-                                         Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
-                                         Text="Search key or text..."/>
-                                <Button Name="btnRefreshTable" Content="Refresh" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,0"/>
-                                <Button Name="btnClearCollection" Content="Clear Collection" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,0"/>
+                            <Button Name="btnRefreshTable" Content="Refresh" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Row 1: Search Box & Collection Management Actions (No Overlap) -->
+                        <Grid Grid.Row="1" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBox Name="txtKeySearch" Grid.Column="0" Height="30" FontSize="11.5" Padding="8,5" Margin="0,0,10,0"
+                                     Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}"
+                                     Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
+                                     Text="Search key or text..."/>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Name="btnClearCollection" Content="Clear Collection" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                                 <Button Name="btnDeleteDoc" Content="Delete Selected" Style="{StaticResource DangerButtonStyle}"/>
                             </StackPanel>
                         </Grid>
 
                         <!-- Modern DataGrid Table -->
-                        <Border Grid.Row="1" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6">
+                        <Border Grid.Row="2" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6">
                             <DataGrid Name="dgDocuments" AutoGenerateColumns="False" IsReadOnly="True"
                                       Background="Transparent" BorderThickness="0" GridLinesVisibility="Horizontal"
                                       HorizontalGridLinesBrush="{DynamicResource BorderColor}" SelectionMode="Single" FontSize="12" RowHeight="32"
@@ -637,7 +648,7 @@ function Start-PlaygroundApp {
                         </Border>
 
                         <!-- Explorer Footer -->
-                        <Grid Grid.Row="2" Margin="0,8,0,0">
+                        <Grid Grid.Row="3" Margin="0,8,0,0">
                             <TextBlock Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
                             <TextBlock Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                         </Grid>
@@ -663,6 +674,7 @@ function Start-PlaygroundApp {
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <TextBlock Name="txtConsolePerf" Text="0.00 ms" FontSize="11" Foreground="{DynamicResource MutedFgColor}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <Button Name="btnCopyLogs" Content="Copy All" Style="{StaticResource SecondaryButtonStyle}" Padding="8,3" FontSize="11" Margin="0,0,6,0"/>
                                 <Button Name="btnClearLogs" Content="Clear Logs" Style="{StaticResource SecondaryButtonStyle}" Padding="8,3" FontSize="11"/>
                             </StackPanel>
                         </Grid>
@@ -757,6 +769,7 @@ function Start-PlaygroundApp {
 
     $panelConsoleLogs = $script:window.FindName("panelConsoleLogs")
     $scrollConsole    = $script:window.FindName("scrollConsole")
+    $btnCopyLogs      = $script:window.FindName("btnCopyLogs")
     $btnClearLogs     = $script:window.FindName("btnClearLogs")
     $txtConsoleInput  = $script:window.FindName("txtConsoleInput")
     $txtConsolePerf   = $script:window.FindName("txtConsolePerf")
@@ -790,10 +803,37 @@ function Start-PlaygroundApp {
 
         # Re-apply category active tab styling
         Set-PlaygroundCategory $script:currentCategory
+
+        # Dynamically recolor existing log items in the console
+        foreach ($grid in $panelConsoleLogs.Children) {
+            if ($grid -is [System.Windows.Controls.Grid]) {
+                foreach ($child in $grid.Children) {
+                    if ($child -is [System.Windows.Controls.StackPanel]) {
+                        foreach ($sub in $child.Children) {
+                            if ($sub -is [System.Windows.Controls.DockPanel]) {
+                                foreach ($dpChild in $sub.Children) {
+                                    if ($dpChild -is [System.Windows.Controls.TextBox]) {
+                                        $dpChild.Foreground = $script:window.Resources["FgColor"]
+                                        $dpChild.CaretBrush = $script:window.Resources["FgColor"]
+                                    } elseif ($dpChild -is [System.Windows.Controls.Border]) {
+                                        $dpChild.Background = $script:window.Resources["HeaderColor"]
+                                    }
+                                }
+                            } elseif ($sub -is [System.Windows.Controls.TextBox]) {
+                                $sub.Foreground = $script:window.Resources["LogFg"]
+                                $sub.CaretBrush = $script:window.Resources["LogFg"]
+                            }
+                        }
+                    } elseif ($child -is [System.Windows.Controls.TextBlock]) {
+                        $child.Foreground = $script:window.Resources["MutedFgColor"]
+                    }
+                }
+            }
+        }
     }
 
     # -----------------------------------------------------------------------
-    # Logging into Output Console
+    # Logging into Output Console (Fully Selectable TextBoxes)
     # -----------------------------------------------------------------------
     function Log-ToConsole([string]$Message, [object]$Data = $null, [double]$DurationMs = -1) {
         $logGrid = [System.Windows.Controls.Grid]::new()
@@ -809,8 +849,8 @@ function Start-PlaygroundApp {
         $leftStack = [System.Windows.Controls.StackPanel]::new()
         $leftStack.Orientation = [System.Windows.Controls.Orientation]::Vertical
 
-        $headerRow = [System.Windows.Controls.StackPanel]::new()
-        $headerRow.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+        $headerRow = [System.Windows.Controls.DockPanel]::new()
+        $headerRow.LastChildFill = $true
 
         # Accent "PSLocalBase" badge
         $badge = [System.Windows.Controls.Border]::new()
@@ -824,27 +864,48 @@ function Start-PlaygroundApp {
         $badgeTxt.FontWeight = [System.Windows.FontWeights]::Bold
         $badgeTxt.Foreground = [System.Windows.Media.Brushes]::White
         $badge.Child = $badgeTxt
+        [System.Windows.Controls.DockPanel]::SetDock($badge, [System.Windows.Controls.Dock]::Left)
         [void]$headerRow.Children.Add($badge)
 
-        $msgTxt = [System.Windows.Controls.TextBlock]::new()
-        $msgTxt.Text = $Message
-        $msgTxt.FontSize = 12
-        $msgTxt.Foreground = $script:window.Resources["FgColor"]
-        $msgTxt.TextWrapping = [System.Windows.TextWrapping]::Wrap
-        [void]$headerRow.Children.Add($msgTxt)
+        # Selectable Message Box
+        $msgBox = [System.Windows.Controls.TextBox]::new()
+        $msgBox.Text = $Message
+        $msgBox.FontSize = 12
+        $msgBox.IsReadOnly = $true
+        $msgBox.BorderThickness = [System.Windows.Thickness]::new(0)
+        $msgBox.Background = [System.Windows.Media.Brushes]::Transparent
+        $msgBox.Foreground = $script:window.Resources["FgColor"]
+        $msgBox.CaretBrush = $script:window.Resources["FgColor"]
+        if ($script:window.Resources["HeaderColor"]) {
+            $msgBox.SelectionBrush = $script:window.Resources["HeaderColor"]
+        }
+        $msgBox.TextWrapping = [System.Windows.TextWrapping]::Wrap
+        $msgBox.Padding = [System.Windows.Thickness]::new(0)
+        $msgBox.Margin = [System.Windows.Thickness]::new(0)
+        $msgBox.Cursor = [System.Windows.Input.Cursors]::IBeam
+        [void]$headerRow.Children.Add($msgBox)
         [void]$leftStack.Children.Add($headerRow)
 
-        # Indented formatted object data
+        # Indented formatted object data - Fully Selectable!
         if ($null -ne $Data) {
             $jsonStr = try { $Data | ConvertTo-Json -Depth 6 -Compress } catch { "$Data" }
-            $dataTxt = [System.Windows.Controls.TextBlock]::new()
-            $dataTxt.Text = "  $([char]0x25B8) $jsonStr"
-            $dataTxt.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas")
-            $dataTxt.FontSize = 11.5
-            $dataTxt.Foreground = $script:window.Resources["LogFg"]
-            $dataTxt.Margin = [System.Windows.Thickness]::new(6, 2, 0, 0)
-            $dataTxt.TextWrapping = [System.Windows.TextWrapping]::Wrap
-            [void]$leftStack.Children.Add($dataTxt)
+            $dataBox = [System.Windows.Controls.TextBox]::new()
+            $dataBox.Text = "  $([char]0x25B8) $jsonStr"
+            $dataBox.IsReadOnly = $true
+            $dataBox.BorderThickness = [System.Windows.Thickness]::new(0)
+            $dataBox.Background = [System.Windows.Media.Brushes]::Transparent
+            $dataBox.Foreground = $script:window.Resources["LogFg"]
+            $dataBox.CaretBrush = $script:window.Resources["LogFg"]
+            if ($script:window.Resources["HeaderColor"]) {
+                $dataBox.SelectionBrush = $script:window.Resources["HeaderColor"]
+            }
+            $dataBox.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas")
+            $dataBox.FontSize = 11.5
+            $dataBox.Margin = [System.Windows.Thickness]::new(6, 2, 0, 0)
+            $dataBox.Padding = [System.Windows.Thickness]::new(0)
+            $dataBox.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $dataBox.Cursor = [System.Windows.Input.Cursors]::IBeam
+            [void]$leftStack.Children.Add($dataBox)
         }
 
         [System.Windows.Controls.Grid]::SetColumn($leftStack, 0)
@@ -1266,6 +1327,35 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         if (-not $txtKeySearch.Text.Trim()) {
             $txtKeySearch.Text = "Search key or text..."
             Load-CollectionDocuments $script:activeCollection
+        }
+    })
+
+    $btnCopyLogs.add_Click({
+        $allLogs = [System.Text.StringBuilder]::new()
+        foreach ($grid in $panelConsoleLogs.Children) {
+            if ($grid -is [System.Windows.Controls.Grid]) {
+                foreach ($child in $grid.Children) {
+                    if ($child -is [System.Windows.Controls.StackPanel]) {
+                        foreach ($sub in $child.Children) {
+                            if ($sub -is [System.Windows.Controls.DockPanel]) {
+                                foreach ($dpChild in $sub.Children) {
+                                    if ($dpChild -is [System.Windows.Controls.TextBox]) {
+                                        [void]$allLogs.AppendLine($dpChild.Text)
+                                    }
+                                }
+                            } elseif ($sub -is [System.Windows.Controls.TextBox]) {
+                                [void]$allLogs.AppendLine($sub.Text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        $logText = $allLogs.ToString().Trim()
+        if ($logText) {
+            [System.Windows.Clipboard]::SetText($logText)
+            $txtStatusBadge.Text = "Copied!"
+            $txtStatusBadge.Foreground = [System.Windows.Media.Brushes]::ForestGreen
         }
     })
 
