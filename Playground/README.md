@@ -1,10 +1,10 @@
 # PSLocalBase Playground
 
-An interactive Windows desktop visual playground for **PSLocalBase** inspired by Danny Connell's Localbase Playground and built with the clean Windows enterprise design system from `LiteDeploy.DynamicDrivers`.
+An interactive Windows desktop visual playground for **PSLocalBase** inspired by Danny Connell's Localbase Playground and built with a clean, modern Windows enterprise design system.
 
 Features a modern dual-pane desktop workspace built entirely with native **PowerShell + WPF**:
 * **Theme Engine (Dark & Light Mode):** 100% full Dark Mode and Light Mode support with 1-click live toggle (`🌙 Dark Mode` / `☀️ Light Mode`), auto-detection of Windows OS dark theme preference, and `-DarkMode` launch switch.
-* **DynamicDrivers Dropdowns:** High-contrast custom ComboBox controls with SVG chevron indicators, hover glows, and rounded item styling matching `LiteDeploy.DynamicDrivers`.
+* **Modern Custom Dropdowns:** High-contrast custom ComboBox controls with SVG chevron indicators, hover glows, and rounded item styling.
 * **Left Pane (Interactive Code Cards):** Interactive tutorial cards for **Adding Data**, **Getting Data**, **Updating Data**, **Deleting Data**, and **Custom PowerShell Script** with live editable code snippets, target collection synchronization, and `RUN CODE ▶` buttons.
 * **Right Pane (Database Explorer & Execution Console):**
   * **Database Explorer:** Multi-collection inspector (`users`, `products`, `orders`), live DataGrid with `#`, `Document ID / Key`, and formatted JSON payloads, real-time search by key or text value, and double-click document inspection.
@@ -36,7 +36,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
    * **Full Dark Mode:** Rich dark theme (`#121418` canvas, `#1C1F26` surface cards, `#2C313A` borders, `#3B82F6` accents).
    * **Clean Light Mode:** Crisp enterprise light theme (`#F0F4FA` canvas, `#FFFFFF` cards, `#D0DAE6` borders, `#2F6FED` accents).
    * **Instant Theme Switching:** Toggle between Light and Dark mode without restarting the application.
-   * **DynamicDrivers Custom Dropdown:** Clean ComboBox with custom SVG chevron arrow, high-contrast text, and hover item animations.
+   * **Custom Dropdown Styling:** Clean ComboBox with custom SVG chevron arrow, high-contrast text, and hover item animations.
 
 2. **Interactive Database Operations:**
    * **Adding Data:** Test `.add()` (auto-GUID) and `.set()` (custom key) directly against the active collection.

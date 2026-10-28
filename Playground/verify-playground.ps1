@@ -87,7 +87,7 @@ try {
     }
     Write-Host "[PASS] 4. Dynamic Theme switching (Dark & Light) validated successfully." -ForegroundColor Green
 
-    # 5. Verify ComboBox DynamicDrivers styling and population
+    # 5. Verify ComboBox styling and population
     $cmbLeft = $window.FindName('cmbLeftCollection')
     $cmbRight = $window.FindName('cmbRightCollection')
     [void]$cmbLeft.Items.Add('users')
@@ -96,7 +96,7 @@ try {
     if ($cmbLeft.SelectedItem -ne 'users') {
         throw "Failed ComboBox item selection."
     }
-    Write-Host "[PASS] 5. DynamicDrivers ComboBox Dropdown verified." -ForegroundColor Green
+    Write-Host "[PASS] 5. Modern ComboBox Dropdown verified." -ForegroundColor Green
 
     # 5b. Verify RichTextBox console flow document & selectable text and UTF-32 moon conversion
     $moonChar = [char]::ConvertFromUtf32(0x1F319)

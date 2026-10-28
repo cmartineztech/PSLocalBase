@@ -3,7 +3,7 @@
     PSLocalBase Playground - Modern Windows Desktop NoSQL Database Explorer
 .DESCRIPTION
     Interactive GUI Playground for PSLocalBase built with native PowerShell + WPF.
-    Adopts the clean Windows enterprise design system and color palette from LiteDeploy.DynamicDrivers
+    Features a clean, modern Windows enterprise design system and color palette
     with 100% full Dark Mode & Light Mode support, custom-styled chevron ComboBox dropdowns,
     and a dual-pane layout (interactive code cards on the left, live database explorer & console on the right).
 .EXAMPLE
@@ -55,7 +55,7 @@ function Start-PlaygroundApp {
     })
 
     # -----------------------------------------------------------------------
-    # Color Themes (Exact Palette from LiteDeploy.DynamicDrivers)
+    # Color Themes (Modern Enterprise Palette)
     # -----------------------------------------------------------------------
     $script:themeLight = @{
         'BgColor'         = '#F0F4FA'
@@ -116,7 +116,7 @@ function Start-PlaygroundApp {
     }
 
     # -----------------------------------------------------------------------
-    # XAML Definition (Windows Native LiteDeploy Design System with Theme Keys)
+    # XAML Definition (Windows Native Design System with Theme Keys)
     # -----------------------------------------------------------------------
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -130,7 +130,7 @@ function Start-PlaygroundApp {
         Foreground="{DynamicResource FgColor}">
 
     <Window.Resources>
-        <!-- Primary Button (LiteDeploy Accent) -->
+        <!-- Primary Button (Accent) -->
         <Style x:Key="PrimaryButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource HeaderColor}"/>
             <Setter Property="Foreground" Value="#FFFFFF"/>
@@ -157,7 +157,7 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
-        <!-- Secondary Button (LiteDeploy Outlined Card) -->
+        <!-- Secondary Button (Outlined Card) -->
         <Style x:Key="SecondaryButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource SurfaceBg}"/>
             <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
@@ -188,7 +188,7 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
-        <!-- Danger Button (LiteDeploy Crimson) -->
+        <!-- Danger Button (Crimson) -->
         <Style x:Key="DangerButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource DangerBg}"/>
             <Setter Property="Foreground" Value="#FFFFFF"/>
@@ -215,7 +215,7 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
-        <!-- Segmented Nav Button Style (from LiteDeploy DynamicDrivers) -->
+        <!-- Segmented Nav Button Style -->
         <Style x:Key="NavButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource MutedFgColor}"/>
@@ -239,7 +239,7 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
-        <!-- LiteDeploy DataGrid Header & Row Styles -->
+        <!-- DataGrid Header & Row Styles -->
         <Style x:Key="DataGridHeaderStyle" TargetType="DataGridColumnHeader">
             <Setter Property="Background" Value="{DynamicResource FooterBg}"/>
             <Setter Property="Foreground" Value="{DynamicResource MutedFgColor}"/>
@@ -286,7 +286,7 @@ function Start-PlaygroundApp {
         </Style>
 
         <!-- =================================================================== -->
-        <!-- LiteDeploy.DynamicDrivers Custom Chevron ComboBox Template          -->
+        <!-- Custom Modern Chevron ComboBox Template                             -->
         <!-- =================================================================== -->
         <Style TargetType="ComboBoxItem">
             <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
@@ -312,7 +312,7 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
-        <Style x:Key="DynamicDriversComboBoxStyle" TargetType="ComboBox">
+        <Style x:Key="ModernComboBoxStyle" TargetType="ComboBox">
             <Setter Property="Height" Value="30"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
@@ -333,7 +333,7 @@ function Start-PlaygroundApp {
                                     <ControlTemplate TargetType="ToggleButton">
                                         <Border x:Name="box" Background="{DynamicResource InputBg}"
                                                 BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6">
-                                            <!-- LiteDeploy DynamicDrivers SVG Chevron Path -->
+                                            <!-- Crisp SVG Chevron Path -->
                                             <Path Data="M 0 0 L 4 4 L 8 0" Stroke="{DynamicResource MutedFgColor}" StrokeThickness="1.5"
                                                   StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                                   Width="8" Height="4" Stretch="Fill"
@@ -420,7 +420,7 @@ function Start-PlaygroundApp {
             </StackPanel>
         </Grid>
 
-        <!-- Row 1: Segmented Nav Control (LiteDeploy Signature Capsule) -->
+        <!-- Row 1: Segmented Nav Control (Capsule) -->
         <Border Grid.Row="1" HorizontalAlignment="Left" VerticalAlignment="Center"
                 Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
                 CornerRadius="8" Padding="3" Margin="0,0,0,14">
@@ -456,7 +456,7 @@ function Start-PlaygroundApp {
                         <TextBlock Name="lblCategoryTitle" Text="Adding Data" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <TextBlock Text="Target Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox Name="cmbLeftCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}"/>
+                            <ComboBox Name="cmbLeftCollection" Width="130" Style="{StaticResource ModernComboBoxStyle}"/>
                         </StackPanel>
                     </Grid>
 
@@ -592,7 +592,7 @@ function Start-PlaygroundApp {
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 <TextBlock Text="Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}"/>
+                                <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource ModernComboBoxStyle}"/>
                             </StackPanel>
 
                             <Button Name="btnRefreshTable" Content="Refresh" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
@@ -1018,7 +1018,7 @@ function Start-PlaygroundApp {
         $coll = $script:activeCollection
         if (-not $coll) { $coll = "users" }
 
-        # Style segmented nav pills (LiteDeploy Signature)
+        # Style segmented nav pills
         $tabs = @($btnNavAdd, $btnNavGet, $btnNavUpdate, $btnNavDelete, $btnNavCustom)
         $names = @("Adding Data", "Getting Data", "Updating Data", "Deleting Data", "Custom PowerShell Script")
 
@@ -1213,7 +1213,7 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         }
     })
 
-    # Dropdown synchronization (Guaranteed visible text with DynamicDrivers styling)
+    # Dropdown synchronization (Guaranteed visible text with modern styling)
     $cmbLeftCollection.add_SelectionChanged({
         if ($script:updatingDropdowns) { return }
         if ($cmbLeftCollection.SelectedItem) {
