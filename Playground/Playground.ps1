@@ -120,7 +120,7 @@ function Start-PlaygroundApp {
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PSLocalBase Playground - Embedded NoSQL Database Explorer"
+        Title="PSLocalBase | Playground v1.0.0"
         Width="1280" Height="840" MinWidth="1100" MinHeight="720"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
@@ -404,7 +404,7 @@ function Start-PlaygroundApp {
                     <TextBlock Text="PL" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <TextBlock Text="PSLocalBase" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource HeaderColor}" VerticalAlignment="Center"/>
-                <TextBlock Text=" Playground" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
+                <TextBlock Text=" | Playground" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
                 <Border Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="8,3" Margin="14,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="Windows Native (winsqlite3.dll)" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}"/>
                 </Border>
@@ -736,6 +736,10 @@ function Start-PlaygroundApp {
     } finally {
         $xmlReader.Dispose()
     }
+
+    $modInfo = Get-Module PSLocalBase
+    $modVer = if ($modInfo -and $modInfo.Version) { $modInfo.Version.ToString() } else { "1.0.0" }
+    $script:window.Title = "PSLocalBase | Playground v$modVer"
 
     # -----------------------------------------------------------------------
     # Element Handles
