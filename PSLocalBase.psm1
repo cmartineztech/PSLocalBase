@@ -152,6 +152,39 @@ class PSLocalBase : System.IDisposable {
         $this.SkipValue = $null
     }
 
+    [bool] _CollectionExists([string]$name) {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+        $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1;", @($name))
+        return ($rows.Count -gt 0)
+    }
+
+    [bool] collectionExists([string]$name) {
+        return $this._CollectionExists($name)
+    }
+
+    [void] _EnsureCollectionTable() {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified.")
+        }
+        $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+        $this._ExecuteDirectSql($createSql)
+    }
+
+    [PSLocalBase] create() {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
+        }
+        $this._EnsureCollectionTable()
+        return $this
+    }
+
+    [PSLocalBase] createCollection([string]$name) {
+        return $this.collection($name).create()
+    }
+
     [PSLocalBase] collection([string]$name) {
         if ([string]::IsNullOrWhiteSpace($name)) {
             throw [System.ArgumentException]::new("Collection name cannot be null or whitespace.")
@@ -162,10 +195,6 @@ class PSLocalBase : System.IDisposable {
 
         $this.CurrentCollection = $name
         $this._ResetQueryState()
-
-        # Auto-create collection table if it doesn't already exist
-        $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
-        $this._ExecuteDirectSql($createSql)
 
         return $this
     }
@@ -234,6 +263,7 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .set().")
         }
+        $this._EnsureCollectionTable()
 
         # Case 1: Targeted document (.doc('key').set(data))
         if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
@@ -517,6 +547,15 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .get().")
         }
 
+        # If collection does not exist, return empty without creating a table
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                return $null
+            }
+            return @()
+        }
+
         $withKeys = ($null -ne $options -and $options["keys"] -eq $true)
 
         try {
@@ -599,6 +638,11 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureOpen()
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .count().")
+        }
+
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            return 0
         }
 
         try {
@@ -707,6 +751,11 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureOpen()
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .delete().")
+        }
+
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            return
         }
 
         try {

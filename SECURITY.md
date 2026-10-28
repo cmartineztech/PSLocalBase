@@ -32,6 +32,7 @@
   - Query operators: restricted to a strict whitelist (`=`, `==`, `!=`, `<>`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`)
   - Sorting directions: restricted strictly to `ASC` or `DESC`
 - **Payload Safety:** Arbitrary user strings (including SQL syntax such as `' OR '1'='1` or `'; DROP TABLE; --`) are treated strictly as harmless literal text.
+- **Lazy Schema Provisioning:** Referencing `.collection("name")` operates lazily and does not provision SQLite tables until explicit writes (`.set()`, `.add()`, `.update()`) or `.create()` are called, preventing unintended database table pollution and resource exhaustion from arbitrary or mistyped collection names.
 
 ### 3. Source Code & Complex Payload Integrity
 - Field values containing complex scripts, code snippets (PowerShell, Python, SQL), nested quotes, backslashes, dollar signs, and multiline strings are stored and retrieved byte-for-byte identical without interpretation or corruption.

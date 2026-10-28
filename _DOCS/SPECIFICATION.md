@@ -168,8 +168,12 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Finalizes pending statements, invokes `sqlite3_close` (with `sqlite3_close_v2` fallback), and sets `$DbHandle = [IntPtr]::Zero`.
 * **`[string[]] listCollections()` / `[string[]] getCollections()`**
   * Returns an array of all active collection names found in the database.
+* **`[bool] collectionExists([string]$name)`**
+  * Checks whether a collection table currently exists in SQLite `sqlite_master`.
 * **`[PSLocalBase] collection([string]$name)`**
-  * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, resets query state, and auto-provisions the underlying table.
+  * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, and resets query state. Navigation is lazy: does not create empty/ghost tables in SQLite.
+* **`[PSLocalBase] create()` / `[PSLocalBase] createCollection([string]$name)`**
+  * Explicitly provisions the collection table in SQLite immediately, matching the counterpart `.delete()` method.
 * **`[PSLocalBase] doc([object]$keyOrCriteria)`**
   * Resolves key from string, number, hashtable, or criteria object.
 
@@ -214,7 +218,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 26 out of 26 tests on both PowerShell 5.1 and PowerShell 7+:
+The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 27 out of 27 tests on both PowerShell 5.1 and PowerShell 7+:
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
@@ -244,6 +248,7 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
 | **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
 | **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |
+| **TC-27** | **Explicit Collection Lifecycle** | Lazy collection navigation without ghost tables; explicit `.create()`, `.createCollection()`, and `.collectionExists()` | **PASSED** |
 
 ---
 

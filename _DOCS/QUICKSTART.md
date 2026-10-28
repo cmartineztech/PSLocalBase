@@ -12,6 +12,7 @@ Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, 
   - [File-Based Persistence](#file-based-persistence)
   - [In-Memory Ephemeral Database](#in-memory-ephemeral-database)
 - [3. Working with Collections & Documents](#3-working-with-collections--documents)
+  - [Explicit Collection Creation (`create`)](#explicit-collection-creation-create)
   - [Insert with Custom Key (`set`)](#insert-with-custom-key-set)
   - [Insert with Auto-Generated GUID (`add`)](#insert-with-auto-generated-guid-add)
   - [Bulk Insert Entire Collection](#bulk-insert-entire-collection)
@@ -96,7 +97,20 @@ $db = New-LocalBase
 
 ## 3. Working with Collections & Documents
 
-Collections are created automatically upon first write. No table creation or migrations needed!
+Collections are created automatically upon first write, or explicitly via `.create()`. Navigating via `$db.collection("name")` is lazy and will not create empty tables in SQLite.
+
+### Explicit Collection Creation (`create`)
+If you want to pre-provision an empty collection table before inserting records:
+```powershell
+# Fluent chaining:
+$db.collection("audit_logs").create()
+
+# Direct method:
+$db.createCollection("audit_logs")
+
+# Check existence:
+$exists = $db.collectionExists("audit_logs") # $true
+```
 
 ### Insert with Custom Key (`set`)
 ```powershell

@@ -900,6 +900,56 @@ Assert-Test "TC-26: System32 DLL Search Path, Balanced Field Regex & Scalar/Empt
 }
 
 # ---------------------------------------------------------------------------
+# TC-27: Explicit Collection Lifecycle (.create() & Lazy Navigation)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Navigation does not create collection in SQLite
+        [void]$db.collection("uncreated_collection")
+        $colls = @($db.listCollections())
+        if ($colls.Count -ne 0) {
+            throw "Collection was created simply by navigating to it."
+        }
+
+        # 2. Reading non-existent collection returns empty without creating table
+        $res = $db.collection("uncreated_collection").get()
+        if ($res.Count -ne 0) {
+            throw "Expected empty array from uncreated collection."
+        }
+        $cnt = $db.collection("uncreated_collection").count()
+        if ($cnt -ne 0) {
+            throw "Expected 0 count from uncreated collection."
+        }
+        if (@($db.listCollections()).Count -ne 0) {
+            throw "Collection table was created during read/count."
+        }
+
+        # 3. Explicit .create() provisions table
+        [void]$db.collection("my_custom_coll").create()
+        $collsAfterCreate = @($db.listCollections())
+        if ($collsAfterCreate.Count -ne 1 -or $collsAfterCreate[0] -ne "my_custom_coll") {
+            throw "Explicit .create() failed to create collection table."
+        }
+
+        # 4. Explicit .delete() drops table
+        $db.collection("my_custom_coll").delete()
+        if (@($db.listCollections()).Count -ne 0) {
+            throw "Collection table still exists after .delete()."
+        }
+
+        # 5. Writing data creates table automatically
+        $null = $db.collection("auto_on_write").add(@{ ok = $true })
+        $collsAfterWrite = @($db.listCollections())
+        if ($collsAfterWrite.Count -ne 1 -or $collsAfterWrite[0] -ne "auto_on_write") {
+            throw "Write operation failed to auto-create collection table."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan

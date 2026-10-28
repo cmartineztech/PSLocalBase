@@ -124,9 +124,27 @@ $db = New-LocalBase
 ### Collections & Documents
 
 #### `collection([string]$name)`
-Navigates to a collection (SQLite table). Alphanumeric characters and underscores (`^[a-zA-Z0-9_]+$`) are supported. Automatically creates the collection table if it does not exist.
+Navigates to a collection (SQLite table). Alphanumeric characters and underscores (`^[a-zA-Z0-9_]+$`) are supported. Navigation is **lazy**: referencing a collection does not create empty/ghost tables in SQLite until documents are written, preventing unintentional table creation on typos or read queries.
 ```powershell
 $db.collection("orders")
+```
+
+#### `create()` / `createCollection([string]$name)`
+Explicitly provisions the collection table in SQLite immediately without requiring initial documents, matching the counterpart `.delete()` lifecycle method.
+```powershell
+# Fluent chaining:
+$db.collection("audit_logs").create()
+
+# Direct method:
+$db.createCollection("audit_logs")
+```
+
+#### `collectionExists([string]$name)`
+Checks whether a collection table already exists in the database.
+```powershell
+if (-not $db.collectionExists("users")) {
+    $db.createCollection("users")
+}
 ```
 
 #### `doc([object]$keyOrCriteria)`
@@ -139,7 +157,7 @@ $db.collection("orders").doc("ord-001")
 $db.collection("orders").doc(@{ id = "ord-001" })
 ```
 
-#### `getCollections()`
+#### `getCollections()` / `listCollections()`
 Retrieves an array of all collection names present in the database.
 ```powershell
 $collections = $db.getCollections()
@@ -371,7 +389,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 26 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 27 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -382,7 +400,7 @@ powershell -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
-For the complete breakdown of all 26 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+For the complete breakdown of all 27 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
 ---
 
