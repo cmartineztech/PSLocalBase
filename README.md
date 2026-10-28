@@ -389,7 +389,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 27 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 30 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -400,7 +400,7 @@ powershell -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
-For the complete breakdown of all 27 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+For the complete breakdown of all 30 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
 ---
 

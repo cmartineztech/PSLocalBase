@@ -957,6 +957,171 @@ Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation
 }
 
 # ---------------------------------------------------------------------------
+# TC-28: Target Document Auto-Provisioning & Criteria Key Resolution
+# ---------------------------------------------------------------------------
+Assert-Test "TC-28: Target Document Auto-Provisioning & Criteria Key Resolution" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Calling .doc() on uncreated collection provisions table in SQLite
+        if ($db.collectionExists("orders_auto")) {
+            throw "Collection orders_auto should not exist prior to .doc()"
+        }
+        [void]$db.collection("orders_auto").doc("ord-001")
+        if (-not $db.collectionExists("orders_auto")) {
+            throw "Calling .doc('ord-001') failed to auto-provision table 'orders_auto'."
+        }
+
+        # 2. Reading targeted document that hasn't been set returns $null
+        $read = $db.collection("orders_auto").doc("ord-001").get()
+        if ($null -ne $read) {
+            throw "Expected null for unpopulated document."
+        }
+
+        # 3. Setting document by hashtable criteria @{ id = 'ord-100' }
+        $db.collection("orders_auto").doc(@{ id = "ord-100" }).set(@{ total = 450; status = "Completed" })
+        $fromCriteria = $db.collection("orders_auto").doc("ord-100").get()
+        if ($null -eq $fromCriteria -or $fromCriteria.total -ne 450) {
+            throw "Failed to set/get document targeted via criteria hashtable."
+        }
+
+        # 4. Setting document by PSCustomObject criteria [PSCustomObject]@{ key = 'ord-200' }
+        $critObj = [PSCustomObject]@{ key = "ord-200"; description = "Search criteria" }
+        $db.collection("orders_auto").doc($critObj).set(@{ total = 890; status = "Pending" })
+        $fromObj = $db.collection("orders_auto").doc("ord-200").get()
+        if ($null -eq $fromObj -or $fromObj.total -ne 890) {
+            throw "Failed to set/get document targeted via PSCustomObject criteria."
+        }
+
+        # 5. Verify total count in collection is 2
+        $cnt = $db.collection("orders_auto").count()
+        if ($cnt -ne 2) {
+            throw "Expected 2 documents in orders_auto, got $cnt"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-29: Collection Schema Lifecycle (createCollection, Exists, Drop & Re-create)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-29: Collection Schema Lifecycle (createCollection, Exists, Drop & Re-create)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Verify collectionExists is false for non-existent collection
+        if ($db.collectionExists("audit_trail")) {
+            throw "audit_trail should not exist initially."
+        }
+
+        # 2. Direct createCollection method
+        [void]$db.createCollection("audit_trail")
+        if (-not $db.collectionExists("audit_trail")) {
+            throw "audit_trail should exist after createCollection."
+        }
+
+        # 3. Insert and verify document
+        $db.collection("audit_trail").doc("entry-1").set(@{ action = "Login"; timestamp = "2026-10-28" })
+        if ($db.collection("audit_trail").count() -ne 1) {
+            throw "Failed document write in audit_trail."
+        }
+
+        # 4. Drop collection table completely
+        $db.collection("audit_trail").delete()
+        if ($db.collectionExists("audit_trail")) {
+            throw "audit_trail should not exist after .delete()."
+        }
+        $colls = @($db.listCollections())
+        if ($colls -contains "audit_trail") {
+            throw "listCollections should not contain audit_trail after drop."
+        }
+
+        # 5. Immediate re-creation of the same collection name
+        [void]$db.collection("audit_trail").create()
+        if (-not $db.collectionExists("audit_trail")) {
+            throw "audit_trail should exist after immediate re-creation."
+        }
+        if ($db.collection("audit_trail").count() -ne 0) {
+            throw "Re-created collection should be completely empty (0 documents)."
+        }
+
+        # 6. Re-insert data to verify schema is functional
+        $db.collection("audit_trail").doc("entry-2").set(@{ action = "Logout" })
+        $doc = $db.collection("audit_trail").doc("entry-2").get()
+        if ($null -eq $doc -or $doc.action -ne "Logout") {
+            throw "Failed write on re-created collection."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-30: Multiple Collection Isolation & Relational Integrity
+# ---------------------------------------------------------------------------
+Assert-Test "TC-30: Multiple Collection Isolation & Relational Integrity" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Provision 3 independent collections
+        [void]$db.createCollection("users")
+        [void]$db.createCollection("products")
+        [void]$db.createCollection("orders")
+
+        $colls = @($db.getCollections())
+        if ($colls.Count -ne 3) {
+            throw "Expected exactly 3 collections, got $($colls.Count)"
+        }
+
+        # 2. Populate collections with interconnected data
+        $db.collection("users").doc("u-1").set(@{ name = "Alice"; dept = "Sales" })
+        $db.collection("users").doc("u-2").set(@{ name = "Bob"; dept = "Engineering" })
+
+        $db.collection("products").doc("p-1").set(@{ title = "Server"; price = 2500 })
+        $db.collection("products").doc("p-2").set(@{ title = "Switch"; price = 400 })
+
+        $db.collection("orders").doc("o-1").set(@{ userId = "u-1"; prodId = "p-1"; qty = 2 })
+        $db.collection("orders").doc("o-2").set(@{ userId = "u-2"; prodId = "p-2"; qty = 5 })
+
+        # 3. Bulk overwrite collection 'users' using .set(@(...))
+        $newUsers = @(
+            @{ id = "u-3"; name = "Charlie"; dept = "HR" },
+            @{ id = "u-4"; name = "Dana"; dept = "Finance" }
+        )
+        $db.collection("users").set($newUsers)
+
+        # 4. Verify 'products' and 'orders' were untouched by 'users' bulk overwrite
+        if ($db.collection("products").count() -ne 2) {
+            throw "products collection was mutated by users overwrite."
+        }
+        if ($db.collection("orders").count() -ne 2) {
+            throw "orders collection was mutated by users overwrite."
+        }
+        $serverDoc = $db.collection("products").doc("p-1").get()
+        if ($null -eq $serverDoc -or $serverDoc.price -ne 2500) {
+            throw "products p-1 document corrupted."
+        }
+
+        # 5. Drop 'orders' collection
+        $db.collection("orders").delete()
+        if ($db.collectionExists("orders")) {
+            throw "orders collection should be deleted."
+        }
+        if (-not $db.collectionExists("users") -or -not $db.collectionExists("products")) {
+            throw "users or products collection accidentally deleted."
+        }
+
+        # 6. Verify cross-collection query between surviving collections
+        $sql = "SELECT json_extract(u.doc, '$.name') AS User, json_extract(p.doc, '$.title') AS Product FROM users u CROSS JOIN products p ORDER BY User, Product;"
+        $crossRes = $db.query($sql)
+        # 2 users * 2 products = 4 cross-join rows
+        if ($crossRes.Count -ne 4) {
+            throw "Expected 4 rows from CROSS JOIN, got $($crossRes.Count)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan
