@@ -306,6 +306,9 @@ ORDER BY Amount DESC;
 
 $report = $db.query($sql)
 $report | Format-Table -AutoSize
+
+# Parameterized queries with strongly-typed binding and parameter count parity
+$activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM users WHERE json_extract(doc, '$.age') >= ?;", @(30))
 ```
 
 ---
@@ -327,15 +330,17 @@ $db.collection("logs").where("level", "=", "DEBUG").delete()
 # Drop the collection table cleanly
 $db.collection("temporary_data").drop()
 
-# Or delete all records without filter
+# Or delete without document key or where filter (drops the collection table)
 $db.collection("temporary_data").delete()
 ```
 > [!NOTE]
-> Accidental data loss protection: calling `.delete()` with pagination (`.limit()`, `.skip()`) is rejected with an `InvalidOperationException` to guarantee targeted deletions never unintentionally purge an entire collection.
+> * **Accidental data loss protection:** Calling `.delete()` with pagination (`.limit()`, `.skip()`) is rejected with an `InvalidOperationException` to guarantee targeted deletions never unintentionally purge an entire collection.
+> * **Collection-level `deleteDatabase()` guard:** `.deleteDatabase()` must be invoked on the root `$db` instance (`$db.deleteDatabase()`). Invoking it on a child collection (`$col.deleteDatabase()`) is explicitly rejected with `InvalidOperationException` to prevent Windows file-lock conflicts.
 
 #### Deleting the Entire Database File
 Closes all connections and safely deletes the database file, along with any active `.db-wal` and `.db-shm` files:
 ```powershell
+# Must be executed on the root instance:
 $db.deleteDatabase()
 ```
 
@@ -398,7 +403,7 @@ try {
 
 #### What Happens if a Script Crashes Without Calling `.close()`?
 
-* **Data Integrity & Zero Corruption:** PSLocalBase operates in SQLite's Write-Ahead Logging (`WAL`) mode with full ACID compliance. If a script crashes mid-execution, any uncommitted transaction is safely discarded by the engine. The database file will **never** be corrupted.
+* **Data Integrity & Zero Corruption:** PSLocalBase operates in SQLite's Write-Ahead Logging (`WAL`) mode with full ACID compliance and `synchronous = NORMAL`. If a PowerShell process or script crashes mid-execution, uncommitted transactions are cleanly discarded upon recovery. With `synchronous = NORMAL`, SQLite syncs the WAL file during checkpoints, providing optimal write throughput while completely protecting against process crashes (for systems requiring strict power-loss durability across sudden physical outages, `synchronous = FULL` is available via configuration options).
 * **Process Exit Cleanup:** When a PowerShell process terminates (e.g. running via `powershell -File script.ps1`, GitHub Actions, or Windows Scheduled Tasks), the Windows kernel automatically reclaims all unmanaged handles and closes all file descriptors.
 * **Interactive Sessions:** If a script fails inside an interactive session (VS Code or PowerShell console), the handle remains bound to that session's variable until closed. Simply invoke `$db.close()` or close the terminal window to release the file lock.
 
@@ -406,7 +411,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 40 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 45 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -417,7 +422,7 @@ powershell -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
-For the complete breakdown of all 40 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+For the complete breakdown of all 45 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
 ---
 

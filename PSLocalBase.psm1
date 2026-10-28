@@ -309,12 +309,41 @@ class PSLocalBase : System.IDisposable {
         return $this
     }
 
+    [bool] _ExceedsDepth([object]$obj, [int]$maxDepth, [int]$currentDepth) {
+        if ($null -eq $obj) { return $false }
+        if ($currentDepth -gt $maxDepth) { return $true }
+        if ($obj -is [string] -or $obj.GetType().IsPrimitive -or $obj -is [decimal] -or $obj -is [datetime] -or $obj -is [guid]) { return $false }
+        if ($obj -is [System.Collections.IDictionary]) {
+            foreach ($val in $obj.Values) {
+                if ($this._ExceedsDepth($val, $maxDepth, $currentDepth + 1)) { return $true }
+            }
+            return $false
+        }
+        if ($obj -is [System.Collections.IEnumerable]) {
+            foreach ($elem in $obj) {
+                if ($this._ExceedsDepth($elem, $maxDepth, $currentDepth + 1)) { return $true }
+            }
+            return $false
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties -and $obj.PSObject.Properties.Count -gt 0) {
+            foreach ($prop in $obj.PSObject.Properties) {
+                if ($this._ExceedsDepth($prop.Value, $maxDepth, $currentDepth + 1)) { return $true }
+            }
+            return $false
+        }
+        return ($currentDepth -gt $maxDepth)
+    }
+
     [string] _SerializeJson([object]$data) {
         $depth = 20
         if ($this.config -and $this.config.ContainsKey("depth")) {
             $depth = [int]$this.config["depth"]
         } elseif ($this.config -and $this.config.ContainsKey("maxDepth")) {
             $depth = [int]$this.config["maxDepth"]
+        }
+        # Pre-flight depth check guarantees identical rejection in both PowerShell 5.1 and 7+
+        if ($this._ExceedsDepth($data, $depth, 0)) {
+            throw [System.InvalidOperationException]::new("Object serialization exceeded configured maximum depth ($depth). Increase 'depth' in configuration options to serialize deeply nested structures.")
         }
         $jsonWarn = $null
         $json = ConvertTo-Json -InputObject $data -Compress -Depth $depth -WarningVariable jsonWarn -WarningAction SilentlyContinue
@@ -771,27 +800,21 @@ class PSLocalBase : System.IDisposable {
             # Multi-document count with optional where filters and limits
             $sqlBuilder = [System.Text.StringBuilder]::new()
             
-            if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                # Subquery count when limit/skip are applied
+            if (($null -ne $this.LimitValue -and $this.LimitValue -ge 0) -or ($null -ne $this.SkipValue -and $this.SkipValue -gt 0)) {
+                # Subquery count when limit and/or skip are applied to source documents
+                $limitClause = if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) { "LIMIT $($this.LimitValue)" } else { "LIMIT -1" }
+                $offsetClause = if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) { "OFFSET $($this.SkipValue)" } else { "" }
                 [void]$sqlBuilder.Append("SELECT COUNT(*) FROM (SELECT 1 FROM [$($this.CurrentCollection)]")
                 if ($this.WhereClauses.Count -gt 0) {
                     [void]$sqlBuilder.Append(" WHERE ")
                     [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
                 }
-                if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)")
-                } else {
-                    [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue)")
-                }
-                [void]$sqlBuilder.Append(");")
+                [void]$sqlBuilder.Append(" $limitClause $offsetClause);")
             } else {
                 [void]$sqlBuilder.Append("SELECT COUNT(*) FROM [$($this.CurrentCollection)]")
                 if ($this.WhereClauses.Count -gt 0) {
                     [void]$sqlBuilder.Append(" WHERE ")
                     [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                }
-                if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    [void]$sqlBuilder.Append(" LIMIT -1 OFFSET $($this.SkipValue)")
                 }
             }
 
@@ -833,22 +856,8 @@ class PSLocalBase : System.IDisposable {
                 throw [System.InvalidOperationException]::new("Failed to prepare query: $msg (Code: $prepRc, Query: $sql)")
             }
 
-            # Bind parameters
-            if ($null -ne $parameters -and $parameters.Count -gt 0) {
-                for ($i = 0; $i -lt $parameters.Count; $i++) {
-                    $paramIdx = $i + 1
-                    $val = $parameters[$i]
-                    $bindRc = if ($null -eq $val) {
-                        [WinSqlite3]::BindNull($stmt, $paramIdx)
-                    } else {
-                        [WinSqlite3]::BindText($stmt, $paramIdx, [string]$val, -1, [WinSqlite3]::SQLITE_TRANSIENT)
-                    }
-                    if ($bindRc -ne [WinSqlite3]::SQLITE_OK) {
-                        $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                        throw [System.InvalidOperationException]::new("Failed to bind query parameter at index ${paramIdx}: $msg (Code: $bindRc, Query: $sql)")
-                    }
-                }
-            }
+            # Validate parameter count against statement placeholders and bind with typed affinities
+            $this._BindStatementParameters($stmt, $parameters, $sql)
 
             $colCount = [WinSqlite3]::ColumnCount($stmt)
             $colNames = [string[]]::new($colCount)
@@ -873,7 +882,8 @@ class PSLocalBase : System.IDisposable {
                             2 { $val = [WinSqlite3]::ColumnDouble($stmt, $c) }
                             3 { 
                                 $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
-                                $val = [WinSqlite3]::GetString($colPtr)
+                                $byteLen = [WinSqlite3]::ColumnBytes16($stmt, $c)
+                                $val = [WinSqlite3]::GetString($colPtr, [int]($byteLen / 2))
                             }
                             5 { $val = $null }
                             default {
@@ -955,6 +965,10 @@ class PSLocalBase : System.IDisposable {
     }
 
     [void] deleteDatabase() {
+        $this._EnsureOpen()
+        if ($this.IsChildInstance) {
+            throw [System.InvalidOperationException]::new("deleteDatabase() cannot be executed from a collection instance. Call it on the root PSLocalBase instance.")
+        }
         $path = $this.FilePath
         $this.close()
 
@@ -979,7 +993,7 @@ class PSLocalBase : System.IDisposable {
     # Transactions
     # -----------------------------------------------------------------------
     [bool] _GetInTransaction() {
-        if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
+        $this._EnsureOpen()
         $method = [WinSqlite3].GetMethod('GetAutocommit')
         if ($null -ne $method) {
             return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
@@ -989,12 +1003,14 @@ class PSLocalBase : System.IDisposable {
     }
 
     [void] beginTransaction() {
+        $this._EnsureOpen()
         $this._ExecuteDirectSql("BEGIN TRANSACTION;")
         $this.InTransaction = $true
         if ($this.ParentDb) { $this.ParentDb.InTransaction = $true }
     }
 
     [void] commit() {
+        $this._EnsureOpen()
         try {
             $this._ExecuteDirectSql("COMMIT;")
         } finally {
@@ -1004,6 +1020,7 @@ class PSLocalBase : System.IDisposable {
     }
 
     [void] rollback() {
+        $this._EnsureOpen()
         try {
             $this._ExecuteDirectSql("ROLLBACK;")
         } finally {
@@ -1038,7 +1055,7 @@ class PSLocalBase : System.IDisposable {
     # Internal Engine Helpers
     # -----------------------------------------------------------------------
     [void] _EnsureOpen() {
-        if ($this.IsChildInstance -and $null -ne $this.ParentDb -and $this.ParentDb.DbHandle -eq [IntPtr]::Zero) {
+        if ($this.IsChildInstance -and ($null -eq $this.ParentDb -or $this.ParentDb.DbHandle -eq [IntPtr]::Zero)) {
             $this.DbHandle = [IntPtr]::Zero
         }
         if ($this.DbHandle -eq [IntPtr]::Zero) {
@@ -1046,7 +1063,48 @@ class PSLocalBase : System.IDisposable {
         }
     }
 
+    [void] _BindStatementParameters([IntPtr]$stmt, [object[]]$parameters, [string]$sql) {
+        $expectedCount = 0
+        $bindCountMethod = [WinSqlite3].GetMethod('BindParameterCount')
+        if ($null -ne $bindCountMethod) {
+            $expectedCount = [WinSqlite3]::BindParameterCount($stmt)
+        }
+        $actualCount = if ($null -ne $parameters) { $parameters.Count } else { 0 }
+        if ($expectedCount -ne $actualCount) {
+            throw [System.InvalidOperationException]::new("Parameter count mismatch: query expects $expectedCount parameters, but $actualCount were provided.")
+        }
+
+        if ($null -ne $parameters -and $parameters.Count -gt 0) {
+            for ($i = 0; $i -lt $parameters.Count; $i++) {
+                $paramIdx = $i + 1
+                $val = $parameters[$i]
+                $bindRc = [WinSqlite3]::SQLITE_OK
+
+                if ($null -eq $val) {
+                    $bindRc = [WinSqlite3]::BindNull($stmt, $paramIdx)
+                } elseif ($val -is [byte] -or $val -is [sbyte] -or $val -is [int16] -or $val -is [uint16] -or $val -is [int32] -or $val -is [uint32] -or $val -is [int64]) {
+                    $bindRc = [WinSqlite3]::BindInt64($stmt, $paramIdx, [long]$val)
+                } elseif ($val -is [single] -or $val -is [double] -or $val -is [decimal]) {
+                    $bindRc = [WinSqlite3]::BindDouble($stmt, $paramIdx, [double]$val)
+                } elseif ($val -is [bool]) {
+                    $boolVal = if ($val) { 1L } else { 0L }
+                    $bindRc = [WinSqlite3]::BindInt64($stmt, $paramIdx, $boolVal)
+                } else {
+                    $strVal = [string]$val
+                    $byteCount = [System.Text.Encoding]::Unicode.GetByteCount($strVal)
+                    $bindRc = [WinSqlite3]::BindText($stmt, $paramIdx, $strVal, $byteCount, [WinSqlite3]::SQLITE_TRANSIENT)
+                }
+
+                if ($bindRc -ne [WinSqlite3]::SQLITE_OK) {
+                    $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
+                    throw [System.InvalidOperationException]::new("Failed to bind parameter at index ${paramIdx}: $msg (Code: $bindRc, Query: $sql)")
+                }
+            }
+        }
+    }
+
     [void] _ExecuteDirectSql([string]$sql) {
+        $this._EnsureOpen()
         if ($this.config -and $this.config["debug"] -eq $true) {
             Write-Host "[PSLocalBase SQL] $sql" -ForegroundColor DarkCyan
         }
@@ -1069,6 +1127,7 @@ class PSLocalBase : System.IDisposable {
     }
 
     [void] _ExecuteBoundSql([string]$sql, [object[]]$parameters) {
+        $this._EnsureOpen()
         if ($this.config -and $this.config["debug"] -eq $true) {
             Write-Host "[PSLocalBase Bound SQL] $sql | Params count: $($parameters.Count)" -ForegroundColor DarkCyan
         }
@@ -1081,21 +1140,7 @@ class PSLocalBase : System.IDisposable {
         }
 
         try {
-            if ($null -ne $parameters -and $parameters.Count -gt 0) {
-                for ($i = 0; $i -lt $parameters.Count; $i++) {
-                    $paramIdx = $i + 1
-                    $val = $parameters[$i]
-                    $bindRc = if ($null -eq $val) {
-                        [WinSqlite3]::BindNull($stmt, $paramIdx)
-                    } else {
-                        [WinSqlite3]::BindText($stmt, $paramIdx, [string]$val, -1, [WinSqlite3]::SQLITE_TRANSIENT)
-                    }
-                    if ($bindRc -ne [WinSqlite3]::SQLITE_OK) {
-                        $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                        throw [System.InvalidOperationException]::new("Failed to bind statement parameter at index ${paramIdx}: $msg (Code: $bindRc, Query: $sql)")
-                    }
-                }
-            }
+            $this._BindStatementParameters($stmt, $parameters, $sql)
 
             $stepRc = [WinSqlite3]::Step($stmt)
             if ($stepRc -ne [WinSqlite3]::SQLITE_DONE -and $stepRc -ne [WinSqlite3]::SQLITE_ROW) {
@@ -1108,6 +1153,7 @@ class PSLocalBase : System.IDisposable {
     }
 
     [System.Collections.Generic.List[string[]]] _ExecuteBoundQuery([string]$sql, [object[]]$parameters) {
+        $this._EnsureOpen()
         if ($this.config -and $this.config["debug"] -eq $true) {
             Write-Host "[PSLocalBase Query] $sql" -ForegroundColor DarkCyan
         }
@@ -1121,28 +1167,15 @@ class PSLocalBase : System.IDisposable {
         }
 
         try {
-            if ($null -ne $parameters -and $parameters.Count -gt 0) {
-                for ($i = 0; $i -lt $parameters.Count; $i++) {
-                    $paramIdx = $i + 1
-                    $val = $parameters[$i]
-                    $bindRc = if ($null -eq $val) {
-                        [WinSqlite3]::BindNull($stmt, $paramIdx)
-                    } else {
-                        [WinSqlite3]::BindText($stmt, $paramIdx, [string]$val, -1, [WinSqlite3]::SQLITE_TRANSIENT)
-                    }
-                    if ($bindRc -ne [WinSqlite3]::SQLITE_OK) {
-                        $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                        throw [System.InvalidOperationException]::new("Failed to bind query parameter at index ${paramIdx}: $msg (Code: $bindRc, Query: $sql)")
-                    }
-                }
-            }
+            $this._BindStatementParameters($stmt, $parameters, $sql)
 
             $colCount = [WinSqlite3]::ColumnCount($stmt)
             while (($stepRc = [WinSqlite3]::Step($stmt)) -eq [WinSqlite3]::SQLITE_ROW) {
                 $row = [string[]]::new($colCount)
                 for ($c = 0; $c -lt $colCount; $c++) {
                     $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
-                    $row[$c] = [WinSqlite3]::GetString($colPtr)
+                    $byteLen = [WinSqlite3]::ColumnBytes16($stmt, $c)
+                    $row[$c] = [WinSqlite3]::GetString($colPtr, [int]($byteLen / 2))
                 }
                 $results.Add($row)
             }
@@ -1238,13 +1271,16 @@ try {
 # ---------------------------------------------------------------------------
 try {
     Update-TypeData -TypeName PSLocalBase -MemberType ScriptProperty -MemberName InTransaction -Value {
+        if ($this.IsChildInstance -and ($null -eq $this.ParentDb -or $this.ParentDb.DbHandle -eq [IntPtr]::Zero)) {
+            $this.DbHandle = [IntPtr]::Zero
+        }
         if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
         $m = [WinSqlite3].GetMethod('GetAutocommit')
         if ($null -ne $m) {
             return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
         }
         $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
-        return $root._inTxInternal
+        return $root.InTransaction
     } -SecondValue {
         param($val)
     } -Force
@@ -1316,17 +1352,6 @@ try {
 # ---------------------------------------------------------------------------
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     try {
-    Update-TypeData -TypeName PSLocalBase -MemberType ScriptProperty -MemberName InTransaction -Value {
-        if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
-        $m = [WinSqlite3].GetMethod('GetAutocommit')
-        if ($null -ne $m) {
-            return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
-        }
-        $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
-        return $root._inTxInternal
-    } -SecondValue {
-        param($val)
-    } -Force
         $typeAcceleratorsClass = [PSObject].Assembly.GetType('System.Management.Automation.TypeAccelerators')
         if ($typeAcceleratorsClass -and $typeAcceleratorsClass::Get.ContainsKey('PSLocalBase')) {
             [void]$typeAcceleratorsClass::Remove('PSLocalBase')

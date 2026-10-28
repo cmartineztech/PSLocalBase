@@ -17,6 +17,7 @@ Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, 
   - [Insert with Auto-Generated GUID (`add`)](#insert-with-auto-generated-guid-add)
   - [Bulk Insert Entire Collection](#bulk-insert-entire-collection)
   - [Partial Update / Deep Merge (`update`)](#partial-update--deep-merge-update)
+  - [Deleting Documents & Dropping Collections (`delete`, `drop`)](#deleting-documents--dropping-collections-delete-drop)
 - [4. Querying & Filtering](#4-querying--filtering)
   - [Point Lookups](#point-lookups)
   - [Collection-Wide Retrieval](#collection-wide-retrieval)
@@ -157,6 +158,22 @@ $db.collection("users").doc("usr-100").update(@{
 })
 ```
 
+### Deleting Documents & Dropping Collections (`delete`, `drop`)
+* **Delete a single document:**
+  ```powershell
+  $db.collection("users").doc("usr-100").delete()
+  ```
+* **Truncate/empty a collection (delete all documents, keep table structure):**
+  ```powershell
+  $db.collection("users").delete()
+  ```
+* **Drop a collection completely (remove table schema and index from SQLite):**
+  ```powershell
+  $db.collection("users").drop()
+  # Or equivalently from root:
+  $db.dropCollection("users")
+  ```
+
 ---
 
 ## 4. Querying & Filtering
@@ -235,9 +252,16 @@ foreach ($item in $itemsWithKeys) {
 
 ## 5. Cross-Collection Queries (`query`)
 
-Perform relational `JOIN`s, aggregations, or group-by operations across independent collections using raw SQLite SQL:
+Perform relational `JOIN`s, aggregations, or group-by operations across independent collections using raw SQLite SQL. Parameter binding is strongly typed to prevent SQL injection:
 
 ```powershell
+# 1. Parameterized query (strongly typed parameters: integers, reals, strings, booleans, nulls)
+$activeUsers = $db.query(
+    "SELECT key, json_extract(doc, '$.name') AS name FROM users WHERE json_extract(doc, '$.department') = ? AND json_extract(doc, '$.active') = ?",
+    @("Engineering", $true)
+)
+
+# 2. Relational JOIN across collections
 $sql = @"
 SELECT 
     json_extract(u.doc, '$.name') AS Customer,
@@ -291,6 +315,17 @@ try {
     $db.close()
 }
 ```
+
+### Deleting a Database Completely (`deleteDatabase`)
+To delete the active SQLite database file and its associated WAL journal files (`-wal`, `-shm`), invoke `.deleteDatabase()` directly from the root database instance:
+```powershell
+$db = [PSLocalBase]::new(".\temporary.db")
+$db.collection("cache").add(@{ token = "xyz" })
+# Closes handle and deletes .\temporary.db, .\temporary.db-wal, .\temporary.db-shm
+$db.deleteDatabase()
+```
+> [!NOTE]
+> `deleteDatabase()` must be invoked on the root database instance. Invoking it on a child collection or query instance throws an `[InvalidOperationException]`.
 
 ---
 
