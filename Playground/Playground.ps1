@@ -989,6 +989,9 @@ function Start-PlaygroundApp {
             elseif ($Code.Contains(".delete(")) {
                 $logMsg = "Document deleted from `"$($script:activeCollection)`":"
             }
+            elseif ($Code.Contains(".create(") -or $Code.Contains(".createCollection(")) {
+                $logMsg = "Collection created:"
+            }
             elseif ($Code.Contains(".get(")) {
                 $logMsg = "Queried collection `"$($script:activeCollection)`"$($countStr):"
             }
@@ -1039,7 +1042,7 @@ function Start-PlaygroundApp {
             "Adding Data" {
                 $card1.Visibility = [System.Windows.Visibility]::Visible
                 $card2.Visibility = [System.Windows.Visibility]::Visible
-                $card3.Visibility = [System.Windows.Visibility]::Collapsed
+                $card3.Visibility = [System.Windows.Visibility]::Visible
 
                 $lblCard1Title.Text = "Add Document (Auto GUID Key)"
                 $txtCodeCard1.Text = @"
@@ -1059,6 +1062,11 @@ function Start-PlaygroundApp {
     role   = 'Co-Founder'
     city   = 'Seattle'
 })
+"@
+
+                $lblCard3Title.Text = "Create Collection (.create)"
+                $txtCodeCard3.Text = @"
+`$db.collection('inventory').create()
 "@
             }
             "Getting Data" {
@@ -1111,7 +1119,7 @@ function Start-PlaygroundApp {
             "Deleting Data" {
                 $card1.Visibility = [System.Windows.Visibility]::Visible
                 $card2.Visibility = [System.Windows.Visibility]::Visible
-                $card3.Visibility = [System.Windows.Visibility]::Collapsed
+                $card3.Visibility = [System.Windows.Visibility]::Visible
 
                 $lblCard1Title.Text = "Delete Single Document by Key"
                 $txtCodeCard1.Text = @"
@@ -1121,6 +1129,11 @@ function Start-PlaygroundApp {
                 $lblCard2Title.Text = "Delete Entire Collection"
                 $txtCodeCard2.Text = @"
 `$db.collection('$coll').delete()
+"@
+
+                $lblCard3Title.Text = "Check Collection Exists"
+                $txtCodeCard3.Text = @"
+`$db.collectionExists('$coll')
 "@
             }
             "Custom PowerShell Script" {

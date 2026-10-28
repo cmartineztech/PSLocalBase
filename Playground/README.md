@@ -39,10 +39,10 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
    * **Custom Dropdown Styling:** Clean ComboBox with custom SVG chevron arrow, high-contrast text, and hover item animations.
 
 2. **Interactive Database Operations:**
-   * **Adding Data:** Test `.add()` (auto-GUID) and `.set()` (custom key) directly against the active collection.
+   * **Adding Data:** Test `.add()` (auto-GUID), `.set()` (custom key) directly against the active collection, and `.create()` for explicit collection table creation.
    * **Getting Data:** Test `.get()`, `.where()`, `.orderBy()`, and `.limit()`.
    * **Updating Data:** Test `.update()` recursive deep merge and `.set()` complete document replacement.
-   * **Deleting Data:** Test single document deletion and collection purging.
+   * **Deleting Data:** Test single document deletion, collection purging via `.delete()`, and `.collectionExists()` checks.
    * **Custom PowerShell:** An open script editor with full access to `$db` for custom pipelines, filters, and loops.
 
 3. **Database Explorer:**
