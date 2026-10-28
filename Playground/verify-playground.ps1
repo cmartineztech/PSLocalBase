@@ -1,4 +1,4 @@
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
+﻿Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
 
 $parentDir = Split-Path $PSScriptRoot -Parent
 if (-not $parentDir) { $parentDir = (Get-Location).Path }
@@ -43,7 +43,7 @@ try {
         'btnRunCard1', 'btnRunCard2', 'btnRunCard3',
         'lblCard1Status', 'lblCard2Status', 'lblCard3Status',
         'dgDocuments', 'lblTotalEntries', 'lblDbMetrics',
-        'btnRefreshTable', 'btnClearCollection', 'btnDeleteDoc',
+        'btnRefreshTable', 'btnCreateCollection', 'btnClearCollection', 'btnDeleteDoc',
         'rtbConsole', 'btnCopyLogs', 'btnClearLogs',
         'txtConsoleInput', 'txtConsolePerf', 'txtStatusBadge',
         'txtStatusMsg', 'txtMemoryUsage'

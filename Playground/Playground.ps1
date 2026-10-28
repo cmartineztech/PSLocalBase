@@ -587,12 +587,13 @@ function Start-PlaygroundApp {
                             <RowDefinition Height="Auto"/> <!-- Row 3: Explorer Footer -->
                         </Grid.RowDefinitions>
 
-                        <!-- Row 0: Explorer Title, Collection Selector & Refresh -->
+                        <!-- Row 0: Explorer Title, Collection Selector & Actions -->
                         <Grid Grid.Row="0" Margin="0,0,0,10">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 <TextBlock Text="Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource ModernComboBoxStyle}"/>
+                                <Button Name="btnCreateCollection" Content="+ New" Style="{StaticResource SecondaryButtonStyle}" Margin="8,0,0,0"/>
                             </StackPanel>
 
                             <Button Name="btnRefreshTable" Content="Refresh" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
@@ -611,8 +612,8 @@ function Start-PlaygroundApp {
                                      Text="Search key or text..."/>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Name="btnClearCollection" Content="Clear Collection" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
-                                <Button Name="btnDeleteDoc" Content="Delete Selected" Style="{StaticResource DangerButtonStyle}"/>
+                                <Button Name="btnClearCollection" Content="Delete Collection" Style="{StaticResource DangerButtonStyle}" Margin="0,0,8,0"/>
+                                <Button Name="btnDeleteDoc" Content="Delete Selected" Style="{StaticResource SecondaryButtonStyle}"/>
                             </StackPanel>
                         </Grid>
 
@@ -780,6 +781,7 @@ function Start-PlaygroundApp {
     $lblTotalEntries  = $script:window.FindName("lblTotalEntries")
     $lblDbMetrics     = $script:window.FindName("lblDbMetrics")
     $btnRefreshTable  = $script:window.FindName("btnRefreshTable")
+    $btnCreateCollection = $script:window.FindName("btnCreateCollection")
     $btnClearCollection=$script:window.FindName("btnClearCollection")
     $btnDeleteDoc     = $script:window.FindName("btnDeleteDoc")
 
@@ -796,6 +798,82 @@ function Start-PlaygroundApp {
     $script:currentCategory = "Adding Data"
     $script:updatingDropdowns = $false
     $script:isDarkMode = $false
+
+    # -----------------------------------------------------------------------
+    # Modal Input Dialog (Prompt for Collection Creation)
+    # -----------------------------------------------------------------------
+    function Show-InputBox([string]$Title, [string]$Prompt, [string]$DefaultValue = "") {
+        $dlg = [System.Windows.Window]::new()
+        $dlg.Title = $Title
+        $dlg.Width = 380
+        $dlg.Height = 175
+        $dlg.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
+        $dlg.Owner = $script:window
+        $dlg.ResizeMode = [System.Windows.ResizeMode]::NoResize
+        $dlg.Background = $script:window.Resources["SurfaceBg"]
+        $dlg.Foreground = $script:window.Resources["FgColor"]
+
+        $grid = [System.Windows.Controls.Grid]::new()
+        $grid.Margin = [System.Windows.Thickness]::new(16)
+        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
+        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
+        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
+
+        $lbl = [System.Windows.Controls.TextBlock]::new()
+        $lbl.Text = $Prompt
+        $lbl.Foreground = $script:window.Resources["FgColor"]
+        $lbl.FontSize = 12
+        $lbl.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+        [System.Windows.Controls.Grid]::SetRow($lbl, 0)
+        [void]$grid.Children.Add($lbl)
+
+        $txt = [System.Windows.Controls.TextBox]::new()
+        $txt.Text = $DefaultValue
+        $txt.Height = 30
+        $txt.FontSize = 12
+        $txt.Padding = [System.Windows.Thickness]::new(6, 4, 6, 4)
+        $txt.Background = $script:window.Resources["InputBg"]
+        $txt.Foreground = $script:window.Resources["FgColor"]
+        $txt.BorderBrush = $script:window.Resources["BorderColor"]
+        $txt.CaretBrush = $script:window.Resources["FgColor"]
+        $txt.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
+        [System.Windows.Controls.Grid]::SetRow($txt, 1)
+        [void]$grid.Children.Add($txt)
+
+        $btnPanel = [System.Windows.Controls.StackPanel]::new()
+        $btnPanel.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+        $btnPanel.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+        [System.Windows.Controls.Grid]::SetRow($btnPanel, 2)
+
+        $btnCancel = [System.Windows.Controls.Button]::new()
+        $btnCancel.Content = "Cancel"
+        $btnCancel.Width = 75
+        $btnCancel.Height = 28
+        $btnCancel.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+        $btnCancel.Style = $script:window.Resources["SecondaryButtonStyle"]
+        $btnCancel.add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+        [void]$btnPanel.Children.Add($btnCancel)
+
+        $btnOk = [System.Windows.Controls.Button]::new()
+        $btnOk.Content = "Create"
+        $btnOk.Width = 75
+        $btnOk.Height = 28
+        $btnOk.Style = $script:window.Resources["PrimaryButtonStyle"]
+        $btnOk.IsDefault = $true
+        $btnOk.add_Click({ $dlg.DialogResult = $true; $dlg.Close() })
+        [void]$btnPanel.Children.Add($btnOk)
+
+        [void]$grid.Children.Add($btnPanel)
+        $dlg.Content = $grid
+        $txt.SelectAll()
+        $txt.Focus()
+
+        $result = $dlg.ShowDialog()
+        if ($result -eq $true) {
+            return $txt.Text.Trim()
+        }
+        return $null
+    }
 
     # -----------------------------------------------------------------------
     # Theme Application Engine (Supports Dynamic Switching)
@@ -880,11 +958,27 @@ function Start-PlaygroundApp {
     # -----------------------------------------------------------------------
     function Refresh-DatabaseState {
         $colls = @($script:db.listCollections())
+
         if ($colls.Count -eq 0) {
-            $colls = @("users")
+            $script:activeCollection = ""
+            $script:updatingDropdowns = $true
+            try {
+                $cmbLeftCollection.Items.Clear()
+                $cmbRightCollection.Items.Clear()
+                [void]$cmbLeftCollection.Items.Add("(no collections)")
+                [void]$cmbRightCollection.Items.Add("(no collections)")
+                $cmbLeftCollection.SelectedIndex = 0
+                $cmbRightCollection.SelectedIndex = 0
+            } finally {
+                $script:updatingDropdowns = $false
+            }
+            $dgDocuments.ItemsSource = @()
+            $lblTotalEntries.Text = "No collections in database. Click '+ New' or 'Seed Demo Data' to create one."
+            Set-PlaygroundCategory $script:currentCategory
+            return
         }
 
-        if (-not ($colls -contains $script:activeCollection)) {
+        if (-not ($colls -contains $script:activeCollection) -or [string]::IsNullOrWhiteSpace($script:activeCollection)) {
             $script:activeCollection = $colls[0]
         }
 
@@ -904,9 +998,16 @@ function Start-PlaygroundApp {
         }
 
         Load-CollectionDocuments $script:activeCollection
+        Set-PlaygroundCategory $script:currentCategory
     }
 
     function Load-CollectionDocuments([string]$CollectionName) {
+        if ([string]::IsNullOrWhiteSpace($CollectionName) -or $CollectionName -eq "(no collections)") {
+            $dgDocuments.ItemsSource = @()
+            $lblTotalEntries.Text = "No collections in database."
+            return
+        }
+
         $filterKey = $txtKeySearch.Text.Trim()
         if ($filterKey -eq "Search key or text...") { $filterKey = "" }
 
@@ -969,34 +1070,83 @@ function Start-PlaygroundApp {
             $txtStatusBadge.Text = "Success"
             $txtStatusBadge.Foreground = [System.Windows.Media.Brushes]::ForestGreen
 
-            if ($null -ne $StatusLabel) {
-                $StatusLabel.Text = "$([char]0x2714) Done in $($ms)ms"
-                $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
+            # Detect specialized actions: Create Collection, Exists Collection, Delete Collection, CRUD
+            $dataToLog = $res
+            $isCreateColl = ($Code.Contains(".create(") -or $Code.Contains(".createCollection("))
+            $isExistsColl = ($Code.Contains(".collectionExists("))
+            $isDeleteColl = ($Code.Contains(".delete()") -and -not $Code.Contains(".doc(") -and -not $Code.Contains(".where("))
+
+            if ($isCreateColl) {
+                $targetColl = $script:activeCollection
+                if ($Code -match 'collection\(\s*[''"]([^''"]+)[''"]\s*\)\.create\(' -or $Code -match 'createCollection\(\s*[''"]([^''"]+)[''"]\s*\)') {
+                    $targetColl = $Matches[1]
+                }
+                $script:activeCollection = $targetColl
+                $logMsg = "Collection `"$targetColl`" created successfully."
+                $dataToLog = @{ collection = $targetColl; status = "Created"; totalCollections = @($script:db.listCollections()).Count }
+                if ($null -ne $StatusLabel) {
+                    $StatusLabel.Text = "$([char]0x2714) Created '$targetColl' ($($ms)ms)"
+                    $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
+                }
+            }
+            elseif ($isExistsColl) {
+                $targetColl = $script:activeCollection
+                if ($Code -match 'collectionExists\(\s*[''"]?([^''"\)\s]+)[''"]?\s*\)') {
+                    $c = $Matches[1]
+                    if ($c -ne '$coll' -and $c -ne '$($coll)') { $targetColl = $c }
+                }
+                $existsVal = [bool]$res
+                $logMsg = "Collection `"$targetColl`" exists: $existsVal"
+                $dataToLog = @{ collection = $targetColl; exists = $existsVal }
+                if ($null -ne $StatusLabel) {
+                    $StatusLabel.Text = "$([char]0x2714) Exists: $existsVal ($($ms)ms)"
+                    $StatusLabel.Foreground = if ($existsVal) { [System.Windows.Media.Brushes]::ForestGreen } else { [System.Windows.Media.Brushes]::Goldenrod }
+                }
+            }
+            elseif ($isDeleteColl) {
+                $targetColl = $script:activeCollection
+                if ($Code -match 'collection\(\s*[''"]([^''"]+)[''"]\s*\)\.delete\(') {
+                    $c = $Matches[1]
+                    if ($c -ne '$coll' -and $c -ne '$($coll)') { $targetColl = $c }
+                }
+                $logMsg = "Collection `"$targetColl`" deleted successfully."
+                $dataToLog = @{ collection = $targetColl; status = "Deleted" }
+                if ($script:activeCollection -eq $targetColl) {
+                    $script:activeCollection = ""
+                }
+                if ($null -ne $StatusLabel) {
+                    $StatusLabel.Text = "$([char]0x2714) Deleted '$targetColl' ($($ms)ms)"
+                    $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
+                }
+            }
+            else {
+                # Normal CRUD / Query actions
+                if ($null -ne $StatusLabel) {
+                    $StatusLabel.Text = "$([char]0x2714) Done in $($ms)ms"
+                    $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
+                }
+
+                $countStr = ""
+                if ($null -ne $res -and ($res -is [System.Collections.ICollection] -or $res -is [System.Array])) {
+                    $countStr = " ($($res.Count) items)"
+                }
+
+                $logMsg = "Executed snippet on collection `"$($script:activeCollection)`"$($countStr):"
+                if ($Code.Contains(".add(") -or $Code.Contains(".insert(")) {
+                    $logMsg = "Document added to `"$($script:activeCollection)`":"
+                }
+                elseif ($Code.Contains(".update(")) {
+                    $logMsg = "Document updated in `"$($script:activeCollection)`":"
+                }
+                elseif ($Code.Contains(".delete(")) {
+                    $logMsg = "Document deleted from `"$($script:activeCollection)`":"
+                }
+                elseif ($Code.Contains(".get(")) {
+                    $logMsg = "Queried collection `"$($script:activeCollection)`"$($countStr):"
+                }
             }
 
-            $countStr = ""
-            if ($null -ne $res -and ($res -is [System.Collections.ICollection] -or $res -is [System.Array])) {
-                $countStr = " ($($res.Count) items)"
-            }
-
-            $logMsg = "Executed snippet on collection `"$($script:activeCollection)`"$($countStr):"
-            if ($Code.Contains(".add(") -or $Code.Contains(".insert(")) {
-                $logMsg = "Document added to `"$($script:activeCollection)`":"
-            }
-            elseif ($Code.Contains(".update(")) {
-                $logMsg = "Document updated in `"$($script:activeCollection)`":"
-            }
-            elseif ($Code.Contains(".delete(")) {
-                $logMsg = "Document deleted from `"$($script:activeCollection)`":"
-            }
-            elseif ($Code.Contains(".create(") -or $Code.Contains(".createCollection(")) {
-                $logMsg = "Collection created:"
-            }
-            elseif ($Code.Contains(".get(")) {
-                $logMsg = "Queried collection `"$($script:activeCollection)`"$($countStr):"
-            }
-
-            Log-ToConsole $logMsg $res $ms
+            Log-ToConsole $logMsg $dataToLog $ms
             Refresh-DatabaseState
         } catch {
             $sw.Stop()
@@ -1251,15 +1401,37 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         }
     })
 
+    $btnCreateCollection.add_Click({
+        $name = Show-InputBox "Create Collection" "Enter alphanumeric collection name:" "inventory"
+        if ([string]::IsNullOrWhiteSpace($name)) { return }
+        try {
+            [void]$script:db.collection($name).create()
+            $script:activeCollection = $name
+            Log-ToConsole "Collection `"$name`" created successfully." @{ collection = $name; status = "Created" }
+            Refresh-DatabaseState
+        } catch {
+            [System.Windows.MessageBox]::Show($_.Exception.Message, "Invalid Collection Name", "OK", "Error")
+        }
+    })
+
     $btnRefreshTable.add_Click({
         Refresh-DatabaseState
         Log-ToConsole "Database state refreshed."
     })
 
     $btnClearCollection.add_Click({
-        $null = $script:db.collection($script:activeCollection).delete()
-        Log-ToConsole "Collection `"$($script:activeCollection)`" cleared."
-        Refresh-DatabaseState
+        if (-not $script:activeCollection -or $script:activeCollection -eq "(no collections)") {
+            [System.Windows.MessageBox]::Show("No collection selected to delete.", "Selection Required", "OK", "Information")
+            return
+        }
+        $target = $script:activeCollection
+        $res = [System.Windows.MessageBox]::Show("Are you sure you want to delete the entire collection `"$target`" and all its documents?", "Delete Collection", "YesNo", "Warning")
+        if ($res -eq "Yes") {
+            [void]$script:db.collection($target).delete()
+            Log-ToConsole "Collection `"$target`" deleted successfully." @{ collection = $target; status = "Deleted" }
+            $script:activeCollection = ""
+            Refresh-DatabaseState
+        }
     })
 
     $btnDeleteDoc.add_Click({

@@ -49,7 +49,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
    * **Collection Switcher:** Instant switching between `users`, `products`, `orders`, or newly created collections.
    * **Live Search Filter:** High-speed filter by document key or any substring inside the document JSON.
    * **Double-Click Inspection:** Double-click any row in the DataGrid to inspect its full JSON payload in the console.
-   * **Toolbar Actions:** Seed Demo Data, Flush WAL Checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), Refresh, Clear Collection, and Delete Selected Document.
+   * **Toolbar Actions:** Seed Demo Data, Flush WAL Checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), Refresh, `+ New` Collection modal dialog, Delete Collection, and Delete Selected Document.
 
 4. **Execution Output & Console:**
    * **Real-Time Logging:** Color-coded execution badges (`Success` in forest green, `Error` in crimson) with execution duration in milliseconds.
