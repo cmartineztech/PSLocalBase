@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -41,6 +41,16 @@ class PSLocalBase : System.IDisposable {
     # Primary constructor with database file path
     PSLocalBase([string]$filePath) {
         $this.Init($filePath)
+    }
+
+    # Overload constructor with database file path and config options
+    PSLocalBase([string]$filePath, [hashtable]$options) {
+        $this.Init($filePath)
+        if ($null -ne $options) {
+            foreach ($k in $options.Keys) {
+                $this.config[$k] = $options[$k]
+            }
+        }
     }
 
     [void] Init([string]$filePath) {
@@ -103,6 +113,10 @@ class PSLocalBase : System.IDisposable {
             $names.Add($r[0])
         }
         return [string[]]$names.ToArray()
+    }
+
+    [string[]] listCollections() {
+        return $this.getCollections()
     }
 
     [PSLocalBase] collection([string]$name) {
@@ -261,6 +275,15 @@ class PSLocalBase : System.IDisposable {
 
         [void]$this.doc($newKey).set($data)
         return $newKey
+    }
+
+    [string] insert([object]$data) {
+        if ($data -is [System.Collections.IDictionary] -and $data.Contains("id") -and -not [string]::IsNullOrWhiteSpace($data["id"])) {
+            return $this.add($data, [string]$data["id"])
+        } elseif ($data -is [PSCustomObject] -and $null -ne $data.PSObject.Properties["id"] -and -not [string]::IsNullOrWhiteSpace($data.id)) {
+            return $this.add($data, [string]$data.id)
+        }
+        return $this.add($data, "")
     }
 
     [void] update([object]$partialData) {

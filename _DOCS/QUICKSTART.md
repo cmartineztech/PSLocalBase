@@ -1,4 +1,4 @@
-﻿# PSLocalBase — Quick Start Guide
+# PSLocalBase — Quick Start Guide
 
 Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, copy-pasteable examples to get you up and running with embedded NoSQL document persistence in PowerShell in under two minutes.
 
@@ -6,6 +6,7 @@ Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, 
 
 ## Table of Contents
 
+- [Visual Explorer: Interactive GUI Playground](#visual-explorer-interactive-gui-playground)
 - [1. Installation & Import](#1-installation--import)
 - [2. Database Initialization](#2-database-initialization)
   - [File-Based Persistence](#file-based-persistence)
@@ -27,6 +28,23 @@ Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, 
 - [6. Atomic ACID Transactions](#6-atomic-acid-transactions)
 - [7. Production Best Practice: `try / finally`](#7-production-best-practice-try--finally)
 - [8. PowerShell Pipeline Integration](#8-powershell-pipeline-integration)
+
+---
+
+## Visual Explorer: Interactive GUI Playground
+
+Prefer a visual tool to explore documents, test queries, and generate PowerShell code with one click? Launch the built-in **WPF Playground**:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+# or
+powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+```
+
+* **Interactive Query Builder:** Build and execute `.where()`, `.orderBy()`, `.limit()`, and `.count()` with immediate feedback.
+* **Live PowerShell Code Snippets:** Copy generated PowerShell syntax directly to your clipboard.
+* **Seed Demo Data:** 1-click loading of realistic users, products, and orders datasets.
+* **Theme Switching:** Sleek dark and light themes inspired by LiteDeploy.
 
 ---
 

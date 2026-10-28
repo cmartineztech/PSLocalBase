@@ -1,4 +1,4 @@
-﻿# PSLocalBase
+# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -15,6 +15,7 @@ It provides lightning-fast, structured JSON document persistence backed by an in
 
 - [Zero Dependencies Guarantee](#zero-dependencies-guarantee)
 - [System Requirements & Compatibility](#system-requirements--compatibility)
+- [Interactive GUI Playground (WPF)](#interactive-gui-playground-wpf)
 - [Quick Start](#quick-start)
 - [Core API Reference](#core-api-reference)
   - [Initialization](#initialization)
@@ -30,6 +31,29 @@ It provides lightning-fast, structured JSON document persistence backed by an in
 - [Quick Start Guide](_DOCS/QUICKSTART.md)
 - [Technical Specification](_DOCS/SPECIFICATION.md)
 - [Security Policy](SECURITY.md)
+
+---
+
+## Interactive GUI Playground (WPF)
+
+Explore, query, test, and inspect your database visually in a single self-contained WPF application:
+
+```powershell
+# Launch the interactive GUI Playground (PowerShell 7+ or Windows PowerShell 5.1):
+pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+# or
+powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+```
+
+### Playground Features:
+* 🎨 **Modern Design System:** Built with a high-contrast theme engine (Dark & Light mode support) inspired by LiteDeploy.
+* 🔍 **Visual Query & Filter Builder:** Construct `.where()`, `.orderBy()`, `.limit()`, and `.skip()` queries interactively with real-time feedback.
+* ➕ **Interactive Document Editor:** Insert (`.insert()`), replace (`.set()`), patch (`.update()`), or delete (`.delete()`) documents with pre-loaded sample templates (User, Product, Order).
+* ⚡ **Live PowerShell Code Generator:** Shows the exact PowerShell syntax for your query as you change fields, complete with a one-click copy button.
+* 🗄️ **Database & Collections Explorer:** Real-time table inspect view showing all collections, document counts, disk file sizes, and memory usage.
+* ⏱️ **Sub-Millisecond Performance Metrics:** View real-time query execution timers (e.g. `⏱️ 0.85 ms`).
+* 💾 **Dual Storage Engine:** Switch on-the-fly between persistent disk (`playground.db`) and in-memory (`:memory:`) with instant `VACUUM INTO` synchronization.
+
 
 ---
 
