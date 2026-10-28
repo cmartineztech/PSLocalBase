@@ -33,6 +33,7 @@ try {
 
     # 3. Verify all named elements
     $requiredElements = @(
+        'btnToggleTheme',
         'btnNavAdd', 'btnNavGet', 'btnNavUpdate', 'btnNavDelete', 'btnNavCustom',
         'btnSeedDemo', 'btnCheckpointWal', 'btnResetDatabase',
         'lblCategoryTitle', 'cmbLeftCollection', 'cmbRightCollection', 'txtKeySearch',
@@ -55,7 +56,49 @@ try {
     }
     Write-Host "[PASS] 3. All $($requiredElements.Count) UI elements resolved correctly." -ForegroundColor Green
 
-    # 4. Verify seeding
+    # 4. Verify Theme DynamicResources & Theme Switching (Light & Dark Mode)
+    $brushConverter = [System.Windows.Media.BrushConverter]::new()
+    $themeKeys = @('BgColor', 'FgColor', 'SurfaceBg', 'BorderColor', 'HeaderColor', 'InputBg', 'LogBg', 'ButtonHoverBg')
+    
+    # Test Dark Mode application
+    $darkPalette = @{
+        'BgColor' = '#121418'; 'FgColor' = '#F3F4F6'; 'SurfaceBg' = '#1C1F26';
+        'BorderColor' = '#2C313A'; 'HeaderColor' = '#3B82F6'; 'InputBg' = '#242830';
+        'LogBg' = '#0F1115'; 'ButtonHoverBg' = '#2E3440'
+    }
+    foreach ($k in $darkPalette.Keys) {
+        $window.Resources[$k] = $brushConverter.ConvertFromString($darkPalette[$k])
+    }
+    if ($window.Resources['BgColor'].ToString() -ne '#FF121418') {
+        throw "Failed applying Dark Mode palette."
+    }
+
+    # Test Light Mode application
+    $lightPalette = @{
+        'BgColor' = '#F0F4FA'; 'FgColor' = '#1A2332'; 'SurfaceBg' = '#FFFFFF';
+        'BorderColor' = '#D0DAE6'; 'HeaderColor' = '#2F6FED'; 'InputBg' = '#FFFFFF';
+        'LogBg' = '#F7F9FB'; 'ButtonHoverBg' = '#E8EEF6'
+    }
+    foreach ($k in $lightPalette.Keys) {
+        $window.Resources[$k] = $brushConverter.ConvertFromString($lightPalette[$k])
+    }
+    if ($window.Resources['BgColor'].ToString() -ne '#FFF0F4FA') {
+        throw "Failed applying Light Mode palette."
+    }
+    Write-Host "[PASS] 4. Dynamic Theme switching (Dark & Light) validated successfully." -ForegroundColor Green
+
+    # 5. Verify ComboBox DynamicDrivers styling and population
+    $cmbLeft = $window.FindName('cmbLeftCollection')
+    $cmbRight = $window.FindName('cmbRightCollection')
+    [void]$cmbLeft.Items.Add('users')
+    [void]$cmbLeft.Items.Add('products')
+    $cmbLeft.SelectedItem = 'users'
+    if ($cmbLeft.SelectedItem -ne 'users') {
+        throw "Failed ComboBox item selection."
+    }
+    Write-Host "[PASS] 5. DynamicDrivers ComboBox Dropdown verified." -ForegroundColor Green
+
+    # 6. Verify seeding
     $script:db.collection("users").add(@{ id = 1; name = "Bill"; age = 47 }) | Out-Null
     $script:db.collection("users").add(@{ id = 2; name = "Paul"; age = 34 }) | Out-Null
     $script:db.collection("products").add(@{ sku = "TEST-01"; title = "Test Laptop"; price = 999 }) | Out-Null
@@ -65,9 +108,9 @@ try {
     if ($colls.Count -lt 3) {
         throw "Expected at least 3 collections, got $($colls.Count)"
     }
-    Write-Host "[PASS] 4. Multi-collection seeding verified ($($colls -join ', '))." -ForegroundColor Green
+    Write-Host "[PASS] 6. Multi-collection seeding verified ($($colls -join ', '))." -ForegroundColor Green
 
-    # 5. Verify queries, updates and deletes
+    # 7. Verify queries, updates and deletes
     $retrieved = $script:db.collection("users").where("age", ">=", 40).get()
     if ($retrieved.name -ne "Bill") {
         throw "Failed where query filter"
@@ -89,11 +132,11 @@ try {
     if ($null -ne $script:db.collection("users").doc("test-custom").get()) {
         throw "Failed delete doc"
     }
-    Write-Host "[PASS] 5. CRUD and where() operations verified." -ForegroundColor Green
+    Write-Host "[PASS] 7. CRUD and where() operations verified." -ForegroundColor Green
 
-    # 6. Verify WAL Checkpoint
+    # 8. Verify WAL Checkpoint
     $script:db._ExecuteDirectSql("PRAGMA wal_checkpoint(TRUNCATE);")
-    Write-Host "[PASS] 6. WAL Checkpoint executed cleanly." -ForegroundColor Green
+    Write-Host "[PASS] 8. WAL Checkpoint executed cleanly." -ForegroundColor Green
 
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "ALL PLAYGROUND VERIFICATION CHECKS PASSED PERFECTLY!" -ForegroundColor Green

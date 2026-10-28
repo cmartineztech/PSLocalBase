@@ -1,25 +1,31 @@
-<#
+﻿<#
 .SYNOPSIS
     PSLocalBase Playground - Modern Windows Desktop NoSQL Database Explorer
 .DESCRIPTION
     Interactive GUI Playground for PSLocalBase built with native PowerShell + WPF.
     Adopts the clean Windows enterprise design system and color palette from LiteDeploy.DynamicDrivers
-    (dual-pane layout with interactive code cards on the left, and live database explorer & execution log on the right).
+    with 100% full Dark Mode & Light Mode support, custom-styled chevron ComboBox dropdowns,
+    and a dual-pane layout (interactive code cards on the left, live database explorer & console on the right).
 .EXAMPLE
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+    pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DarkMode
     powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 #>
 
 [CmdletBinding()]
 param(
-    [string]$DatabasePath = "playground.db"
+    [string]$DatabasePath = "playground.db",
+    [switch]$DarkMode
 )
 
 # ---------------------------------------------------------------------------
 # Pre-Flight: Ensure STA Mode for WPF
 # ---------------------------------------------------------------------------
 function Start-PlaygroundApp {
-    param([string]$DbPath)
+    param(
+        [string]$DbPath,
+        [bool]$StartInDark = $false
+    )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
 
@@ -48,7 +54,68 @@ function Start-PlaygroundApp {
     })
 
     # -----------------------------------------------------------------------
-    # XAML Definition (Windows Native LiteDeploy Design System)
+    # Color Themes (Exact Palette from LiteDeploy.DynamicDrivers)
+    # -----------------------------------------------------------------------
+    $script:themeLight = @{
+        'BgColor'         = '#F0F4FA'
+        'FgColor'         = '#1A2332'
+        'SecFgColor'      = '#5C6B7A'
+        'MutedFgColor'    = '#7E8CA0'
+        'SurfaceBg'       = '#FFFFFF'
+        'FooterBg'        = '#F4F7FB'
+        'SidebarBg'       = '#E4EDF7'
+        'BorderColor'     = '#D0DAE6'
+        'ButtonBg'        = '#F7F9FB'
+        'ButtonFg'        = '#1A2332'
+        'ButtonHoverBg'   = '#E8EEF6'
+        'ButtonPressedBg' = '#DCE6F2'
+        'TrackBg'         = '#E6EBF2'
+        'HeaderColor'     = '#2F6FED'
+        'PrimaryHoverBg'  = '#2457D6'
+        'PrimaryPressedBg'= '#1D4BB8'
+        'DisabledBg'      = '#F3F4F6'
+        'DisabledBorder'  = '#E5E7EB'
+        'DisabledFg'      = '#9CA3AF'
+        'DangerBg'        = '#D13438'
+        'DangerHoverBg'   = '#A80000'
+        'DangerPressedBg' = '#750000'
+        'InputBg'         = '#FFFFFF'
+        'LogBg'           = '#F7F9FB'
+        'LogFg'           = '#2F6FED'
+        'ConsoleCardBg'   = '#FFFFFF'
+    }
+
+    $script:themeDark = @{
+        'BgColor'         = '#121418'
+        'FgColor'         = '#F3F4F6'
+        'SecFgColor'      = '#9CA3AF'
+        'MutedFgColor'    = '#8A99AD'
+        'SurfaceBg'       = '#1C1F26'
+        'FooterBg'        = '#181B21'
+        'SidebarBg'       = '#171A20'
+        'BorderColor'     = '#2C313A'
+        'ButtonBg'        = '#242830'
+        'ButtonFg'        = '#F3F4F6'
+        'ButtonHoverBg'   = '#2E3440'
+        'ButtonPressedBg' = '#3A4150'
+        'TrackBg'         = '#2D2D2D'
+        'HeaderColor'     = '#3B82F6'
+        'PrimaryHoverBg'  = '#2563EB'
+        'PrimaryPressedBg'= '#1D4ED8'
+        'DisabledBg'      = '#262626'
+        'DisabledBorder'  = '#333333'
+        'DisabledFg'      = '#6B7280'
+        'DangerBg'        = '#DC2626'
+        'DangerHoverBg'   = '#B91C1C'
+        'DangerPressedBg' = '#991B1B'
+        'InputBg'         = '#242830'
+        'LogBg'           = '#0F1115'
+        'LogFg'           = '#60A5FA'
+        'ConsoleCardBg'   = '#1C1F26'
+    }
+
+    # -----------------------------------------------------------------------
+    # XAML Definition (Windows Native LiteDeploy Design System with Theme Keys)
     # -----------------------------------------------------------------------
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -58,13 +125,13 @@ function Start-PlaygroundApp {
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
         FontFamily="Segoe UI"
-        Background="#F0F4FA"
-        Foreground="#1A2332">
+        Background="{DynamicResource BgColor}"
+        Foreground="{DynamicResource FgColor}">
 
     <Window.Resources>
-        <!-- LiteDeploy Modern Button Styles -->
+        <!-- Primary Button (LiteDeploy Accent) -->
         <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="#2F6FED"/>
+            <Setter Property="Background" Value="{DynamicResource HeaderColor}"/>
             <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -78,10 +145,10 @@ function Start-PlaygroundApp {
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#2457D6"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource PrimaryHoverBg}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#1D4BB8"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource PrimaryPressedBg}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -89,10 +156,11 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
+        <!-- Secondary Button (LiteDeploy Outlined Card) -->
         <Style x:Key="SecondaryButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#1A2332"/>
-            <Setter Property="BorderBrush" Value="#D0DAE6"/>
+            <Setter Property="Background" Value="{DynamicResource SurfaceBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -107,11 +175,11 @@ function Start-PlaygroundApp {
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#E8EEF6"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#2F6FED"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource ButtonHoverBg}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource HeaderColor}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#DCE6F2"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource ButtonPressedBg}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -119,8 +187,9 @@ function Start-PlaygroundApp {
             </Setter>
         </Style>
 
+        <!-- Danger Button (LiteDeploy Crimson) -->
         <Style x:Key="DangerButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="#D13438"/>
+            <Setter Property="Background" Value="{DynamicResource DangerBg}"/>
             <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -134,10 +203,10 @@ function Start-PlaygroundApp {
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#A80000"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource DangerHoverBg}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#750000"/>
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource DangerPressedBg}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -148,7 +217,7 @@ function Start-PlaygroundApp {
         <!-- Segmented Nav Button Style (from LiteDeploy DynamicDrivers) -->
         <Style x:Key="NavButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#7E8CA0"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedFgColor}"/>
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Padding" Value="16,7"/>
@@ -171,27 +240,27 @@ function Start-PlaygroundApp {
 
         <!-- LiteDeploy DataGrid Header & Row Styles -->
         <Style x:Key="DataGridHeaderStyle" TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#F4F7FB"/>
-            <Setter Property="Foreground" Value="#7E8CA0"/>
+            <Setter Property="Background" Value="{DynamicResource FooterBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource MutedFgColor}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Padding" Value="12,8"/>
             <Setter Property="BorderThickness" Value="0,0,0,1"/>
-            <Setter Property="BorderBrush" Value="#D0DAE6"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>
         </Style>
 
         <Style x:Key="DataGridRowStyle" TargetType="DataGridRow">
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#1A2332"/>
+            <Setter Property="Background" Value="{DynamicResource SurfaceBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
             <Setter Property="BorderThickness" Value="0,0,0,1"/>
-            <Setter Property="BorderBrush" Value="#F0F4FA"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E8EEF6"/>
+                    <Setter Property="Background" Value="{DynamicResource ButtonHoverBg}"/>
                 </Trigger>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#DCE6F2"/>
-                    <Setter Property="Foreground" Value="#1A2332"/>
+                    <Setter Property="Background" Value="{DynamicResource ButtonPressedBg}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -215,23 +284,100 @@ function Start-PlaygroundApp {
             </Style.Triggers>
         </Style>
 
-        <!-- High-Contrast ComboBox Style (Guaranteed Text Visibility) -->
-        <Style x:Key="ModernComboBoxStyle" TargetType="ComboBox">
-            <Setter Property="Height" Value="28"/>
+        <!-- =================================================================== -->
+        <!-- LiteDeploy.DynamicDrivers Custom Chevron ComboBox Template          -->
+        <!-- =================================================================== -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="#1A2332"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#D0DAE6"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="8,2"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="item" Background="Transparent" CornerRadius="6" Margin="3,2" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="item" Property="Background" Value="{DynamicResource ButtonHoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="item" Property="Background" Value="{DynamicResource ButtonPressedBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Foreground" Value="#1A2332"/>
+        <Style x:Key="DynamicDriversComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Height" Value="30"/>
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="10,5"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
+            <Setter Property="Background" Value="{DynamicResource InputBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="box" Background="{DynamicResource InputBg}"
+                                                BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6">
+                                            <!-- LiteDeploy DynamicDrivers SVG Chevron Path -->
+                                            <Path Data="M 0 0 L 4 4 L 8 0" Stroke="{DynamicResource MutedFgColor}" StrokeThickness="1.5"
+                                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  Width="8" Height="4" Stretch="Fill"
+                                                  HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="box" Property="BorderBrush" Value="{DynamicResource HeaderColor}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="box" Property="BorderBrush" Value="{DynamicResource HeaderColor}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <!-- Selection box content presenter (High Contrast) -->
+                            <ContentPresenter IsHitTestVisible="False" Margin="10,0,26,0" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
+                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+
+                            <!-- Dropdown Popup Card -->
+                            <Popup Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                                <Border Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}"
+                                        BorderThickness="1" CornerRadius="6" Margin="0,4,0,0" Padding="2,2"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ScrollViewer SnapsToDevicePixels="True" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Window.Resources>
 
@@ -254,18 +400,19 @@ function Start-PlaygroundApp {
 
             <!-- App Title & Identity -->
             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#2F6FED" CornerRadius="6" Width="28" Height="28" Margin="0,0,10,0">
+                <Border Background="{DynamicResource HeaderColor}" CornerRadius="6" Width="28" Height="28" Margin="0,0,10,0">
                     <TextBlock Text="PL" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
-                <TextBlock Text="PSLocalBase" FontSize="18" FontWeight="Bold" Foreground="#2F6FED" VerticalAlignment="Center"/>
-                <TextBlock Text=" Playground" FontSize="18" FontWeight="SemiBold" Foreground="#1A2332" VerticalAlignment="Center"/>
-                <Border Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="6" Padding="8,3" Margin="14,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="Windows Native (winsqlite3.dll)" FontSize="10.5" FontWeight="SemiBold" Foreground="#5C6B7A"/>
+                <TextBlock Text="PSLocalBase" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource HeaderColor}" VerticalAlignment="Center"/>
+                <TextBlock Text=" Playground" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
+                <Border Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="8,3" Margin="14,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="Windows Native (winsqlite3.dll)" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}"/>
                 </Border>
             </StackPanel>
 
-            <!-- Top Action Buttons -->
+            <!-- Top Action Buttons & Theme Switcher -->
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Name="btnToggleTheme" Content="&#x1F319; Dark Mode" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                 <Button Name="btnSeedDemo" Content="Seed Demo Data" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                 <Button Name="btnCheckpointWal" Content="Flush WAL Checkpoint" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                 <Button Name="btnResetDatabase" Content="Reset Database" Style="{StaticResource DangerButtonStyle}"/>
@@ -274,7 +421,7 @@ function Start-PlaygroundApp {
 
         <!-- Row 1: Segmented Nav Control (LiteDeploy Signature Capsule) -->
         <Border Grid.Row="1" HorizontalAlignment="Left" VerticalAlignment="Center"
-                Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1"
+                Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1"
                 CornerRadius="8" Padding="3" Margin="0,0,0,14">
             <StackPanel Orientation="Horizontal">
                 <Button Name="btnNavAdd" Content="Adding Data" Style="{StaticResource NavButtonStyle}" MinWidth="120"/>
@@ -296,7 +443,7 @@ function Start-PlaygroundApp {
             <!-- =========================================================== -->
             <!-- LEFT COLUMN: INTERACTIVE CODE CARDS (Windows Card Style)    -->
             <!-- =========================================================== -->
-            <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="10" Padding="18,16">
+            <Border Grid.Column="0" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="10" Padding="18,16">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/> <!-- Category Title & Collection Picker -->
@@ -305,10 +452,10 @@ function Start-PlaygroundApp {
 
                     <!-- Category Title & Active Collection Dropdown -->
                     <Grid Grid.Row="0" Margin="0,0,0,14">
-                        <TextBlock Name="lblCategoryTitle" Text="Adding Data" FontSize="20" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center"/>
+                        <TextBlock Name="lblCategoryTitle" Text="Adding Data" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <TextBlock Text="Target Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="#7E8CA0" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <ComboBox Name="cmbLeftCollection" Width="130" Height="28" Style="{StaticResource ModernComboBoxStyle}"/>
+                            <TextBlock Text="Target Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox Name="cmbLeftCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}"/>
                         </StackPanel>
                     </Grid>
 
@@ -317,7 +464,7 @@ function Start-PlaygroundApp {
                         <StackPanel Name="panelCardsContainer">
 
                             <!-- Card 1 -->
-                            <Border Name="card1" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
+                            <Border Name="card1" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="38"/>
@@ -326,19 +473,20 @@ function Start-PlaygroundApp {
                                     </Grid.RowDefinitions>
 
                                     <!-- Card Header -->
-                                    <Border Grid.Row="0" Background="#F4F7FB" BorderThickness="0,0,0,1" BorderBrush="#D0DAE6" CornerRadius="7,7,0,0" Padding="14,0">
+                                    <Border Grid.Row="0" Background="{DynamicResource FooterBg}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderColor}" CornerRadius="7,7,0,0" Padding="14,0">
                                         <Grid VerticalAlignment="Center">
-                                            <TextBlock Name="lblCard1Title" Text="Add Document" FontSize="13" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center"/>
-                                            <Border Background="#E8EEF6" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="#2F6FED"/>
+                                            <TextBlock Name="lblCard1Title" Text="Add Document" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
+                                            <Border Background="{DynamicResource ButtonHoverBg}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource HeaderColor}"/>
                                             </Border>
                                         </Grid>
                                     </Border>
 
                                     <!-- Card Code Editor -->
-                                    <Border Grid.Row="1" Background="#F7F9FB" BorderBrush="#E8EEF6" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
+                                    <Border Grid.Row="1" Background="{DynamicResource ButtonBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
                                         <TextBox Name="txtCodeCard1" AcceptsReturn="True" AcceptsTab="True" BorderThickness="0"
-                                                 Background="Transparent" Foreground="#1A2332" FontFamily="Consolas" FontSize="12.5"
+                                                 Background="Transparent" Foreground="{DynamicResource FgColor}"
+                                                 CaretBrush="{DynamicResource FgColor}" FontFamily="Consolas" FontSize="12.5"
                                                  TextWrapping="Wrap"/>
                                     </Border>
 
@@ -351,7 +499,7 @@ function Start-PlaygroundApp {
                             </Border>
 
                             <!-- Card 2 -->
-                            <Border Name="card2" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
+                            <Border Name="card2" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="38"/>
@@ -359,18 +507,19 @@ function Start-PlaygroundApp {
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <Border Grid.Row="0" Background="#F4F7FB" BorderThickness="0,0,0,1" BorderBrush="#D0DAE6" CornerRadius="7,7,0,0" Padding="14,0">
+                                    <Border Grid.Row="0" Background="{DynamicResource FooterBg}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderColor}" CornerRadius="7,7,0,0" Padding="14,0">
                                         <Grid VerticalAlignment="Center">
-                                            <TextBlock Name="lblCard2Title" Text="Update Document" FontSize="13" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center"/>
-                                            <Border Background="#E8EEF6" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="#2F6FED"/>
+                                            <TextBlock Name="lblCard2Title" Text="Update Document" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
+                                            <Border Background="{DynamicResource ButtonHoverBg}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource HeaderColor}"/>
                                             </Border>
                                         </Grid>
                                     </Border>
 
-                                    <Border Grid.Row="1" Background="#F7F9FB" BorderBrush="#E8EEF6" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
+                                    <Border Grid.Row="1" Background="{DynamicResource ButtonBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
                                         <TextBox Name="txtCodeCard2" AcceptsReturn="True" AcceptsTab="True" BorderThickness="0"
-                                                 Background="Transparent" Foreground="#1A2332" FontFamily="Consolas" FontSize="12.5"
+                                                 Background="Transparent" Foreground="{DynamicResource FgColor}"
+                                                 CaretBrush="{DynamicResource FgColor}" FontFamily="Consolas" FontSize="12.5"
                                                  TextWrapping="Wrap"/>
                                     </Border>
 
@@ -382,7 +531,7 @@ function Start-PlaygroundApp {
                             </Border>
 
                             <!-- Card 3 -->
-                            <Border Name="card3" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
+                            <Border Name="card3" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,16">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="38"/>
@@ -390,18 +539,19 @@ function Start-PlaygroundApp {
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <Border Grid.Row="0" Background="#F4F7FB" BorderThickness="0,0,0,1" BorderBrush="#D0DAE6" CornerRadius="7,7,0,0" Padding="14,0">
+                                    <Border Grid.Row="0" Background="{DynamicResource FooterBg}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderColor}" CornerRadius="7,7,0,0" Padding="14,0">
                                         <Grid VerticalAlignment="Center">
-                                            <TextBlock Name="lblCard3Title" Text="Advanced Query" FontSize="13" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center"/>
-                                            <Border Background="#E8EEF6" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="#2F6FED"/>
+                                            <TextBlock Name="lblCard3Title" Text="Advanced Query" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center"/>
+                                            <Border Background="{DynamicResource ButtonHoverBg}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="PowerShell" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource HeaderColor}"/>
                                             </Border>
                                         </Grid>
                                     </Border>
 
-                                    <Border Grid.Row="1" Background="#F7F9FB" BorderBrush="#E8EEF6" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
+                                    <Border Grid.Row="1" Background="{DynamicResource ButtonBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" Margin="12,12,12,0" CornerRadius="6" Padding="12,10">
                                         <TextBox Name="txtCodeCard3" AcceptsReturn="True" AcceptsTab="True" BorderThickness="0"
-                                                 Background="Transparent" Foreground="#1A2332" FontFamily="Consolas" FontSize="12.5"
+                                                 Background="Transparent" Foreground="{DynamicResource FgColor}"
+                                                 CaretBrush="{DynamicResource FgColor}" FontFamily="Consolas" FontSize="12.5"
                                                  TextWrapping="Wrap"/>
                                     </Border>
 
@@ -427,7 +577,7 @@ function Start-PlaygroundApp {
                 </Grid.RowDefinitions>
 
                 <!-- Upper Card: Database State Explorer -->
-                <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="10" Padding="16,14">
+                <Border Grid.Row="0" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="10" Padding="16,14">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/> <!-- Explorer Header & Toolbar -->
@@ -438,14 +588,16 @@ function Start-PlaygroundApp {
                         <!-- Explorer Header Toolbar -->
                         <Grid Grid.Row="0" Margin="0,0,0,12">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <TextBlock Text="Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="#7E8CA0" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <ComboBox Name="cmbRightCollection" Width="130" Height="28" Style="{StaticResource ModernComboBoxStyle}" Margin="0,0,10,0"/>
+                                <TextBlock Text="Database Explorer" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock Text="Collection:" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox Name="cmbRightCollection" Width="130" Style="{StaticResource DynamicDriversComboBoxStyle}" Margin="0,0,10,0"/>
                             </StackPanel>
 
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBox Name="txtKeySearch" Width="140" Height="28" FontSize="11.5" Padding="6,4" Margin="0,0,8,0"
-                                         BorderBrush="#D0DAE6" Foreground="#1A2332" Text="Search key or text..."/>
+                                <TextBox Name="txtKeySearch" Width="140" Height="30" FontSize="11.5" Padding="8,5" Margin="0,0,8,0"
+                                         Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}"
+                                         Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
+                                         Text="Search key or text..."/>
                                 <Button Name="btnRefreshTable" Content="Refresh" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,0"/>
                                 <Button Name="btnClearCollection" Content="Clear Collection" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,6,0"/>
                                 <Button Name="btnDeleteDoc" Content="Delete Selected" Style="{StaticResource DangerButtonStyle}"/>
@@ -453,10 +605,10 @@ function Start-PlaygroundApp {
                         </Grid>
 
                         <!-- Modern DataGrid Table -->
-                        <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="6">
+                        <Border Grid.Row="1" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6">
                             <DataGrid Name="dgDocuments" AutoGenerateColumns="False" IsReadOnly="True"
                                       Background="Transparent" BorderThickness="0" GridLinesVisibility="Horizontal"
-                                      HorizontalGridLinesBrush="#F0F4FA" SelectionMode="Single" FontSize="12" RowHeight="32"
+                                      HorizontalGridLinesBrush="{DynamicResource BorderColor}" SelectionMode="Single" FontSize="12" RowHeight="32"
                                       ColumnHeaderStyle="{StaticResource DataGridHeaderStyle}"
                                       RowStyle="{StaticResource DataGridRowStyle}"
                                       CellStyle="{StaticResource DataGridCellStyle}"
@@ -466,7 +618,7 @@ function Start-PlaygroundApp {
                                     <DataGridTextColumn Header="Document ID / Key" Binding="{Binding Key}" Width="160">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground" Value="#2F6FED"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource HeaderColor}"/>
                                                 <Setter Property="FontWeight" Value="SemiBold"/>
                                                 <Setter Property="FontFamily" Value="Consolas"/>
                                             </Style>
@@ -475,7 +627,7 @@ function Start-PlaygroundApp {
                                     <DataGridTextColumn Header="Document Data (JSON)" Binding="{Binding ValueJson}" Width="*">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground" Value="#1A2332"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource FgColor}"/>
                                                 <Setter Property="FontFamily" Value="Consolas"/>
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
@@ -486,14 +638,14 @@ function Start-PlaygroundApp {
 
                         <!-- Explorer Footer -->
                         <Grid Grid.Row="2" Margin="0,8,0,0">
-                            <TextBlock Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="#5C6B7A" VerticalAlignment="Center"/>
-                            <TextBlock Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="#7E8CA0" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            <TextBlock Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
+                            <TextBlock Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                         </Grid>
                     </Grid>
                 </Border>
 
                 <!-- Lower Card: Live Execution Log & Console -->
-                <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="10" Padding="16,12">
+                <Border Grid.Row="2" Background="{DynamicResource SurfaceBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="10" Padding="16,12">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/> <!-- Log Toolbar -->
@@ -504,34 +656,35 @@ function Start-PlaygroundApp {
                         <!-- Log Header Toolbar -->
                         <Grid Grid.Row="0" Margin="0,0,0,8">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Execution Output &amp; Console" FontSize="13" FontWeight="Bold" Foreground="#1A2332" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <Border Name="badgeStatus" Background="#E8F5E9" BorderBrush="#C8E6C9" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                                    <TextBlock Name="txtStatusBadge" Text="Ready" FontSize="10.5" FontWeight="Bold" Foreground="#2E7D32"/>
+                                <TextBlock Text="Execution Output &amp; Console" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource FgColor}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Border Name="badgeStatus" Background="{DynamicResource ButtonHoverBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                    <TextBlock Name="txtStatusBadge" Text="Ready" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource HeaderColor}"/>
                                 </Border>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBlock Name="txtConsolePerf" Text="0.00 ms" FontSize="11" Foreground="#7E8CA0" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <TextBlock Name="txtConsolePerf" Text="0.00 ms" FontSize="11" Foreground="{DynamicResource MutedFgColor}" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                 <Button Name="btnClearLogs" Content="Clear Logs" Style="{StaticResource SecondaryButtonStyle}" Padding="8,3" FontSize="11"/>
                             </StackPanel>
                         </Grid>
 
                         <!-- Console Messages List -->
-                        <Border Grid.Row="1" Background="#F7F9FB" BorderBrush="#E8EEF6" BorderThickness="1" CornerRadius="6" Margin="0,0,0,8">
+                        <Border Grid.Row="1" Background="{DynamicResource LogBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Margin="0,0,0,8">
                             <ScrollViewer Name="scrollConsole" VerticalScrollBarVisibility="Auto" Padding="10,6">
                                 <StackPanel Name="panelConsoleLogs"/>
                             </ScrollViewer>
                         </Border>
 
                         <!-- Interactive CLI Input (>) -->
-                        <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#D0DAE6" BorderThickness="1" CornerRadius="6" Padding="8,2">
+                        <Border Grid.Row="2" Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="8,2">
                             <Grid VerticalAlignment="Center">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="18"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="&gt;" FontSize="13" FontWeight="Bold" Foreground="#2F6FED" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="0" Text="&gt;" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource HeaderColor}" VerticalAlignment="Center"/>
                                 <TextBox Name="txtConsoleInput" Grid.Column="1" Height="24" BorderThickness="0" Background="Transparent"
-                                         FontFamily="Consolas" FontSize="12" Foreground="#1A2332" VerticalAlignment="Center"/>
+                                         FontFamily="Consolas" FontSize="12" Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
+                                         VerticalAlignment="Center"/>
                             </Grid>
                         </Border>
                     </Grid>
@@ -543,9 +696,9 @@ function Start-PlaygroundApp {
         <Grid Grid.Row="3" Margin="4,6,4,0">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="&#x25CF;" FontSize="10" Foreground="#2E7D32" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | Database: playground.db" FontSize="11" Foreground="#7E8CA0" VerticalAlignment="Center"/>
+                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | Database: playground.db" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center"/>
             </StackPanel>
-            <TextBlock Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="#7E8CA0" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            <TextBlock Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
         </Grid>
     </Grid>
 </Window>
@@ -564,6 +717,7 @@ function Start-PlaygroundApp {
     # -----------------------------------------------------------------------
     # Element Handles
     # -----------------------------------------------------------------------
+    $btnToggleTheme   = $script:window.FindName("btnToggleTheme")
     $btnNavAdd        = $script:window.FindName("btnNavAdd")
     $btnNavGet        = $script:window.FindName("btnNavGet")
     $btnNavUpdate     = $script:window.FindName("btnNavUpdate")
@@ -613,6 +767,30 @@ function Start-PlaygroundApp {
     $script:activeCollection = "users"
     $script:currentCategory = "Adding Data"
     $script:updatingDropdowns = $false
+    $script:isDarkMode = $false
+
+    # -----------------------------------------------------------------------
+    # Theme Application Engine (Supports Dynamic Switching)
+    # -----------------------------------------------------------------------
+    function Set-AppTheme([bool]$DarkModeEnabled) {
+        $script:isDarkMode = $DarkModeEnabled
+        $palette = if ($DarkModeEnabled) { $script:themeDark } else { $script:themeLight }
+
+        $brushConverter = [System.Windows.Media.BrushConverter]::new()
+        foreach ($key in $palette.Keys) {
+            $script:window.Resources[$key] = $brushConverter.ConvertFromString($palette[$key])
+        }
+
+        # Update button text & icon
+        if ($DarkModeEnabled) {
+            $btnToggleTheme.Content = "$([char]0x2600) Light Mode"
+        } else {
+            $btnToggleTheme.Content = "$([char]0x1F319) Dark Mode"
+        }
+
+        # Re-apply category active tab styling
+        Set-PlaygroundCategory $script:currentCategory
+    }
 
     # -----------------------------------------------------------------------
     # Logging into Output Console
@@ -634,9 +812,9 @@ function Start-PlaygroundApp {
         $headerRow = [System.Windows.Controls.StackPanel]::new()
         $headerRow.Orientation = [System.Windows.Controls.Orientation]::Horizontal
 
-        # Blue "PSLocalBase" badge
+        # Accent "PSLocalBase" badge
         $badge = [System.Windows.Controls.Border]::new()
-        $badge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2F6FED")
+        $badge.Background = $script:window.Resources["HeaderColor"]
         $badge.CornerRadius = [System.Windows.CornerRadius]::new(4)
         $badge.Padding = [System.Windows.Thickness]::new(5, 1, 5, 1)
         $badge.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
@@ -651,7 +829,7 @@ function Start-PlaygroundApp {
         $msgTxt = [System.Windows.Controls.TextBlock]::new()
         $msgTxt.Text = $Message
         $msgTxt.FontSize = 12
-        $msgTxt.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#1A2332")
+        $msgTxt.Foreground = $script:window.Resources["FgColor"]
         $msgTxt.TextWrapping = [System.Windows.TextWrapping]::Wrap
         [void]$headerRow.Children.Add($msgTxt)
         [void]$leftStack.Children.Add($headerRow)
@@ -663,7 +841,7 @@ function Start-PlaygroundApp {
             $dataTxt.Text = "  $([char]0x25B8) $jsonStr"
             $dataTxt.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas")
             $dataTxt.FontSize = 11.5
-            $dataTxt.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2F6FED")
+            $dataTxt.Foreground = $script:window.Resources["LogFg"]
             $dataTxt.Margin = [System.Windows.Thickness]::new(6, 2, 0, 0)
             $dataTxt.TextWrapping = [System.Windows.TextWrapping]::Wrap
             [void]$leftStack.Children.Add($dataTxt)
@@ -677,7 +855,7 @@ function Start-PlaygroundApp {
         $stamp = (Get-Date).ToString("HH:mm:ss")
         $timeTxt.Text = if ($DurationMs -ge 0) { "$($DurationMs)ms" } else { $stamp }
         $timeTxt.FontSize = 10.5
-        $timeTxt.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#7E8CA0")
+        $timeTxt.Foreground = $script:window.Resources["MutedFgColor"]
         $timeTxt.VerticalAlignment = [System.Windows.VerticalAlignment]::Top
         [System.Windows.Controls.Grid]::SetColumn($timeTxt, 1)
         [void]$logGrid.Children.Add($timeTxt)
@@ -831,12 +1009,16 @@ function Start-PlaygroundApp {
         $tabs = @($btnNavAdd, $btnNavGet, $btnNavUpdate, $btnNavDelete, $btnNavCustom)
         $names = @("Adding Data", "Getting Data", "Updating Data", "Deleting Data", "Custom PowerShell Script")
 
-        $brushConverter = [System.Windows.Media.BrushConverter]::new()
         for ($i = 0; $i -lt $tabs.Count; $i++) {
             $t = $tabs[$i]
             $isActive = ($names[$i] -eq $Category)
-            $t.Background = $brushConverter.ConvertFromString($(if ($isActive) { "#2F6FED" } else { "Transparent" }))
-            $t.Foreground = $brushConverter.ConvertFromString($(if ($isActive) { "#FFFFFF" } else { "#7E8CA0" }))
+            if ($isActive) {
+                $t.Background = $script:window.Resources["HeaderColor"]
+                $t.Foreground = [System.Windows.Media.Brushes]::White
+            } else {
+                $t.Background = [System.Windows.Media.Brushes]::Transparent
+                $t.Foreground = $script:window.Resources["MutedFgColor"]
+            }
         }
 
         # Populate Cards with runnable PowerShell code snippets targeting $coll
@@ -984,6 +1166,10 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     # -----------------------------------------------------------------------
     # Event Wiring
     # -----------------------------------------------------------------------
+    $btnToggleTheme.add_Click({
+        Set-AppTheme (-not $script:isDarkMode)
+    })
+
     $btnNavAdd.add_Click({ Set-PlaygroundCategory "Adding Data" })
     $btnNavGet.add_Click({ Set-PlaygroundCategory "Getting Data" })
     $btnNavUpdate.add_Click({ Set-PlaygroundCategory "Updating Data" })
@@ -1014,7 +1200,7 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         }
     })
 
-    # Dropdown synchronization (Guaranteed visible text)
+    # Dropdown synchronization (Guaranteed visible text with DynamicDrivers styling)
     $cmbLeftCollection.add_SelectionChanged({
         if ($script:updatingDropdowns) { return }
         if ($cmbLeftCollection.SelectedItem) {
@@ -1115,6 +1301,21 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         }
     })
 
+    # Detect Windows OS Dark Theme preference if not specified
+    $initialDark = $StartInDark
+    if (-not $initialDark) {
+        try {
+            $regKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            if (Test-Path $regKey) {
+                $appsUseLightTheme = (Get-ItemProperty -Path $regKey -Name "AppsUseLightTheme" -ErrorAction SilentlyContinue).AppsUseLightTheme
+                if ($appsUseLightTheme -eq 0) {
+                    $initialDark = $true
+                }
+            }
+        } catch { }
+    }
+
+    Set-AppTheme $initialDark
     Set-PlaygroundCategory "Adding Data"
 
     $initialColls = @($script:db.listCollections())
@@ -1124,7 +1325,7 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         Refresh-DatabaseState
     }
 
-    Write-Host "Opening PSLocalBase Playground window..." -ForegroundColor Cyan
+    Write-Host "Opening PSLocalBase Playground window (Theme: $(if ($initialDark) {'Dark'} else {'Light'}))..." -ForegroundColor Cyan
     $null = $script:window.ShowDialog()
 }
 
@@ -1134,7 +1335,7 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
 $isSta = [System.Threading.Thread]::CurrentThread.GetApartmentState() -eq [System.Threading.ApartmentState]::STA
 
 if ($isSta) {
-    Start-PlaygroundApp -DbPath $DatabasePath
+    Start-PlaygroundApp -DbPath $DatabasePath -StartInDark:$DarkMode
 } else {
     Write-Host "[PSLocalBase Playground] Starting in dedicated STA Runspace..." -ForegroundColor Cyan
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -1149,6 +1350,9 @@ if ($isSta) {
     }
     [void]$ps.AddScript((Get-Content -Path $scriptPath -Raw))
     [void]$ps.AddParameter('DatabasePath', $DatabasePath)
+    if ($DarkMode) {
+        [void]$ps.AddParameter('DarkMode', $true)
+    }
     [void]$ps.Invoke()
     if ($ps.HadErrors) {
         $ps.Streams.Error | ForEach-Object { Write-Error $_ }
