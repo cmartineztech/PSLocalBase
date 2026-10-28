@@ -1,4 +1,4 @@
-﻿# Security Policy
+# Security Policy
 
 ## Supported Versions
 
@@ -24,14 +24,19 @@
 - Eliminates software supply chain risks associated with third-party NuGet packages, external binaries, or unsigned dependencies.
 - Enforces assembly-level `[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]` to completely eliminate DLL preloading and search-order hijacking vulnerabilities.
 
-### 2. Complete Anti-SQL Injection Defense
-- **Parameterized Query Binding:** All document writes (`.set()`, `.add()`, `.update()`) and filter queries (`.where()`) utilize parameterized `?` placeholders bound via native `sqlite3_bind_text16` in unmanaged memory.
+### 2. Complete Anti-SQL Injection & Strongly-Typed Parameter Defense
+- **Strongly-Typed Parameter Binding:** All document writes (`.set()`, `.add()`, `.update()`), filter queries (`.where()`), and custom SQL operations (`.query()`) bind parameters using native SQLite type affinities:
+  - Integer numbers (`int32`, `int64`, `byte`, `sbyte`, `uint16`, `uint32`, `bool`) are bound with `sqlite3_bind_int64`.
+  - Floating point numbers (`single`, `double`, `decimal`) are bound with `sqlite3_bind_double`.
+  - Nulls are bound with `sqlite3_bind_null`.
+  - Strings are bound with exact Unicode byte length via `sqlite3_bind_text16` using `SQLITE_TRANSIENT`.
+- **Parameter Count Parity Enforcement:** Custom queries validate parameter count parity against native prepared statement placeholders using `sqlite3_bind_parameter_count`. Any mismatch throws `[System.InvalidOperationException]`, preventing omitted parameters from silently converting into `NULL`.
 - **Strict Identifier Whitelisting:**
   - Collection names: enforced via regex `^[a-zA-Z0-9_]+$`
   - Field paths: enforced via regex `^[a-zA-Z0-9_.\[\]]+$` with balanced bracket validation
   - Query operators: restricted to a strict whitelist (`=`, `==`, `!=`, `<>`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`)
   - Sorting directions: restricted strictly to `ASC` or `DESC`
-- **Payload Safety:** Arbitrary user strings (including SQL syntax such as `' OR '1'='1` or `'; DROP TABLE; --`) are treated strictly as harmless literal text.
+- **Payload Safety & NUL Preservation:** Arbitrary user strings (including SQL syntax like `' OR '1'='1` or `'; DROP TABLE; --`) are treated strictly as literal data. Embedded NUL bytes (`\0`) within string payloads are preserved losslessly using exact byte bounds (`ColumnBytes16 / 2`).
 - **Lazy Schema Provisioning:** Referencing `.collection("name")` operates lazily and does not provision SQLite tables until explicit writes (`.set()`, `.add()`, `.update()`) or `.create()` are called, preventing unintended database table pollution and resource exhaustion from arbitrary or mistyped collection names.
 
 ### 3. Source Code & Complex Payload Integrity
@@ -62,6 +67,15 @@
 ### 8. Interactive Playground Security & Execution Model
 - The WPF Playground (`Playground.ps1`) runs within the local user context and executes code snippets directly using the caller's Windows permissions.
 - It does not implement a restricted sandbox. It is intended strictly as a developer productivity and database exploration tool for authorized local environments.
+
+### 9. Unmanaged Handle Lifecycle & Orphaned Collection Defense (Use-After-Free Prevention)
+- **Parent-Child Lifecycle Guarding:** Child collection instances (`IsChildInstance = $true`) share the underlying SQLite native handle (`DbHandle`) with the root `PSLocalBase` instance without owning connection termination.
+- **Immediate Closure Detection:** When the root database connection is closed (`.close()` or `.Dispose()`), child collections validate parent connection health on all operations via `_EnsureOpen()`. If the parent handle has been released, the child zeroes out its local `DbHandle` and immediately raises `[System.InvalidOperationException]: Database connection is closed.`.
+- **Memory Safety Guarantee:** Stale or orphaned collection instances are completely blocked from calling unmanaged SQLite C APIs (`sqlite3_step`, `sqlite3_exec`, `sqlite3_get_autocommit`), eliminating Use-After-Free vulnerabilities and unmanaged memory corruption.
+
+### 10. Cross-Edition Serialization Depth Protection (Data Loss Prevention)
+- **Pre-Flight Depth Inspection:** Windows PowerShell 5.1's built-in `ConvertTo-Json` silently truncates objects exceeding `-Depth` into .NET type name strings (such as `"System.Collections.Hashtable"`) without raising errors or warnings.
+- **Deterministic Rejection:** PSLocalBase incorporates a recursive pre-flight depth analyzer (`_ExceedsDepth`) that traverses dictionaries, collections, and custom object properties. If the object exceeds configured `depth`, an `[System.InvalidOperationException]` is thrown prior to serialization across both Windows PowerShell 5.1 and PowerShell 7+, ensuring pre-existing documents are preserved intact without silent corruption.
 
 ---
 

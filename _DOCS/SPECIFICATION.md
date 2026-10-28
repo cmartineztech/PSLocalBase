@@ -70,6 +70,18 @@ public class WinSqlite3 {
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_null")]
     public static extern int BindNull(IntPtr stmt, int index);
 
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_int64")]
+    public static extern int BindInt64(IntPtr stmt, int index, long val);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_double")]
+    public static extern int BindDouble(IntPtr stmt, int index, double val);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_parameter_count")]
+    public static extern int BindParameterCount(IntPtr stmt);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_bytes16")]
+    public static extern int ColumnBytes16(IntPtr stmt, int colIndex);
+
     // Column extraction
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_text16", CharSet = CharSet.Unicode)]
     public static extern IntPtr ColumnText(IntPtr stmt, int colIndex);
@@ -203,14 +215,16 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 * **`[object] get([hashtable]$options)`**
   * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`).
   * If `$options.keys = $true`, returns objects structured as `@{ key = $k; data = $v }`.
-* **`[PSCustomObject[]] query([string]$sql, [string[]]$parameters)`**
-  * Executes arbitrary custom SQL (including cross-collection `JOIN`s and aggregations) with parameter binding support.
+* **`[PSCustomObject[]] query([string]$sql, [object[]]$parameters)`**
+  * Executes arbitrary custom SQL (including cross-collection `JOIN`s and aggregations) with strongly-typed parameter binding (`int64`, `double`, `string`, `null`) and parameter count parity enforcement.
 
 #### Deletion & Transactions
 * **`[void] delete()`**
-  * Deletes a targeted document, a filtered document set, or drops the entire collection table.
+  * Deletes a targeted document, a filtered document set, or drops the entire collection table when called without target or filter.
+* **`[void] drop()`**
+  * Explicitly drops the current collection table.
 * **`[void] deleteDatabase()`**
-  * Closes connection and physically removes `.db`, `.db-wal`, and `.db-shm` files.
+  * Closes root connection and physically removes `.db`, `.db-wal`, and `.db-shm` files. Must be called on root instance (rejected on child collections).
 * **`[void] beginTransaction()`**, **`[void] commit()`**, **`[void] rollback()`**
   * Manages native ACID transactions.
 
@@ -218,7 +232,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 30 out of 30 tests on both PowerShell 5.1 and PowerShell 7+:
+The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 45 out of 45 tests on both PowerShell 5.1 and PowerShell 7+:
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
@@ -252,6 +266,21 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-28** | **Target Document Auto-Provisioning** | Calling `.doc()` auto-provisions collection table; criteria key resolution via hashtable & PSCustomObject | **PASSED** |
 | **TC-29** | **Collection Schema Lifecycle** | Schema introspection via `collectionExists()`, explicit `createCollection()`, drop & immediate re-creation | **PASSED** |
 | **TC-30** | **Multiple Collection Isolation** | Data and index isolation across multiple collections; bulk overwrite and relational integrity | **PASSED** |
+| **TC-31** | **Isolated Collection State** | Independent `$users` and `$orders` instances without shared state or cross-talk | **PASSED** |
+| **TC-32** | **Accidental Drop Protection & .drop()** | Rejects `.limit().delete()` and verifies explicit `.drop()` prevents accidental data loss | **PASSED** |
+| **TC-33** | **Case-Insensitive Schema Resolution** | Resolves `Users` vs `users` preserving fields via deep-merge without schema mismatch | **PASSED** |
+| **TC-34** | **NUL Byte Key Defense** | Rejects `\0` in document keys to prevent truncations and unauthorized collisions | **PASSED** |
+| **TC-35** | **SAVEPOINT Bulk Isolation** | Outer transaction rollback safety during partial bulk set failures via SQLite savepoints | **PASSED** |
+| **TC-36** | **Safe Handle Release on Open Failure** | Prevents unmanaged handle leaks on invalid/corrupt files during constructor PRAGMAs | **PASSED** |
+| **TC-37** | **Constructor Options Enforcement** | Enforces `cacheSizeMB`, `wal`, and `busyTimeout` PRAGMA settings upon database initialization | **PASSED** |
+| **TC-38** | **Atomic update() Isolation** | Immediate transaction isolation preventing lost updates during concurrent writes | **PASSED** |
+| **TC-39** | **Real-Time InTransaction Ground Truth**| Direct engine synchronization via `sqlite3_get_autocommit` reflecting raw SQL BEGIN/COMMIT | **PASSED** |
+| **TC-40** | **Typed Query & Clean Re-Import** | Strongly-typed columns and clean unwrapping on `set(get({keys}))` without wrapper nesting | **PASSED** |
+| **TC-41** | **Orphaned Collection Defense** | Guarantees orphaned child collections throw on unmanaged handle usage after owner closure | **PASSED** |
+| **TC-42** | **Cross-Edition Depth Protection** | Enforces consistent depth limit rejection across both PowerShell 5.1 and 7+ | **PASSED** |
+| **TC-43** | **Paged Count Offset Subquery** | Wraps `skip()` without `limit()` into source document subquery returning accurate counts | **PASSED** |
+| **TC-44** | **Typed Parameter Binding & Parity**| Strongly-typed parameter affinities (`int64`, `double`), parameter count parity, NUL preservation | **PASSED** |
+| **TC-45** | **Collection-level deleteDatabase()**| Explicitly rejects global database file deletion from child collection instances | **PASSED** |
 
 ---
 

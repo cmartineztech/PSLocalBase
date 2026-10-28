@@ -1452,6 +1452,136 @@ Assert-Test "TC-40: Strongly-Typed Query Results & Clean Wrapper Unwrapping" {
         $db.close()
     }
 }
+
+
+# ---------------------------------------------------------------------------
+# TC-41: Orphaned Collection Handle Defense
+# ---------------------------------------------------------------------------
+Assert-Test "TC-41: Orphaned Collection Handle Defense" {
+    $db = [PSLocalBase]::new(":memory:")
+    $users = $db.collection("users")
+    $db.close()
+
+    $threwTx = $false
+    try {
+        $null = $users._GetInTransaction()
+    } catch [System.InvalidOperationException] {
+        $threwTx = $true
+    }
+    if (-not $threwTx) { throw "Expected _GetInTransaction on orphaned collection to throw InvalidOperationException." }
+
+    $threwBegin = $false
+    try {
+        $users.beginTransaction()
+    } catch [System.InvalidOperationException] {
+        $threwBegin = $true
+    }
+    if (-not $threwBegin) { throw "Expected beginTransaction on orphaned collection to throw InvalidOperationException." }
+}
+
+# ---------------------------------------------------------------------------
+# TC-42: Cross-Edition Serialization Depth Protection
+# ---------------------------------------------------------------------------
+Assert-Test "TC-42: Cross-Edition Serialization Depth Protection" {
+    $db = [PSLocalBase]::new(":memory:", @{ depth = 2 })
+    try {
+        $db.collection("users").doc("u1").set(@{ name = "Alice"; age = 30 })
+        $threwDepth = $false
+        try {
+            $deepObj = @{ a = @{ b = @{ c = @{ d = 1 } } } }
+            $db.collection("users").doc("u1").set($deepObj)
+        } catch [System.InvalidOperationException] {
+            $threwDepth = $true
+        }
+        if (-not $threwDepth) { throw "Expected serialization exceeding depth to throw InvalidOperationException." }
+        $prev = $db.collection("users").doc("u1").get()
+        if ($prev.name -ne "Alice" -or $prev.age -ne 30) { throw "Previous document was not preserved after rejected set." }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-43: Paged Count with Skip/Offset Subquery
+# ---------------------------------------------------------------------------
+Assert-Test "TC-43: Paged Count with Skip/Offset Subquery" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("paged_count")
+        $col.add(@{ v = 1 }) | Out-Null
+        $col.add(@{ v = 2 }) | Out-Null
+        $col.add(@{ v = 3 }) | Out-Null
+
+        $cTotal = $col.count()
+        $cSkip1 = $col.skip(1).count()
+        $cSkip2 = $col.skip(2).count()
+        $cSkip3 = $col.skip(3).count()
+        $cSkip1Lim1 = $col.skip(1).limit(1).count()
+
+        if ($cTotal -ne 3) { throw "count() expected 3, got $cTotal" }
+        if ($cSkip1 -ne 2) { throw "skip(1).count() expected 2, got $cSkip1" }
+        if ($cSkip2 -ne 1) { throw "skip(2).count() expected 1, got $cSkip2" }
+        if ($cSkip3 -ne 0) { throw "skip(3).count() expected 0, got $cSkip3" }
+        if ($cSkip1Lim1 -ne 1) { throw "skip(1).limit(1).count() expected 1, got $cSkip1Lim1" }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-44: Strongly-Typed Query Parameter Binding and Count Parity
+# ---------------------------------------------------------------------------
+Assert-Test "TC-44: Strongly-Typed Query Parameter Binding and Count Parity" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        # Numeric parameter comparison: 1 > 10 should be 0 (False), typeof should be integer
+        $rows = $db.query("SELECT ? > 10 AS cmp, typeof(?) AS t;", @(1, 1))
+        if ($rows[0].cmp -ne 0 -or $rows[0].t -ne "integer") {
+            throw "Numeric parameter binding affinity failed (cmp=$($rows[0].cmp), t=$($rows[0].t))"
+        }
+
+        # Parameter count mismatch validation
+        $threwMismatch = $false
+        try {
+            $null = $db.query("SELECT ? AS a, ? AS b;", @("only_one"))
+        } catch [System.InvalidOperationException] {
+            $threwMismatch = $true
+        }
+        if (-not $threwMismatch) { throw "Parameter count mismatch did not throw InvalidOperationException." }
+
+        # String parameter with NUL byte preservation
+        $nulString = "hello" + [char]0 + "world"
+        $nulRows = $db.query("SELECT ? AS s;", @($nulString))
+        if ($nulRows[0].s.Length -ne 11) {
+            throw "NUL byte string parameter was truncated (length=$($nulRows[0].s.Length))."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-45: Collection-level deleteDatabase() Rejection
+# ---------------------------------------------------------------------------
+Assert-Test "TC-45: Collection-level deleteDatabase() Rejection" {
+    $tempDb = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "test_tc45_$([Guid]::NewGuid().ToString('N')).db")
+    $db = [PSLocalBase]::new($tempDb)
+    try {
+        $col = $db.collection("test")
+        $col.doc("1").set(@{ a = 1 })
+        $threwChildDel = $false
+        try {
+            $col.deleteDatabase()
+        } catch [System.InvalidOperationException] {
+            $threwChildDel = $true
+        }
+        if (-not $threwChildDel) { throw "Child deleteDatabase did not throw InvalidOperationException." }
+        if ($db.DbHandle -eq [IntPtr]::Zero) { throw "Root DB handle was unexpectedly closed." }
+    } finally {
+        $db.close()
+        Remove-Item $tempDb* -Force -ErrorAction SilentlyContinue
+    }
+}
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

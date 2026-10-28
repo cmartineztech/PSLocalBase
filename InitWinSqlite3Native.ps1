@@ -56,9 +56,21 @@ public class WinSqlite3 {
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_null", CallingConvention = CallingConvention.Cdecl)]
     public static extern int BindNull(IntPtr stmt, int index);
 
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_int64", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int BindInt64(IntPtr stmt, int index, long val);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_double", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int BindDouble(IntPtr stmt, int index, double val);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_bind_parameter_count", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int BindParameterCount(IntPtr stmt);
+
     // Data extraction
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_type", CallingConvention = CallingConvention.Cdecl)]
     public static extern int ColumnType(IntPtr stmt, int colIndex);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_bytes16", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int ColumnBytes16(IntPtr stmt, int colIndex);
 
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_int64", CallingConvention = CallingConvention.Cdecl)]
     public static extern long ColumnInt64(IntPtr stmt, int colIndex);
@@ -105,6 +117,11 @@ public class WinSqlite3 {
     public static string GetString(IntPtr ptr) {
         if (ptr == IntPtr.Zero) return null;
         return Marshal.PtrToStringUni(ptr);
+    }
+
+    public static string GetString(IntPtr ptr, int charLen) {
+        if (ptr == IntPtr.Zero) return null;
+        return Marshal.PtrToStringUni(ptr, charLen);
     }
 
     // UTF-8 string conversion from unmanaged memory (sqlite3_exec errmsg)
