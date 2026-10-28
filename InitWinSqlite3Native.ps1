@@ -1,4 +1,4 @@
-# ---------------------------------------------------------------------------
+﻿# ---------------------------------------------------------------------------
 # InitWinSqlite3Native.ps1
 # P/Invoke bridge targeting Windows native winsqlite3.dll
 # ---------------------------------------------------------------------------
@@ -57,6 +57,15 @@ public class WinSqlite3 {
     public static extern int BindNull(IntPtr stmt, int index);
 
     // Data extraction
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_type", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int ColumnType(IntPtr stmt, int colIndex);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_int64", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long ColumnInt64(IntPtr stmt, int colIndex);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_double", CallingConvention = CallingConvention.Cdecl)]
+    public static extern double ColumnDouble(IntPtr stmt, int colIndex);
+
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_text16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr ColumnText(IntPtr stmt, int colIndex);
 
@@ -65,6 +74,10 @@ public class WinSqlite3 {
 
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_column_count", CallingConvention = CallingConvention.Cdecl)]
     public static extern int ColumnCount(IntPtr stmt);
+
+    // Transaction autocommit status
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_get_autocommit", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int GetAutocommit(IntPtr db);
 
     // Error and execution helpers
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_errmsg16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]

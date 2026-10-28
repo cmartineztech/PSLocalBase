@@ -96,6 +96,7 @@ function Start-PlaygroundApp {
 
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
+    $script:fullDbPath = [System.IO.Path]::GetFullPath($resolvedDbPath)
     $dbFileExisted = (Test-Path $resolvedDbPath) -and ((Get-Item $resolvedDbPath).Length -gt 0)
     $script:db = [PSLocalBase]::new($resolvedDbPath, @{
         cacheSizeMB = 32
@@ -700,8 +701,12 @@ function Start-PlaygroundApp {
 
                         <!-- Explorer Footer -->
                         <Grid Grid.Row="3" Margin="0,8,0,0">
-                            <TextBlock Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
-                            <TextBlock Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Name="lblTotalEntries" Text="Total entries: 0" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource SecFgColor}" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Name="lblDbMetrics" Text="Storage: playground.db (WAL Mode)" FontSize="11.5" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="10,0,0,0"/>
                         </Grid>
                     </Grid>
                 </Border>
@@ -768,11 +773,15 @@ function Start-PlaygroundApp {
 
         <!-- Row 3: Windows Status Strip -->
         <Grid Grid.Row="3" Margin="4,6,4,0">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="&#x25CF;" FontSize="10" Foreground="#2E7D32" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | Database: playground.db" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center"/>
+                <TextBlock Name="txtStatusMsg" Text="Connected: winsqlite3.dll | DB: playground.db" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
-            <TextBlock Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="{DynamicResource MutedFgColor}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="1" Name="txtMemoryUsage" Text="CLR Memory: 0 MB" FontSize="11" Foreground="{DynamicResource MutedFgColor}" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </Grid>
     </Grid>
 </Window>
@@ -842,6 +851,10 @@ function Start-PlaygroundApp {
     $txtStatusBadge   = $script:window.FindName("txtStatusBadge")
     $txtStatusMsg     = $script:window.FindName("txtStatusMsg")
     $txtMemoryUsage   = $script:window.FindName("txtMemoryUsage")
+    if ($null -ne $txtStatusMsg) {
+        $txtStatusMsg.Text = "Connected: winsqlite3.dll | DB: $script:fullDbPath"
+        $txtStatusMsg.ToolTip = $script:fullDbPath
+    }
 
     $script:activeCollection = "users"
     $script:currentCategory = "Adding Data"
@@ -1060,7 +1073,8 @@ function Start-PlaygroundApp {
         $filterKey = $txtKeySearch.Text.Trim()
         if ($filterKey -eq "Search key or text...") { $filterKey = "" }
 
-        $docsWithKeys = @($script:db.collection($CollectionName).get(@{ keys = $true }))
+                $totalInDb = $script:db.collection($CollectionName).count()
+        $docsWithKeys = @($script:db.collection($CollectionName).limit(500).get(@{ keys = $true }))
         $rows = [System.Collections.Generic.List[PSCustomObject]]::new()
 
         for ($i = 0; $i -lt $docsWithKeys.Count; $i++) {
@@ -1089,7 +1103,15 @@ function Start-PlaygroundApp {
         $dbFile = Join-Path $PSScriptRoot $DbPath
         if (Test-Path $dbFile) {
             $kb = [math]::Round((Get-Item $dbFile).Length / 1KB, 1)
-            $lblDbMetrics.Text = "Storage: $($DbPath) ($kb KB | WAL Mode)"
+            $lblDbMetrics.Text = "Storage: $($script:fullDbPath) ($kb KB | WAL Mode)"
+            $lblDbMetrics.ToolTip = $script:fullDbPath
+        } else {
+            $lblDbMetrics.Text = "Storage: $($script:fullDbPath) (WAL Mode)"
+            $lblDbMetrics.ToolTip = $script:fullDbPath
+        }
+        if ($null -ne $txtStatusMsg) {
+            $txtStatusMsg.Text = "Connected: winsqlite3.dll | DB: $script:fullDbPath"
+            $txtStatusMsg.ToolTip = $script:fullDbPath
         }
 
         # CLR memory
@@ -1355,9 +1377,23 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     # Initial Demo Seeding (Users, Products, Orders)
     # -----------------------------------------------------------------------
     function Seed-DefaultData {
-        $null = $script:db.collection("users").delete()
-        $null = $script:db.collection("products").delete()
-        $null = $script:db.collection("orders").delete()
+        $existingCount = 0
+        foreach ($c in @("users", "products", "orders")) {
+            if ($script:db.collectionExists($c)) {
+                $existingCount += $script:db.collection($c).count()
+            }
+        }
+        if ($existingCount -gt 0) {
+            $msg = "Seeding demo data will reset and overwrite existing documents in 'users', 'products', and 'orders'. Proceed?"
+            $confirm = [System.Windows.MessageBox]::Show($msg, "Confirm Seed Demo Data", "YesNo", "Warning")
+            if ($confirm -ne "Yes") {
+                Log-ToConsole "Seed demo cancelled by user."
+                return
+            }
+        }
+        $null = $script:db.collection("users").drop()
+        $null = $script:db.collection("products").drop()
+        $null = $script:db.collection("orders").drop()
 
         $sampleUsers = @(
             @{ id = 1; name = "Bill"; age = 47; role = "Admin"; city = "Seattle" },
@@ -1408,10 +1444,24 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     $btnSeedDemo.add_Click({ Seed-DefaultData })
 
     $btnCheckpointWal.add_Click({
-        $null = $script:db._ExecuteDirectSql("PRAGMA wal_checkpoint(TRUNCATE);")
-        Log-ToConsole "WAL checkpoint executed cleanly (dirty pages synced to disk)."
-        Refresh-DatabaseState
-        [System.Windows.MessageBox]::Show("WAL checkpoint flushed cleanly to persistent disk!", "WAL Sync", "OK", "Information")
+        $chkRows = $script:db.query("PRAGMA wal_checkpoint(TRUNCATE);")
+        $isBusy = $false
+        $logPages = 0
+        $checkpointed = 0
+        if ($chkRows.Count -gt 0) {
+            $isBusy = ($chkRows[0].busy -eq 1 -or [string]$chkRows[0].busy -eq "1")
+            $logPages = $chkRows[0].log
+            $checkpointed = $chkRows[0].checkpointed
+        }
+        if ($isBusy) {
+            Log-ToConsole "WAL checkpoint incomplete: Active readers prevented full truncation (Busy: 1, Log: $logPages, Synced: $checkpointed)."
+            Refresh-DatabaseState
+            [System.Windows.MessageBox]::Show("WAL checkpoint could not fully truncate because an active reader lock is open. Synced $checkpointed / $logPages frames.", "WAL Busy", "OK", "Warning")
+        } else {
+            Log-ToConsole "WAL checkpoint executed cleanly (dirty pages synced to disk, $checkpointed frames truncated)."
+            Refresh-DatabaseState
+            [System.Windows.MessageBox]::Show("WAL checkpoint flushed cleanly to persistent disk!", "WAL Sync", "OK", "Information")
+        }
     })
 
     $btnResetDatabase.add_Click({
@@ -1604,12 +1654,14 @@ if ($isSta) {
     $rs.ApartmentState = [System.Threading.ApartmentState]::STA
     $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
     $rs.Open()
-    $ps = [System.Management.Automation.PowerShell]::Create()
-    $ps.Runspace = $rs
     $scriptPath = $MyInvocation.MyCommand.Path
     if (-not $scriptPath) {
         $scriptPath = Join-Path $PSScriptRoot "Playground.ps1"
     }
+    $scriptDir = Split-Path $scriptPath -Parent
+    $rs.SessionStateProxy.SetVariable('PSScriptRoot', $scriptDir)
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $ps.Runspace = $rs
     [void]$ps.AddScript((Get-Content -Path $scriptPath -Raw))
     [void]$ps.AddParameter('DatabasePath', $DatabasePath)
     if ($DarkMode) {
@@ -1618,6 +1670,7 @@ if ($isSta) {
     [void]$ps.Invoke()
     if ($ps.HadErrors) {
         $ps.Streams.Error | ForEach-Object { Write-Error $_ }
+        exit 1
     }
     $ps.Dispose()
     $rs.Close()

@@ -1,4 +1,4 @@
-# PSLocalBase
+﻿# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -40,6 +40,8 @@
 
 Explore, query, test, and inspect your database visually in a single self-contained WPF application:
 
+![PSLocalBase Playground](Playground/screenshots/dark-mode.png)
+
 ```powershell
 # Launch the interactive GUI Playground (PowerShell 7+ or Windows PowerShell 5.1):
 pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
@@ -47,7 +49,7 @@ pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 ```
 
-For full details and walkthroughs, see the [Playground Documentation](Playground/README.md).
+Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid inspection, interactive code tutorial cards, and an integrated execution console. For full details and Light Mode preview, see the [Playground Documentation](Playground/README.md).
 
 
 ---
@@ -76,8 +78,13 @@ For full details and walkthroughs, see the [Playground Documentation](Playground
 # 1. Import the module
 Import-Module .\PSLocalBase.psd1 -Force
 
-# 2. Initialize database (disk file or in-memory)
-$db = [PSLocalBase]::new(".\my_database.db")
+# 2. Initialize database (disk file or in-memory) with optional configuration:
+$db = [PSLocalBase]::new(".\my_database.db", @{
+    wal         = $true   # Enable Write-Ahead Logging (default: $true)
+    cacheSizeMB = 32      # SQLite memory cache in MB (default: 16)
+    busyTimeout = 5000    # Lock retry timeout in ms (default: 5000)
+    depth       = 20      # Max JSON serialization depth (default: 20)
+})
 
 # 3. Insert documents
 $db.collection("users").doc("usr-100").set(@{
@@ -303,7 +310,7 @@ $report | Format-Table -AutoSize
 
 ---
 
-### Deleting Data (`delete`, `deleteDatabase`)
+### Deleting Data (`drop`, `delete`, `deleteDatabase`)
 
 #### Deleting a Document
 ```powershell
@@ -315,10 +322,16 @@ $db.collection("users").doc("usr-100").delete()
 $db.collection("logs").where("level", "=", "DEBUG").delete()
 ```
 
-#### Deleting an Entire Collection
+#### Dropping an Entire Collection Table
 ```powershell
+# Drop the collection table cleanly
+$db.collection("temporary_data").drop()
+
+# Or delete all records without filter
 $db.collection("temporary_data").delete()
 ```
+> [!NOTE]
+> Accidental data loss protection: calling `.delete()` with pagination (`.limit()`, `.skip()`) is rejected with an `InvalidOperationException` to guarantee targeted deletions never unintentionally purge an entire collection.
 
 #### Deleting the Entire Database File
 Closes all connections and safely deletes the database file, along with any active `.db-wal` and `.db-shm` files:
@@ -393,7 +406,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 30 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 40 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -404,7 +417,7 @@ powershell -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
-For the complete breakdown of all 30 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+For the complete breakdown of all 40 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
 ---
 

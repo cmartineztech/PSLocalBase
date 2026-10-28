@@ -1,4 +1,4 @@
-# Security Policy
+﻿# Security Policy
 
 ## Supported Versions
 
@@ -44,6 +44,24 @@
 - **WAL Storage Boundary Validation:** Explicitly rejects UNC paths (`\\server\share`) and mapped network drives (`DriveType.Network`) to prevent SQLite shared-memory (`-shm`) corruption over SMB shares.
 - **Safe Transaction Rollback Isolation:** Handlers wrap rollback calls in guarded blocks to ensure engine-level auto-rollbacks (e.g. `SQLITE_FULL`) do not mask root exceptions.
 - **Non-blocking Concurrency:** Implements Write-Ahead Logging (`WAL`), `synchronous = NORMAL`, and a 5,000 ms busy handler to eliminate locking deadlocks across concurrent scripts.
+
+---
+
+### 5. NUL Character Defense & Identifier Integrity
+- Document keys passed to `.doc('key')`, `.add(data, 'key')`, `.insert(data)`, and bulk `.set($array)` are explicitly validated against embedded NUL bytes (`\0` / `U+0000`).
+- Because native C APIs treat `\0` as a null-terminator, embedded nulls could cause premature truncation and unauthorized key overwrites/collisions. PSLocalBase rejects any keys containing null characters with `[System.ArgumentException]`.
+
+### 6. Safe Deletion & Schema Drop Protection
+- Accidental collection drops are strictly mitigated: calling `.delete()` when chained with pagination or sorting (`.limit()`, `.skip()`, `.orderBy()`) is rejected with `[System.InvalidOperationException]`.
+- An explicit, dedicated `.drop()` method is provided for dropping collections intentionally.
+- Collection reference variables operate on isolated instances: assigning `$u = $db.collection('users')` and `$o = $db.collection('orders')` produces independent context instances, eliminating shared-state mutation between collection variables.
+
+### 7. Debug Output Sanitization & Credential Privacy
+- When `$db.config["debug"] = $true` is enabled, parameter values and document payloads are redacted/summarized by parameter count rather than printed raw to `stdout`, preventing sensitive credentials, API tokens, and PII from leaking into terminal transcripts and CI logs.
+
+### 8. Interactive Playground Security & Execution Model
+- The WPF Playground (`Playground.ps1`) runs within the local user context and executes code snippets directly using the caller's Windows permissions.
+- It does not implement a restricted sandbox. It is intended strictly as a developer productivity and database exploration tool for authorized local environments.
 
 ---
 
