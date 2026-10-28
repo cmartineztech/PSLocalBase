@@ -679,11 +679,22 @@ function Start-PlaygroundApp {
                             </StackPanel>
                         </Grid>
 
-                        <!-- Console Messages List -->
+                        <!-- Console Rich Output Viewer (100% Continuous Mouse Selectable & Copyable) -->
                         <Border Grid.Row="1" Background="{DynamicResource LogBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Margin="0,0,0,8">
-                            <ScrollViewer Name="scrollConsole" VerticalScrollBarVisibility="Auto" Padding="10,6">
-                                <StackPanel Name="panelConsoleLogs"/>
-                            </ScrollViewer>
+                            <RichTextBox Name="rtbConsole"
+                                         IsReadOnly="True"
+                                         IsDocumentEnabled="True"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource FgColor}"
+                                         CaretBrush="{DynamicResource FgColor}"
+                                         VerticalScrollBarVisibility="Auto"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         FontFamily="Segoe UI"
+                                         FontSize="12"
+                                         Padding="10,8">
+                                <FlowDocument PagePadding="0"/>
+                            </RichTextBox>
                         </Border>
 
                         <!-- Interactive CLI Input (>) -->
@@ -767,8 +778,7 @@ function Start-PlaygroundApp {
     $btnClearCollection=$script:window.FindName("btnClearCollection")
     $btnDeleteDoc     = $script:window.FindName("btnDeleteDoc")
 
-    $panelConsoleLogs = $script:window.FindName("panelConsoleLogs")
-    $scrollConsole    = $script:window.FindName("scrollConsole")
+    $rtbConsole       = $script:window.FindName("rtbConsole")
     $btnCopyLogs      = $script:window.FindName("btnCopyLogs")
     $btnClearLogs     = $script:window.FindName("btnClearLogs")
     $txtConsoleInput  = $script:window.FindName("txtConsoleInput")
@@ -794,135 +804,70 @@ function Start-PlaygroundApp {
             $script:window.Resources[$key] = $brushConverter.ConvertFromString($palette[$key])
         }
 
-        # Update button text & icon
+        # Update button text & icon (safe surrogate-safe)
         if ($DarkModeEnabled) {
             $btnToggleTheme.Content = "$([char]0x2600) Light Mode"
         } else {
-            $btnToggleTheme.Content = "$([char]0x1F319) Dark Mode"
+            $btnToggleTheme.Content = "$([char]::ConvertFromUtf32(0x1F319)) Dark Mode"
+        }
+
+        # Update RichTextBox console colors
+        if ($null -ne $rtbConsole) {
+            $rtbConsole.Foreground = $script:window.Resources["FgColor"]
+            $rtbConsole.CaretBrush = $script:window.Resources["FgColor"]
         }
 
         # Re-apply category active tab styling
         Set-PlaygroundCategory $script:currentCategory
-
-        # Dynamically recolor existing log items in the console
-        foreach ($grid in $panelConsoleLogs.Children) {
-            if ($grid -is [System.Windows.Controls.Grid]) {
-                foreach ($child in $grid.Children) {
-                    if ($child -is [System.Windows.Controls.StackPanel]) {
-                        foreach ($sub in $child.Children) {
-                            if ($sub -is [System.Windows.Controls.DockPanel]) {
-                                foreach ($dpChild in $sub.Children) {
-                                    if ($dpChild -is [System.Windows.Controls.TextBox]) {
-                                        $dpChild.Foreground = $script:window.Resources["FgColor"]
-                                        $dpChild.CaretBrush = $script:window.Resources["FgColor"]
-                                    } elseif ($dpChild -is [System.Windows.Controls.Border]) {
-                                        $dpChild.Background = $script:window.Resources["HeaderColor"]
-                                    }
-                                }
-                            } elseif ($sub -is [System.Windows.Controls.TextBox]) {
-                                $sub.Foreground = $script:window.Resources["LogFg"]
-                                $sub.CaretBrush = $script:window.Resources["LogFg"]
-                            }
-                        }
-                    } elseif ($child -is [System.Windows.Controls.TextBlock]) {
-                        $child.Foreground = $script:window.Resources["MutedFgColor"]
-                    }
-                }
-            }
-        }
     }
 
     # -----------------------------------------------------------------------
-    # Logging into Output Console (Fully Selectable TextBoxes)
+    # Logging into Output Console (100% Selectable FlowDocument Viewer)
     # -----------------------------------------------------------------------
     function Log-ToConsole([string]$Message, [object]$Data = $null, [double]$DurationMs = -1) {
-        $logGrid = [System.Windows.Controls.Grid]::new()
-        $logGrid.Margin = [System.Windows.Thickness]::new(0, 3, 0, 3)
+        if ($null -eq $rtbConsole -or $null -eq $rtbConsole.Document) { return }
 
-        $col0 = [System.Windows.Controls.ColumnDefinition]::new()
-        $col0.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
-        $col1 = [System.Windows.Controls.ColumnDefinition]::new()
-        $col1.Width = [System.Windows.GridLength]::Auto
-        $logGrid.ColumnDefinitions.Add($col0)
-        $logGrid.ColumnDefinitions.Add($col1)
-
-        $leftStack = [System.Windows.Controls.StackPanel]::new()
-        $leftStack.Orientation = [System.Windows.Controls.Orientation]::Vertical
-
-        $headerRow = [System.Windows.Controls.DockPanel]::new()
-        $headerRow.LastChildFill = $true
+        $p = [System.Windows.Documents.Paragraph]::new()
+        $p.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+        $p.LineHeight = 18
 
         # Accent "PSLocalBase" badge
-        $badge = [System.Windows.Controls.Border]::new()
-        $badge.Background = $script:window.Resources["HeaderColor"]
-        $badge.CornerRadius = [System.Windows.CornerRadius]::new(4)
-        $badge.Padding = [System.Windows.Thickness]::new(5, 1, 5, 1)
-        $badge.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
-        $badgeTxt = [System.Windows.Controls.TextBlock]::new()
-        $badgeTxt.Text = "PSLocalBase"
-        $badgeTxt.FontSize = 10
-        $badgeTxt.FontWeight = [System.Windows.FontWeights]::Bold
-        $badgeTxt.Foreground = [System.Windows.Media.Brushes]::White
-        $badge.Child = $badgeTxt
-        [System.Windows.Controls.DockPanel]::SetDock($badge, [System.Windows.Controls.Dock]::Left)
-        [void]$headerRow.Children.Add($badge)
+        $rBadge = [System.Windows.Documents.Run]::new("[PSLocalBase] ")
+        $rBadge.FontWeight = [System.Windows.FontWeights]::Bold
+        $rBadge.Foreground = $script:window.Resources["HeaderColor"]
+        [void]$p.Inlines.Add($rBadge)
 
-        # Selectable Message Box
-        $msgBox = [System.Windows.Controls.TextBox]::new()
-        $msgBox.Text = $Message
-        $msgBox.FontSize = 12
-        $msgBox.IsReadOnly = $true
-        $msgBox.BorderThickness = [System.Windows.Thickness]::new(0)
-        $msgBox.Background = [System.Windows.Media.Brushes]::Transparent
-        $msgBox.Foreground = $script:window.Resources["FgColor"]
-        $msgBox.CaretBrush = $script:window.Resources["FgColor"]
-        if ($script:window.Resources["HeaderColor"]) {
-            $msgBox.SelectionBrush = $script:window.Resources["HeaderColor"]
-        }
-        $msgBox.TextWrapping = [System.Windows.TextWrapping]::Wrap
-        $msgBox.Padding = [System.Windows.Thickness]::new(0)
-        $msgBox.Margin = [System.Windows.Thickness]::new(0)
-        $msgBox.Cursor = [System.Windows.Input.Cursors]::IBeam
-        [void]$headerRow.Children.Add($msgBox)
-        [void]$leftStack.Children.Add($headerRow)
+        # Message Text
+        $rMsg = [System.Windows.Documents.Run]::new("$Message")
+        $rMsg.Foreground = $script:window.Resources["FgColor"]
+        [void]$p.Inlines.Add($rMsg)
 
-        # Indented formatted object data - Fully Selectable!
+        # Timing / Stamp
+        $stamp = (Get-Date).ToString("HH:mm:ss")
+        $timeStr = if ($DurationMs -ge 0) { " ($($DurationMs)ms)" } else { " ($stamp)" }
+        $rTime = [System.Windows.Documents.Run]::new(" $timeStr")
+        $rTime.Foreground = $script:window.Resources["MutedFgColor"]
+        $rTime.FontSize = 10.5
+        [void]$p.Inlines.Add($rTime)
+
+        [void]$rtbConsole.Document.Blocks.Add($p)
+
+        # Indented formatted object data (Consolas JSON - Fully Selectable)
         if ($null -ne $Data) {
             $jsonStr = try { $Data | ConvertTo-Json -Depth 6 -Compress } catch { "$Data" }
-            $dataBox = [System.Windows.Controls.TextBox]::new()
-            $dataBox.Text = "  $([char]0x25B8) $jsonStr"
-            $dataBox.IsReadOnly = $true
-            $dataBox.BorderThickness = [System.Windows.Thickness]::new(0)
-            $dataBox.Background = [System.Windows.Media.Brushes]::Transparent
-            $dataBox.Foreground = $script:window.Resources["LogFg"]
-            $dataBox.CaretBrush = $script:window.Resources["LogFg"]
-            if ($script:window.Resources["HeaderColor"]) {
-                $dataBox.SelectionBrush = $script:window.Resources["HeaderColor"]
-            }
-            $dataBox.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas")
-            $dataBox.FontSize = 11.5
-            $dataBox.Margin = [System.Windows.Thickness]::new(6, 2, 0, 0)
-            $dataBox.Padding = [System.Windows.Thickness]::new(0)
-            $dataBox.TextWrapping = [System.Windows.TextWrapping]::Wrap
-            $dataBox.Cursor = [System.Windows.Input.Cursors]::IBeam
-            [void]$leftStack.Children.Add($dataBox)
+            $pData = [System.Windows.Documents.Paragraph]::new()
+            $pData.Margin = [System.Windows.Thickness]::new(16, 0, 0, 4)
+
+            $rData = [System.Windows.Documents.Run]::new("  $([char]0x25B8) $jsonStr")
+            $rData.FontFamily = [System.Windows.Media.FontFamily]::new("Consolas")
+            $rData.FontSize = 11.5
+            $rData.Foreground = $script:window.Resources["LogFg"]
+            [void]$pData.Inlines.Add($rData)
+
+            [void]$rtbConsole.Document.Blocks.Add($pData)
         }
 
-        [System.Windows.Controls.Grid]::SetColumn($leftStack, 0)
-        [void]$logGrid.Children.Add($leftStack)
-
-        # Right timestamp and timing
-        $timeTxt = [System.Windows.Controls.TextBlock]::new()
-        $stamp = (Get-Date).ToString("HH:mm:ss")
-        $timeTxt.Text = if ($DurationMs -ge 0) { "$($DurationMs)ms" } else { $stamp }
-        $timeTxt.FontSize = 10.5
-        $timeTxt.Foreground = $script:window.Resources["MutedFgColor"]
-        $timeTxt.VerticalAlignment = [System.Windows.VerticalAlignment]::Top
-        [System.Windows.Controls.Grid]::SetColumn($timeTxt, 1)
-        [void]$logGrid.Children.Add($timeTxt)
-
-        [void]$panelConsoleLogs.Children.Add($logGrid)
-        $scrollConsole.ScrollToEnd()
+        $rtbConsole.ScrollToEnd()
     }
 
     # -----------------------------------------------------------------------
@@ -1331,36 +1276,21 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     })
 
     $btnCopyLogs.add_Click({
-        $allLogs = [System.Text.StringBuilder]::new()
-        foreach ($grid in $panelConsoleLogs.Children) {
-            if ($grid -is [System.Windows.Controls.Grid]) {
-                foreach ($child in $grid.Children) {
-                    if ($child -is [System.Windows.Controls.StackPanel]) {
-                        foreach ($sub in $child.Children) {
-                            if ($sub -is [System.Windows.Controls.DockPanel]) {
-                                foreach ($dpChild in $sub.Children) {
-                                    if ($dpChild -is [System.Windows.Controls.TextBox]) {
-                                        [void]$allLogs.AppendLine($dpChild.Text)
-                                    }
-                                }
-                            } elseif ($sub -is [System.Windows.Controls.TextBox]) {
-                                [void]$allLogs.AppendLine($sub.Text)
-                            }
-                        }
-                    }
-                }
+        if ($null -ne $rtbConsole -and $null -ne $rtbConsole.Document) {
+            $range = [System.Windows.Documents.TextRange]::new($rtbConsole.Document.ContentStart, $rtbConsole.Document.ContentEnd)
+            $logText = $range.Text.Trim()
+            if ($logText) {
+                [System.Windows.Clipboard]::SetText($logText)
+                $txtStatusBadge.Text = "Copied!"
+                $txtStatusBadge.Foreground = [System.Windows.Media.Brushes]::ForestGreen
             }
-        }
-        $logText = $allLogs.ToString().Trim()
-        if ($logText) {
-            [System.Windows.Clipboard]::SetText($logText)
-            $txtStatusBadge.Text = "Copied!"
-            $txtStatusBadge.Foreground = [System.Windows.Media.Brushes]::ForestGreen
         }
     })
 
     $btnClearLogs.add_Click({
-        $panelConsoleLogs.Children.Clear()
+        if ($null -ne $rtbConsole -and $null -ne $rtbConsole.Document) {
+            $rtbConsole.Document.Blocks.Clear()
+        }
         Log-ToConsole "Console logs cleared."
     })
 

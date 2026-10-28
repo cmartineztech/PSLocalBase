@@ -44,7 +44,7 @@ try {
         'lblCard1Status', 'lblCard2Status', 'lblCard3Status',
         'dgDocuments', 'lblTotalEntries', 'lblDbMetrics',
         'btnRefreshTable', 'btnClearCollection', 'btnDeleteDoc',
-        'panelConsoleLogs', 'scrollConsole', 'btnCopyLogs', 'btnClearLogs',
+        'rtbConsole', 'btnCopyLogs', 'btnClearLogs',
         'txtConsoleInput', 'txtConsolePerf', 'txtStatusBadge',
         'txtStatusMsg', 'txtMemoryUsage'
     )
@@ -97,6 +97,21 @@ try {
         throw "Failed ComboBox item selection."
     }
     Write-Host "[PASS] 5. DynamicDrivers ComboBox Dropdown verified." -ForegroundColor Green
+
+    # 5b. Verify RichTextBox console flow document & selectable text and UTF-32 moon conversion
+    $moonChar = [char]::ConvertFromUtf32(0x1F319)
+    if ([string]::IsNullOrEmpty($moonChar)) { throw "UTF-32 moon emoji conversion failed." }
+    $rtb = $window.FindName('rtbConsole')
+    if ($null -eq $rtb -or -not ($rtb -is [System.Windows.Controls.RichTextBox])) {
+        throw "rtbConsole is not a valid RichTextBox."
+    }
+    $p = [System.Windows.Documents.Paragraph]::new([System.Windows.Documents.Run]::new("Test Console Output"))
+    [void]$rtb.Document.Blocks.Add($p)
+    $textRange = [System.Windows.Documents.TextRange]::new($rtb.Document.ContentStart, $rtb.Document.ContentEnd)
+    if (-not $textRange.Text.Contains("Test Console Output")) {
+        throw "Failed to read text from RichTextBox FlowDocument."
+    }
+    Write-Host "[PASS] 5b. RichTextBox selectable console and UTF-32 moon ($moonChar) validated." -ForegroundColor Green
 
     # 6. Verify seeding
     $script:db.collection("users").add(@{ id = 1; name = "Bill"; age = 47 }) | Out-Null
