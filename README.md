@@ -45,14 +45,7 @@ pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 ```
 
-### Playground Features:
-* 🎨 **Modern Design System:** Built with a clean, high-contrast theme engine (Dark & Light mode support).
-* 🔍 **Visual Query & Filter Builder:** Construct `.where()`, `.orderBy()`, `.limit()`, and `.skip()` queries interactively with real-time feedback.
-* ➕ **Interactive Document Editor:** Insert (`.insert()`), replace (`.set()`), patch (`.update()`), or delete (`.delete()`) documents with pre-loaded sample templates (User, Product, Order).
-* ⚡ **Live PowerShell Code Generator:** Shows the exact PowerShell syntax for your query as you change fields, complete with a one-click copy button.
-* 🗄️ **Database & Collections Explorer:** Real-time table inspect view showing all collections, document counts, disk file sizes, and memory usage.
-* ⏱️ **Sub-Millisecond Performance Metrics:** View real-time query execution timers (e.g. `⏱️ 0.85 ms`).
-* 💾 **Dual Storage Engine:** Switch on-the-fly between persistent disk (`playground.db`) and in-memory (`:memory:`) with instant `VACUUM INTO` synchronization.
+For full details and walkthroughs, see the [Playground Documentation](Playground/README.md).
 
 
 ---
