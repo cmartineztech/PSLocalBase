@@ -2726,18 +2726,30 @@ Assert-Test "TC-73: Native Lexical & ISO Timestamp Ordering for MIN / MAX" {
 Assert-Test "TC-74: Accidental Collection Drop Defense on Ordered Mutation" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        $db.collection("users").doc("u1").set(@{ name = "Alice" })
+        $users = $db.collection("users")
+        $users.doc("u1").set(@{ name = "Alice"; role = "admin" })
+        $users.createIndex("name")
+
+        # Attempting delete with orderBy must throw and preserve collection, documents, and indexes
         $rejected = $false
         try {
-            $db.collection("users").orderBy("name").delete()
-        } catch {
+            $users.orderBy("name").delete()
+        } catch [System.InvalidOperationException] {
             $rejected = $true
         }
         if (-not $rejected) {
-            throw "delete() with orderBy() was not rejected with an exception."
+            throw "delete() with orderBy() was not rejected with InvalidOperationException."
         }
         if (-not $db.collectionExists("users")) {
             throw "Collection was dropped despite orderBy().delete() rejection!"
+        }
+        $doc = $users.doc("u1").get()
+        if ($null -eq $doc -or $doc.name -ne "Alice") {
+            throw "Document u1 was lost or corrupted by rejected delete() operation!"
+        }
+        $indexes = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users' AND name LIKE 'idx_%';")
+        if ($indexes.Count -eq 0) {
+            throw "Index on users was dropped by rejected delete() operation!"
         }
     } finally {
         $db.close()
@@ -2750,14 +2762,27 @@ Assert-Test "TC-74: Accidental Collection Drop Defense on Ordered Mutation" {
 Assert-Test "TC-75: Upsert Identity Auto-Provisioning & GUID Generation" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        $first = $db.collection("users").upsert([pscustomobject][ordered]@{ role = "reader"; name = "Alice" })
-        $second = $db.collection("users").upsert([pscustomobject][ordered]@{ role = "reader"; name = "Bob" })
-        $count = $db.collection("users").count()
+        $users = $db.collection("users")
+
+        # 1. Objects without explicit identity get distinct GUIDs
+        $first = $users.upsert([pscustomobject][ordered]@{ role = "reader"; name = "Alice" })
+        $second = $users.upsert([pscustomobject][ordered]@{ role = "reader"; name = "Bob" })
+        $count = $users.count()
         if ($first -eq $second) {
             throw "Two upserts without identity generated identical keys: $first"
         }
         if ($count -ne 2) {
             throw "Expected 2 documents after upserting distinct objects, got $count."
+        }
+
+        # 2. Objects with explicit id/key/_key preserve that identity
+        $third = $users.upsert(@{ id = "custom_id"; name = "Charlie" })
+        if ($third -ne "custom_id") {
+            throw "Expected explicit id 'custom_id', got: $third"
+        }
+        $charlie = $users.doc("custom_id").get()
+        if ($charlie.name -ne "Charlie") {
+            throw "Explicit key document not found."
         }
     } finally {
         $db.close()
@@ -2772,11 +2797,22 @@ Assert-Test "TC-76: Array Mutation Precision on Adjacent 64-Bit Integers" {
     try {
         $a = [long]9007199254740992
         $b = [long]9007199254740993
-        $db.collection("items").doc("one").set(@{ ids = @($a, $b) })
-        $db.collection("items").doc("one").update(@{ ids = [PSLocalBase]::ArrayRemove($a) })
-        $remaining = @($db.collection("items").doc("one").get().ids)
+        $items = $db.collection("items")
+
+        # 1. ArrayRemove with adjacent Int64 values past 2^53
+        $items.doc("one").set(@{ ids = @($a, $b) })
+        $items.doc("one").update(@{ ids = [PSLocalBase]::ArrayRemove($a) })
+        $remaining = @($items.doc("one").get().ids)
         if ($remaining.Count -ne 1 -or $remaining[0] -ne $b) {
             throw "Expected remaining [$b], got [$($remaining -join ',')]."
+        }
+
+        # 2. ArrayUnion with adjacent Int64 values past 2^53
+        $items.doc("two").set(@{ ids = @($a) })
+        $items.doc("two").update(@{ ids = [PSLocalBase]::ArrayUnion($b) })
+        $unionRes = @($items.doc("two").get().ids)
+        if ($unionRes.Count -ne 2) {
+            throw "ArrayUnion conflated adjacent Int64 values past 2^53! Count: $($unionRes.Count)"
         }
     } finally {
         $db.close()
@@ -2789,11 +2825,26 @@ Assert-Test "TC-76: Array Mutation Precision on Adjacent 64-Bit Integers" {
 Assert-Test "TC-77: Case-Insensitive Collection Schema Index Resolution" {
     $db = [PSLocalBase]::new(":memory:")
     try {
+        # Create unique index on users.email
         [void]$db.collection("users").createIndex("email", @{ unique = $true })
+        $db.collection("users").add(@{ email = "test@example.com" })
+
+        # Drop index via uppercase collection name
         [void]$db.collection("USERS").dropIndex("email")
         $indexes = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%';")
         if ($indexes.Count -ne 0) {
             throw "Indexes still present after dropIndex from USERS: $($indexes.name -join ',')"
+        }
+
+        # Duplicate email insert must now succeed since unique index was dropped
+        $dupThrew = $false
+        try {
+            $db.collection("users").add(@{ email = "test@example.com" })
+        } catch {
+            $dupThrew = $true
+        }
+        if ($dupThrew) {
+            throw "Inserting duplicate email threw error even though unique index was dropped!"
         }
     } finally {
         $db.close()
@@ -2805,16 +2856,37 @@ Assert-Test "TC-77: Case-Insensitive Collection Schema Index Resolution" {
 # ---------------------------------------------------------------------------
 Assert-Test "TC-78: Point-Lookup Scope Preservation in Composite Queries" {
     $db = [PSLocalBase]::new(":memory:")
+    $otherDb = [PSLocalBase]::new(":memory:")
     try {
         $db.collection("a").doc("a1").set(@{ n = 1 })
         $db.collection("b").doc("b1").set(@{ n = 2 })
+
+        # 1. Parity between get() and count() when left branch uses doc()
         $actual = @($db.collection("a").doc("a1").union($db.collection("b")).get())
         $count = $db.collection("a").doc("a1").union($db.collection("b")).count()
         if ($actual.Count -ne 2 -or $count -ne 2) {
             throw "get returned $($actual.Count); count returned $count; expected 2 for both."
         }
+
+        # 2. first() returns 1 document
+        $firstItem = $db.collection("a").doc("a1").union($db.collection("b")).first()
+        if ($null -eq $firstItem) {
+            throw "first() returned null on non-empty union query."
+        }
+
+        # 3. Connection validation across different DB instances throws InvalidOperationException
+        $crossThrew = $false
+        try {
+            $null = $db.collection("a").doc("a1").union($otherDb.collection("b")).get()
+        } catch [System.InvalidOperationException] {
+            $crossThrew = $true
+        }
+        if (-not $crossThrew) {
+            throw "Cross-database union did not throw InvalidOperationException."
+        }
     } finally {
         $db.close()
+        $otherDb.close()
     }
 }
 
@@ -2825,9 +2897,21 @@ Assert-Test "TC-79: Missing Branch Parameter Isolation in Composite Queries" {
     $db = [PSLocalBase]::new(":memory:")
     try {
         $db.collection("b").doc("b1").set(@{ name = "Bob" })
+
+        # 1. Left branch missing with where filter: get() and count() succeed
         $actual = @($db.collection("missing").where("name", "=", "Alice").union($db.collection("b")).get())
         if ($actual.Count -ne 1 -or $actual[0].name -ne "Bob") {
             throw "Expected surviving branch containing Bob; got $($actual.Count) rows."
+        }
+        $count = $db.collection("missing").where("name", "=", "Alice").union($db.collection("b")).count()
+        if ($count -ne 1) {
+            throw "Expected count 1 on union with missing filtered branch, got: $count"
+        }
+
+        # 2. Both branches missing with where filters
+        $emptyActual = @($db.collection("missing1").where("x", "=", 10).union($db.collection("missing2").where("y", "=", 20)).get())
+        if ($emptyActual.Count -ne 0) {
+            throw "Expected 0 rows when both branches are missing."
         }
     } finally {
         $db.close()
@@ -2840,12 +2924,34 @@ Assert-Test "TC-79: Missing Branch Parameter Isolation in Composite Queries" {
 Assert-Test "TC-80: Array Type Enforcement for Array Operators" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        $db.collection("items").doc("array").set(@{ tags = @("admin") })
-        $db.collection("items").doc("scalar").set(@{ tags = "admin" })
-        $db.collection("items").doc("object").set(@{ tags = @{ role = "admin" } })
-        $actual = $db.collection("items").where("tags", "array-contains", "admin").get(@{ keys = $true })
+        $items = $db.collection("items")
+        $items.doc("array").set(@{ tags = @("admin") })
+        $items.doc("scalar").set(@{ tags = "admin" })
+        $items.doc("object").set(@{ tags = @{ role = "admin" } })
+
+        # 1. array-contains must only match array document
+        $actual = $items.where("tags", "array-contains", "admin").get(@{ keys = $true })
         if ($actual.Count -ne 1 -or $actual[0].key -ne "array") {
             throw "Matched keys=[$($actual.key -join ',')]; expected [array]."
+        }
+
+        # 2. array-contains-any must only match array document
+        $anyActual = $items.where("tags", "array-contains-any", @("admin", "guest")).get(@{ keys = $true })
+        if ($anyActual.Count -ne 1 -or $anyActual[0].key -ne "array") {
+            throw "array-contains-any matched non-array! Matched keys=[$($anyActual.key -join ',')]"
+        }
+
+        # 3. delete() with array-contains must ONLY delete the array document, leaving scalar and object intact
+        $items.where("tags", "array-contains", "admin").delete()
+        if ($items.count() -ne 2) {
+            throw "Expected 2 documents surviving after array-contains delete(), got: $($items.count())"
+        }
+        $survivingKeys = @($items.get(@{ keys = $true }) | ForEach-Object { $_.key })
+        if ($survivingKeys -contains "array") {
+            throw "Array document was not deleted!"
+        }
+        if (-not ($survivingKeys -contains "scalar" -and $survivingKeys -contains "object")) {
+            throw "Scalar or object documents were improperly deleted by array filter delete!"
         }
     } finally {
         $db.close()
