@@ -9,7 +9,7 @@
 >
 > Under the hood, it operates as a native NoSQL Document Store built on top of Windows' pre-installed SQLite engine (`winsqlite3.dll`) using its built-in JSON functions. It incurs zero overhead by running in-memory P/Invoke directly in C, returns native PowerShell objects (`[PSCustomObject]`) with seamless dot-notation access, and provides full support for arrays and nested document structures.<br>
 >
-> 📖 **Quick Start:** For step-by-step walkthroughs, full code examples, and advanced usage, see the complete [Quick Start Guide (_DOCS/QUICKSTART.md)](_DOCS/QUICKSTART.md).
+> 📖 **Documentation:** For step-by-step walkthroughs, full code examples, and advanced usage, see the complete [Documentation & Quick Start Guide (_DOCS/README.md)](_DOCS/README.md).
 
 ---
 
@@ -34,6 +34,7 @@
   - [Production Best Practices & Crash Resilience](#production-best-practices--crash-resilience)
 - [Test Suite & Quality Verification](#test-suite--quality-verification)
 - [Architecture & Performance](#architecture--performance)
+- [Documentation & Quick Start Guide](_DOCS/README.md)
 - [Quick Start Guide](_DOCS/QUICKSTART.md)
 - [Technical Specification](_DOCS/SPECIFICATION.md)
 - [Security Policy](SECURITY.md)
