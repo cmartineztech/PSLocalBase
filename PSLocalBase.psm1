@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -54,6 +54,7 @@ class PSLocalBase : System.IDisposable {
     [string]$UnionType = ""
     [bool]$IsCollectionGroup = $false
     [string[]]$GroupTables = @()
+    [bool]$IsComposedInUnion = $false
     [System.Collections.Generic.List[string]]$SelectedFields
 
     # Default constructor (in-memory)
@@ -562,13 +563,46 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Target property name '$cleanAs' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
         }
 
-        $this.PopulateClauses.Add(@{
+        $target = $this.clone()
+        $target.PopulateClauses.Add(@{
             foreignField      = $cleanFField
             foreignCollection = $cleanFCol
             asProperty        = $cleanAs
         })
 
-        return $this
+        return $target
+    }
+
+    [PSLocalBase] clone() {
+        $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
+        $copy = [PSLocalBase]::new($this.DbHandle, $this.FilePath, $this.config, $root)
+        $copy.CurrentCollection = $this.CurrentCollection
+        $copy.CurrentKey = $this.CurrentKey
+        if ($null -ne $this.WhereClauses) { $copy.WhereClauses.AddRange($this.WhereClauses) }
+        if ($null -ne $this.WhereParameters) { $copy.WhereParameters.AddRange($this.WhereParameters) }
+        if ($null -ne $this.PopulateClauses) {
+            foreach ($p in $this.PopulateClauses) {
+                $copy.PopulateClauses.Add([hashtable]::new($p))
+            }
+        }
+        if ($null -ne $this.SelectedFields) { $copy.SelectedFields.AddRange($this.SelectedFields) }
+        $copy.OrderByClause = $this.OrderByClause
+        $copy.LimitValue = $this.LimitValue
+        $copy.SkipValue = $this.SkipValue
+        $copy.UnionQuery = $this.UnionQuery
+        $copy.UnionType = $this.UnionType
+        $copy.IsCollectionGroup = $this.IsCollectionGroup
+        $copy.IsComposedInUnion = $this.IsComposedInUnion
+        if ($null -ne $this.GroupTables) {
+            $copy.GroupTables = [string[]]$this.GroupTables.Clone()
+        }
+        $copy.JournalMode = $this.JournalMode
+        $copy.InTransaction = $this.InTransaction
+        return $copy
+    }
+
+    [PSLocalBase] fork() {
+        return $this.clone()
     }
 
     # -----------------------------------------------------------------------
@@ -578,30 +612,40 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
         }
-        if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+        }
+        if ($otherQuery.DbHandle -ne $this.DbHandle) {
+            throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
         }
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $this.UnionQuery = $otherQuery
-        $this.UnionType = "UNION"
-        return $this
+        $otherQuery.IsComposedInUnion = $true
+        $target = $this.clone()
+        $target.UnionQuery = $otherQuery.clone()
+        $target.UnionType = "UNION"
+        return $target
     }
 
     [PSLocalBase] unionAll([PSLocalBase]$otherQuery) {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
         }
-        if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+        }
+        if ($otherQuery.DbHandle -ne $this.DbHandle) {
+            throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
         }
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $this.UnionQuery = $otherQuery
-        $this.UnionType = "UNION ALL"
-        return $this
+        $otherQuery.IsComposedInUnion = $true
+        $target = $this.clone()
+        $target.UnionQuery = $otherQuery.clone()
+        $target.UnionType = "UNION ALL"
+        return $target
     }
 
     [PSLocalBase] collectionGroup([string]$pattern) {
@@ -711,13 +755,14 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
         }
 
-        $this.CurrentKey = $resolvedKey
-        $this.WhereClauses.Clear()
-        $this.WhereParameters.Clear()
+        $target = $this.clone()
+        $target.CurrentKey = $resolvedKey
+        $target.WhereClauses.Clear()
+        $target.WhereParameters.Clear()
 
         # Automatic schema provisioning on target navigation (.doc())
-        $this._EnsureCollectionTable()
-        return $this
+        $target._EnsureCollectionTable()
+        return $target
     }
 
     [bool] _ExceedsDepth([object]$obj, [int]$maxDepth, [int]$currentDepth) {
@@ -1050,8 +1095,9 @@ class PSLocalBase : System.IDisposable {
             }
         }
 
-        # Clear any stale document key when applying query filters
-        $this.CurrentKey = ""
+        # Work on an isolated clone to ensure query immutability
+        $target = $this.clone()
+        $target.CurrentKey = ""
 
         # Format JSON field selector using trimmed field path
         $jsonField = "`$.$fieldToCheck"
@@ -1076,27 +1122,27 @@ class PSLocalBase : System.IDisposable {
                           $elem -is [int32] -or $elem -is [uint32] -or $elem -is [int64] -or
                           $elem -is [single] -or $elem -is [double] -or $elem -is [decimal]) {
                     $placeholders.Add("?")
-                    $this.WhereParameters.Add($elem)
+                    $target.WhereParameters.Add($elem)
                 } else {
                     $placeholders.Add("?")
-                    $this.WhereParameters.Add([string]$elem)
+                    $target.WhereParameters.Add([string]$elem)
                 }
             }
             if ($placeholders.Count -eq 0) {
                 if ($sqlOp -eq 'IN') {
-                    $this.WhereClauses.Add("1 = 0")
+                    $target.WhereClauses.Add("1 = 0")
                 } else {
-                    $this.WhereClauses.Add("1 = 1")
+                    $target.WhereClauses.Add("1 = 1")
                 }
-                return $this
+                return $target
             }
             if ($sqlOp -eq 'IN') {
                 $clause = "json_extract(doc, '$jsonField') IN (" + [string]::Join(", ", $placeholders) + ")"
             } else {
                 $clause = "(json_extract(doc, '$jsonField') IS NOT NULL AND json_extract(doc, '$jsonField') NOT IN (" + [string]::Join(", ", $placeholders) + "))"
             }
-            $this.WhereClauses.Add($clause)
-            return $this
+            $target.WhereClauses.Add($clause)
+            return $target
         }
 
         # Case A2: array-contains
@@ -1106,17 +1152,17 @@ class PSLocalBase : System.IDisposable {
             }
             if ($value -is [bool]) {
                 $boolLit = if ($value) { "1" } else { "0" }
-                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit))")
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit))")
             } elseif ($value -is [byte] -or $value -is [sbyte] -or $value -is [int16] -or $value -is [uint16] -or
                       $value -is [int32] -or $value -is [uint32] -or $value -is [int64] -or
                       $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
-                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
-                $this.WhereParameters.Add($value)
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
+                $target.WhereParameters.Add($value)
             } else {
-                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
-                $this.WhereParameters.Add([string]$value)
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
+                $target.WhereParameters.Add([string]$value)
             }
-            return $this
+            return $target
         }
 
         # Case A3: array-contains-any
@@ -1130,45 +1176,45 @@ class PSLocalBase : System.IDisposable {
                 @($value)
             }
             if ($items.Count -eq 0) {
-                $this.WhereClauses.Add("1 = 0")
-                return $this
+                $target.WhereClauses.Add("1 = 0")
+                return $target
             }
             $jsonArray = ConvertTo-Json -InputObject $items -Compress
-            $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?))))")
-            $this.WhereParameters.Add($jsonArray)
-            return $this
+            $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?))))")
+            $target.WhereParameters.Add($jsonArray)
+            return $target
         }
 
         # Case A4: array length / size
         if ($sqlOp -eq 'LENGTH' -or $sqlOp -eq 'ARRAY-LENGTH' -or $sqlOp -eq 'SIZE') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) = $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) = $len")
+            return $target
         }
         if ($sqlOp -eq 'LENGTH>' -or $sqlOp -eq 'LENGTH-GT' -or $sqlOp -eq 'SIZE>') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) > $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) > $len")
+            return $target
         }
         if ($sqlOp -eq 'LENGTH>=' -or $sqlOp -eq 'LENGTH-GE' -or $sqlOp -eq 'SIZE>=') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) >= $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) >= $len")
+            return $target
         }
         if ($sqlOp -eq 'LENGTH<' -or $sqlOp -eq 'LENGTH-LT' -or $sqlOp -eq 'SIZE<') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) < $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) < $len")
+            return $target
         }
         if ($sqlOp -eq 'LENGTH<=' -or $sqlOp -eq 'LENGTH-LE' -or $sqlOp -eq 'SIZE<=') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) <= $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) <= $len")
+            return $target
         }
         if ($sqlOp -eq 'LENGTH!=' -or $sqlOp -eq 'LENGTH-NE' -or $sqlOp -eq 'SIZE!=') {
             $len = [int]$value
-            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) != $len")
-            return $this
+            $target.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) != $len")
+            return $target
         }
 
         # Case A5: type / json-type
@@ -1178,46 +1224,46 @@ class PSLocalBase : System.IDisposable {
             }
             $targetType = [string]$value.ToString().Trim().ToLowerInvariant()
             if ($targetType -eq 'number' -or $targetType -eq 'numeric') {
-                $this.WhereClauses.Add("json_type(doc, '$jsonField') IN ('integer', 'real')")
+                $target.WhereClauses.Add("json_type(doc, '$jsonField') IN ('integer', 'real')")
             } else {
                 $validTypes = @('null', 'integer', 'real', 'text', 'array', 'object')
                 if ($validTypes -notcontains $targetType) {
                     throw [System.ArgumentException]::new("Invalid JSON type '$targetType'. Expected one of: $($validTypes -join ', '), number, numeric.")
                 }
-                $this.WhereClauses.Add("json_type(doc, '$jsonField') = ?")
-                $this.WhereParameters.Add($targetType)
+                $target.WhereClauses.Add("json_type(doc, '$jsonField') = ?")
+                $target.WhereParameters.Add($targetType)
             }
-            return $this
+            return $target
         }
 
         # Case B: Null comparisons
         if ($null -eq $value) {
             if ($sqlOp -eq '=') {
-                $this.WhereClauses.Add("json_extract(doc, '$jsonField') IS NULL")
-                return $this
+                $target.WhereClauses.Add("json_extract(doc, '$jsonField') IS NULL")
+                return $target
             } elseif ($sqlOp -eq '!=') {
-                $this.WhereClauses.Add("json_extract(doc, '$jsonField') IS NOT NULL")
-                return $this
+                $target.WhereClauses.Add("json_extract(doc, '$jsonField') IS NOT NULL")
+                return $target
             } else {
-                $this.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp NULL")
-                return $this
+                $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp NULL")
+                return $target
             }
         }
 
         # Case C: Strongly-typed Boolean
         if ($value -is [bool]) {
             $boolLit = if ($value) { "1" } else { "0" }
-            $this.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp $boolLit")
-            return $this
+            $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp $boolLit")
+            return $target
         }
 
         # Case D: Strongly-typed Numbers
         if ($value -is [byte] -or $value -is [sbyte] -or $value -is [int16] -or $value -is [uint16] -or
             $value -is [int32] -or $value -is [uint32] -or $value -is [int64] -or
             $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
-            $this.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
-            $this.WhereParameters.Add($value)
-            return $this
+            $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
+            $target.WhereParameters.Add($value)
+            return $target
         }
 
         # Case E: String values (PowerShell -like conversion to SQL wildcard)
@@ -1228,10 +1274,10 @@ class PSLocalBase : System.IDisposable {
             }
         }
 
-        $this.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
-        $this.WhereParameters.Add($paramVal)
+        $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
+        $target.WhereParameters.Add($paramVal)
 
-        return $this
+        return $target
     }
 
     [PSLocalBase] whereLength([string]$field, [int]$count) {
@@ -1264,8 +1310,9 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $fields -or $fields.Length -eq 0) {
             throw [System.ArgumentException]::new("Fields array cannot be null or empty in select().")
         }
-        if ($null -eq $this.SelectedFields) {
-            $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
+        $target = $this.clone()
+        if ($null -eq $target.SelectedFields) {
+            $target.SelectedFields = [System.Collections.Generic.List[string]]::new()
         }
         foreach ($f in $fields) {
             if (-not [string]::IsNullOrWhiteSpace($f)) {
@@ -1274,12 +1321,12 @@ class PSLocalBase : System.IDisposable {
                 if ($clean -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
                     throw [System.ArgumentException]::new("Field name '$f' is invalid for select(). Only alphanumeric characters, underscores, and dots are allowed.")
                 }
-                if (-not $this.SelectedFields.Contains($clean)) {
-                    $this.SelectedFields.Add($clean)
+                if (-not $target.SelectedFields.Contains($clean)) {
+                    $target.SelectedFields.Add($clean)
                 }
             }
         }
-        return $this
+        return $target
     }
 
     [PSLocalBase] select([string[]]$fields) {
@@ -1327,25 +1374,28 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Order direction must be 'asc' or 'desc'. Provided: '$direction'")
         }
 
+        $target = $this.clone()
         $jsonField = "`$.$fieldToCheck"
-        $this.OrderByClause = "ORDER BY json_extract(doc, '$jsonField') $dir"
-        return $this
+        $target.OrderByClause = "ORDER BY json_extract(doc, '$jsonField') $dir"
+        return $target
     }
 
     [PSLocalBase] limit([int]$count) {
         if ($count -lt 0) {
             throw [System.ArgumentOutOfRangeException]::new("Limit count must be greater than or equal to 0.")
         }
-        $this.LimitValue = $count
-        return $this
+        $target = $this.clone()
+        $target.LimitValue = $count
+        return $target
     }
 
     [PSLocalBase] skip([int]$offset) {
         if ($offset -lt 0) {
             throw [System.ArgumentOutOfRangeException]::new("Skip offset must be greater than or equal to 0.")
         }
-        $this.SkipValue = $offset
-        return $this
+        $target = $this.clone()
+        $target.SkipValue = $offset
+        return $target
     }
 
     [object] get() {
@@ -1588,7 +1638,6 @@ class PSLocalBase : System.IDisposable {
 
             return [PSCustomObject[]]$results.ToArray()
         } finally {
-            $this._ResetQueryState()
         }
     }
 
@@ -1597,18 +1646,15 @@ class PSLocalBase : System.IDisposable {
     }
 
     [object] first([hashtable]$options) {
-        try {
-            $this.LimitValue = 1
-            $res = $this.get($options)
-            if ($null -eq $res) { return $null }
-            if ($res -is [System.Array]) {
-                if ($res.Length -gt 0) { return $res[0] }
-                return $null
-            }
-            return $res
-        } finally {
-            $this._ResetQueryState()
+        $clone = $this.clone()
+        $clone.LimitValue = 1
+        $res = $clone.get($options)
+        if ($null -eq $res) { return $null }
+        if ($res -is [System.Array]) {
+            if ($res.Length -gt 0) { return $res[0] }
+            return $null
         }
+        return $res
     }
 
     [bool] exists() {
@@ -1634,7 +1680,6 @@ class PSLocalBase : System.IDisposable {
                 $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
                 return ($rows.Count -gt 0)
             } finally {
-                $this._ResetQueryState()
             }
         }
 
@@ -1649,12 +1694,10 @@ class PSLocalBase : System.IDisposable {
                 $rows = $this.limit(1).get()
                 return ($null -ne $rows -and $rows.Count -gt 0)
             } finally {
-                $this._ResetQueryState()
             }
         }
 
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             return $false
         }
         try {
@@ -1693,7 +1736,6 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
         }
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             return @()
         }
         try {
@@ -1864,7 +1906,6 @@ class PSLocalBase : System.IDisposable {
                 }
                 return 0
             } finally {
-                $this._ResetQueryState()
             }
         }
 
@@ -1938,7 +1979,6 @@ class PSLocalBase : System.IDisposable {
                 }
                 return 0
             } finally {
-                $this._ResetQueryState()
             }
         }
 
@@ -1947,7 +1987,6 @@ class PSLocalBase : System.IDisposable {
         }
 
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             return 0
         }
 
@@ -1991,7 +2030,6 @@ class PSLocalBase : System.IDisposable {
             }
             return 0
         } finally {
-            $this._ResetQueryState()
         }
     }
 
@@ -2451,15 +2489,24 @@ class PSLocalBase : System.IDisposable {
                     $fVal = if ($isFloatA) { [double]$a } else { [double]$b }
                     $dVal = if ($isDecA) { [decimal]$a } else { [decimal]$b }
                     if ([double]::IsNaN($fVal) -or [double]::IsInfinity($fVal)) { return $false }
+                    if ([Math]::Abs($fVal) -lt 1e-28) {
+                        return $fVal -eq 0.0 -and $dVal -eq [decimal]0
+                    }
                     try {
                         $fStrR = $fVal.ToString("R", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecR = [decimal]::Parse($fStrR, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
-                        if ($dVal -eq $fDecR -and ($fDecR -ne [decimal]0 -or $fVal -eq 0.0)) { return $true }
+                        if ($dVal -eq $fDecR) {
+                            $fBackR = [double]::Parse($fDecR.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
+                            if ($fBackR -eq $fVal) { return $true }
+                        }
                     } catch {}
                     try {
                         $fStrG = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecG = [decimal]::Parse($fStrG, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
-                        if ($dVal -eq $fDecG -and ($fDecG -ne [decimal]0 -or $fVal -eq 0.0)) { return $true }
+                        if ($dVal -eq $fDecG) {
+                            $fBackG = [double]::Parse($fDecG.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
+                            if ($fBackG -eq $fVal) { return $true }
+                        }
                     } catch {}
                     return $false
                 }
@@ -2856,12 +2903,16 @@ try {
             if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
                 throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
             }
-            $this.UnionQuery = $otherQuery
+            if ($otherQuery.DbHandle -ne $this.DbHandle) {
+                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
             if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
                 throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
-            $this.UnionType = "UNION"
-            return $this
+            $target = $this.clone()
+            $target.UnionQuery = $otherQuery.clone()
+            $target.UnionType = "UNION"
+            return $target
         } -Force
     }
 
@@ -2874,12 +2925,16 @@ try {
             if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
                 throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
             }
-            $this.UnionQuery = $otherQuery
+            if ($otherQuery.DbHandle -ne $this.DbHandle) {
+                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
             if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
                 throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
-            $this.UnionType = "UNION ALL"
-            return $this
+            $target = $this.clone()
+            $target.UnionQuery = $otherQuery.clone()
+            $target.UnionType = "UNION ALL"
+            return $target
         } -Force
     }
 

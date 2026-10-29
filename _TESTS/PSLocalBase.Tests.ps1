@@ -2958,6 +2958,100 @@ Assert-Test "TC-80: Array Type Enforcement for Array Operators" {
     }
 }
 # ---------------------------------------------------------------------------
+# TC-81: Double/Decimal Boundary Quantization & Array Mutation Isolation (Issue #22)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-81: Double/Decimal Boundary Quantization & Array Mutation Isolation (Issue #22)" {
+    $eq1 = [PSLocalBase]::_JsonValuesEqual([double]6e-29, [decimal]1e-28)
+    $eq2 = [PSLocalBase]::_JsonValuesEqual([decimal]1e-28, [double]6e-29)
+    $eq3 = [PSLocalBase]::_JsonValuesEqual([double]1e-28, [decimal]1e-28)
+    if ($eq1 -or $eq2) { throw "6e-29 must not equal 1e-28 due to decimal quantization!" }
+    if (-not $eq3) { throw "1e-28 double must equal 1e-28 decimal!" }
+
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection('numbers').doc('one').set(@{ values = @([double]6e-29) })
+        $db.collection('numbers').doc('one').update(@{ values = [PSLocalBase]::ArrayRemove([decimal]1e-28) })
+        $resR = $db.collection('numbers').doc('one').get()
+        if ($resR.values.Count -ne 1) { throw "ArrayRemove failed to preserve 6e-29 when removing 1e-28" }
+        $db.collection('numbers').doc('one').update(@{ values = [PSLocalBase]::ArrayUnion([decimal]1e-28) })
+        $resU = $db.collection('numbers').doc('one').get()
+        if ($resU.values.Count -ne 2) { throw "ArrayUnion failed to add distinct 1e-28" }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
+# TC-82: Composite Query Defensive Copy & Snapshot Isolation (Issue #23 / #25)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-82: Composite Query Defensive Copy & Snapshot Isolation (Issue #23 / #25)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $null = $db.collection("a").add(@{ val = 10 })
+        $null = $db.collection("b").add(@{ val = 20 })
+        $null = $db.collection("b").add(@{ val = 30 })
+
+        $right = $db.collection("b")
+        $query = $db.collection("a").union($right)
+        $null = $right.where("val", ">", 100)
+        $res = @($query.get())
+        if ($res.Count -ne 3) {
+            throw "Expected 3 records from union after right branch where mutation, got $($res.Count)."
+        }
+        $cnt = $query.count()
+        if ($cnt -ne 3) {
+            throw "Expected count() of 3 on union after right branch where mutation, got $cnt."
+        }
+        $queryAll = $db.collection("a").unionAll($right)
+        $null = $right.where("val", ">", 500)
+        $resAll = @($queryAll.get())
+        if ($resAll.Count -ne 3) {
+            throw "Expected 3 records from unionAll after right branch where mutation, got $($resAll.Count)."
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
+# TC-83: Query Builder Immutability, Bifurcation & Explicit Fork (Issue #24 / #26)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-83: Query Builder Immutability, Bifurcation & Explicit Fork (Issue #24 / #26)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $null = $db.collection("data").add(@{ val = 10 })
+        $null = $db.collection("data").add(@{ val = 20 })
+        $null = $db.collection("data").add(@{ val = 30 })
+
+        $base = $db.collection("data")
+        $filtered = $base.where("val", ">", 15)
+
+        if ($base.count() -ne 3) { throw "base was mutated! Expected 3, got $($base.count())" }
+        if ($filtered.count() -ne 2) { throw "filtered.count() expected 2, got $($filtered.count())" }
+        if ($filtered.count() -ne 2) { throw "second filtered.count() expected 2, got $($filtered.count())" }
+        if (@($filtered.get()).Count -ne 2) { throw "filtered.get() expected 2, got $(@($filtered.get()).Count)" }
+        if ($base.count() -ne 3) { throw "base count after filtered execution should remain 3!" }
+
+        $null = $db.collection("users").doc("u1").set(@{ role = "admin"; active = $true })
+        $null = $db.collection("users").doc("u2").set(@{ role = "admin"; active = $false })
+        $null = $db.collection("users").doc("u3").set(@{ role = "reader"; active = $true })
+
+        $colUsers = $db.collection("users")
+        $admins = $colUsers.where("role", "=", "admin")
+        $active = $colUsers.where("active", "=", $true)
+        if ([object]::ReferenceEquals($admins, $active)) { throw "admins and active cannot be the same reference!" }
+
+        $adminKeys = @($admins.get(@{ keys = $true })).key -join ','
+        $activeKeys = @($active.get(@{ keys = $true })).key -join ','
+        if ($adminKeys -ne "u1,u2") { throw "admins keys expected u1,u2, got $adminKeys" }
+        if ($activeKeys -ne "u1,u3") { throw "active keys expected u1,u3, got $activeKeys" }
+
+        $forked = $admins.fork().where("active", "=", $true)
+        $forkedKeys = @($forked.get(@{ keys = $true })).key -join ','
+        if ($forkedKeys -ne "u1") { throw "forked admin+active keys expected u1, got $forkedKeys" }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan
