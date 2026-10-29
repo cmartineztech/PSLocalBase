@@ -71,17 +71,16 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 ## System Requirements & Compatibility
 
-### Verified in Automated CI
-- **Operating Systems:** Windows 10 / 11 x64, Windows Server 2019 / 2022
-- **PowerShell Editions:** PowerShell 7.x (Core / .NET 6+) and Windows PowerShell 5.1 (Desktop / .NET Framework 4.x)
-- **CI Test Suite:** Continuous integration executes the complete test suite (`_TESTS/run-tests.ps1`, 80+ test cases) across matrix builds on both PowerShell editions on every commit.
+### Platform Support Matrix
 
-### Supported by Architecture (Windows System Component `winsqlite3.dll`)
-- **Operating Systems:** Windows 10 (Build 1809+), Windows 11 (all editions), Windows Server (2019, 2022, 2025), Windows PE (WinPE x64 with optional `WinPE-NetFX` and native `winsqlite3.dll`).
-- **Processor Architectures:**
-  - **x64:** Native 64-bit execution against `System32\winsqlite3.dll`.
-  - **ARM64:** Native ARM64 execution utilizing the native OS bitness and ARM64 `winsqlite3.dll` provided directly by Windows on ARM devices.
-- **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on all modern Windows installations.
+| Tier | Operating System / Environment | Testing & Support Status |
+| :--- | :--- | :--- |
+| **Verified in CI & Local Suites** | Windows 10 / 11 (x64) | Tested on GitHub Actions (`windows-latest`) and local workstations across PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). |
+| **Supported by Design** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Supported by design via native System32 `winsqlite3.dll` and .NET Framework 4.5+ / .NET Core runtime. |
+| **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
+
+- **CI Test Suite:** Continuous integration executes the complete multi-suite test runner (`_TESTS/run-tests.ps1`, 122+ test cases) on both PowerShell 7 and Windows PowerShell 5.1 on every commit.
+- **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
 

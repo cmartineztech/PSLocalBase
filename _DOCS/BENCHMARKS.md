@@ -26,7 +26,7 @@ Tests were conducted across both **5,000 records** and **10,000 records** across
 - **Warm-Up Iterations & Execution Measurement:**
   - Measurements utilize high-resolution `[System.Diagnostics.Stopwatch]` timing windows with pre-run memory stabilization via `[System.GC]::Collect()` and `[System.GC]::WaitForPendingFinalizers()`.
   - Initial pipeline warm-ups ensure that dynamic P/Invoke compilation (via `Add-Type`) and .NET JIT optimization overhead are excluded from timing measurements.
-  - While single-run execution figures are recorded in the standard benchmark outputs (`benchmark-10k.ps1` and `benchmark-comparison.ps1`), multi-iteration runs demonstrate that median timings remain consistent within ±3% variance.
+  - Figures reported in the tables below represent reproducible benchmark executions recorded via `_TESTS/benchmark-comparison.ps1` and `_TESTS/benchmark-10k.ps1` on local NVMe disk. Multi-iteration runs show tight execution bounds; formal statistical distribution tables are documented separately for versioned regression tracking.
 - **Scope of Comparison:**
   - This benchmark evaluates the embedded SQLite NoSQL document model (`PSLocalBase`) against PowerShell's standard flat JSON document persistence paradigm (`Get-Content`, `ConvertFrom-Json`, `ConvertTo-Json`, `Set-Content`).
   - The persistent disk comparison focuses on the architectural cost of individual record mutations: PSLocalBase performs $O(\log N)$ in-place B-Tree page modifications appended to a WAL log, whereas naive flat JSON persistence requires reading, deserializing, modifying, re-serializing, and overwriting the entire multi-megabyte JSON array to update or delete a single document.

@@ -297,6 +297,12 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
         }
+        if ($this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot create collection from a collectionGroup. Collection groups are read-only.")
+        }
+        if ($null -ne $this.UnionQuery) {
+            throw [System.InvalidOperationException]::new("Cannot create collection on a composite query (union).")
+        }
         $this._EnsureCollectionTable()
         return $this
     }
@@ -314,7 +320,7 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to create index. Call .collection('name').createIndex('field')")
         }
-        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
             throw [System.InvalidOperationException]::new("createIndex is not supported on composite queries (union) or collection groups.")
         }
         if ([string]::IsNullOrWhiteSpace($field)) {
@@ -399,7 +405,7 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to drop index. Call .collection('name').dropIndex('field')")
         }
-        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
             throw [System.InvalidOperationException]::new("dropIndex is not supported on composite queries (union) or collection groups.")
         }
         if ([string]::IsNullOrWhiteSpace($field)) {
@@ -440,8 +446,10 @@ class PSLocalBase : System.IDisposable {
             $shouldDrop = $false
             if (-not [string]::IsNullOrEmpty($idxSql) -and $idxSql -cmatch $jsonExtractRegex) {
                 $shouldDrop = $true
-            } elseif ($idxName -ceq $indexName -or $idxName -ceq $rawIndexName -or $idxName -clike $hashPattern16 -or $idxName -clike $hashPattern8) {
-                $shouldDrop = $true
+            } elseif ([string]::IsNullOrEmpty($idxSql) -or $idxSql -notmatch "json_extract\s*\(\s*doc") {
+                if ($idxName -ceq $indexName -or $idxName -ceq $rawIndexName -or $idxName -clike $hashPattern16 -or $idxName -clike $hashPattern8) {
+                    $shouldDrop = $true
+                }
             }
 
             if ($shouldDrop) {
@@ -567,6 +575,9 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
         }
+        if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+            throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+        }
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
@@ -578,6 +589,9 @@ class PSLocalBase : System.IDisposable {
     [PSLocalBase] unionAll([PSLocalBase]$otherQuery) {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
+        }
+        if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+            throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
         }
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
@@ -908,7 +922,7 @@ class PSLocalBase : System.IDisposable {
         if ($this.IsCollectionGroup) {
             throw [System.InvalidOperationException]::new("Cannot upsert documents in a collectionGroup. Collection groups are read-only.")
         }
-        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0) {
+        if ($null -ne $this.UnionQuery) {
             throw [System.InvalidOperationException]::new("Cannot upsert documents on a composite query (union).")
         }
 
@@ -1731,7 +1745,7 @@ class PSLocalBase : System.IDisposable {
         if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in $aggFunc(). Only alphanumeric characters, underscores, and dots are allowed.")
         }
-        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
             throw [System.InvalidOperationException]::new("Aggregate functions ($aggFunc) are not supported on composite queries (union) or collection groups.")
         }
         if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue) {
@@ -2416,7 +2430,9 @@ class PSLocalBase : System.IDisposable {
                         return $false
                     }
                     try {
-                        return $dVal -eq [decimal]$fVal
+                        $fStr = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
+                        $fDec = [decimal]::Parse($fStr, [System.Globalization.CultureInfo]::InvariantCulture)
+                        return $dVal -eq $fDec
                     } catch {
                         return $false
                     }
@@ -2779,6 +2795,9 @@ try {
             if ($null -eq $otherQuery) {
                 throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
             }
+            if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+            }
             $this.UnionQuery = $otherQuery
             $this.UnionType = "UNION"
             return $this
@@ -2790,6 +2809,9 @@ try {
             param([PSLocalBase]$otherQuery)
             if ($null -eq $otherQuery) {
                 throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
+            }
+            if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
             }
             $this.UnionQuery = $otherQuery
             $this.UnionType = "UNION ALL"
