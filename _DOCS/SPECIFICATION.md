@@ -156,18 +156,21 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ---
 
-## 5. Class Architecture: `PSLocalBase`
+## 5. Class Architecture: `PSLocalBase` & `PSLocalBaseCollection`
 
 ### 5.1. Internal State Properties
 * `[IntPtr]$DbHandle`: Memory pointer to the open SQLite connection.
 * `[string]$FilePath`: Normalized absolute path to the database file (or `:memory:`).
 * `[string]$CurrentCollection`: Currently active collection name.
 * `[string]$CurrentKey`: Currently targeted document key.
-* `[System.Collections.Generic.List[string]]$WhereClauses`: Accumulated SQL where filter conditions.
-* `[System.Collections.Generic.List[string]]$WhereParameters`: Accumulated parameter values for binding.
+* `[System.Collections.ArrayList]$WhereClauses`: Accumulated SQL where filter conditions.
+* `[System.Collections.ArrayList]$WhereParameters`: Accumulated parameter values for binding.
 * `[string]$OrderByClause`: Active SQL sorting statement.
 * `[object]$LimitValue`: Maximum document count constraint.
-* `[hashtable]$config`: Configuration settings (`@{ debug = $false }`).
+* `[object]$SkipValue`: Offset record count constraint.
+* `[hashtable]$config`: Configuration settings (`@{ debug = $false; depth = 20 }`).
+* `[bool]$IsChildInstance`: Identifies collection instances attached to a parent database.
+* `[bool]$IsComposedInUnion`: Tracks composite query membership to reject invalid nesting.
 
 ---
 
@@ -182,54 +185,63 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Returns an array of all active collection names found in the database.
 * **`[bool] collectionExists([string]$name)`**
   * Checks whether a collection table currently exists in SQLite `sqlite_master`.
-* **`[PSLocalBase] collection([string]$name)`**
-  * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, and resets query state. Navigation is lazy: does not create empty/ghost tables in SQLite.
-* **`[PSLocalBase] create()` / `[PSLocalBase] createCollection([string]$name)`**
-  * Explicitly provisions the collection table in SQLite immediately, matching the counterpart `.delete()` method.
-* **`[PSLocalBase] doc([object]$keyOrCriteria)`**
+* **`[PSLocalBaseCollection] collection([string]$name)`**
+  * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, and returns a fresh collection instance. Navigation is lazy: does not create empty/ghost tables in SQLite.
+* **`[PSLocalBaseCollection] collectionGroup([string]$pattern)`**
+  * Creates a sharded query across multiple tables matching `$pattern`. Rejects `.drop()` to prevent accidental data loss.
+* **`[PSLocalBaseCollection] create()` / `[PSLocalBaseCollection] createCollection([string]$name)`**
+  * Explicitly provisions the collection table in SQLite immediately.
+* **`[PSLocalBaseCollection] doc([object]$keyOrCriteria)`**
   * Resolves key from string, number, hashtable, or criteria object, and automatically provisions the collection table in SQLite if it does not already exist.
 
-#### Writing
+#### Writing & Mutations
 * **`[void] set([object]$data, [hashtable]$options)`**
   * On a targeted document: performs an atomic `INSERT OR REPLACE` using parameterized `?` bindings.
   * On a collection: atomically drops existing data and repopulates all records inside an ACID transaction.
 * **`[string] add([object]$data, [string]$customKey = "")`**
   * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes `.set()`, and returns the key.
 * **`[void] update([object]$partialData)`**
-  * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Upserts if document does not exist.
+  * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Supports atomic `ArrayUnion` and `ArrayRemove` with structural equality and subnormal float preservation ($|x| < 10^{-28}$). Upserts if document does not exist.
 * **`[string] upsert([object]$data, [string]$customKey = "")`**
   * Performs an atomic single-step `INSERT INTO [collection] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` without read-modify-write overhead. Supports auto-generated GUID or explicit custom keys.
 
-#### Querying & Filtering
-* **`[PSLocalBase] where([string]$field, [string]$operator, [object]$value)`**
+#### Querying, Forking & Filtering
+* **`[PSLocalBaseCollection] clone()` / `[PSLocalBaseCollection] fork()`**
+  * Performs an isolated deep clone of the active query pipeline (where clauses, bound parameters, order by, limit, skip, projections, and populates). Enables branching queries safely without cross-query mutation.
+* **`[PSLocalBaseCollection] where([string]$field, [string]$operator, [object]$value)`**
+  * Returns an isolated child query instance (`clone()`) with the added condition, preserving the caller unmodified.
   * Sanitizes field path via whitelist regex `^[a-zA-Z0-9_.\[\]]+$` supporting dot navigation and array indexing (`tags[0]`, `roles[1].title`).
   * Sanitizes operators (`=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `not-in`, `array-contains`, `array-contains-any`, `length`, `length>`, `length>=`, `length<`, `length<=`, `length!=`, `type`, `json-type`).
   * Enforces parameterized query binding (`?`) for string values and dynamic placeholders for `IN`.
   * Extracts JSON fields using SQLite's native `json_extract(doc, '$.field')`.
-* **`[PSLocalBase] whereLength([string]$field, [string]$op, [int]$expected)` / `whereLength([string]$field, [int]$count)`**
-  * Filters documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`.
-* **`[PSLocalBase] whereType([string]$field, [string]$expectedType)`**
-  * Filters documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `number`) via SQLite's `json_type(doc, '$.field')`.
-* **`[PSLocalBase] select([string[]]$fields)`**
-  * Projects only requested fields directly in SQLite using `json_object('field', json_extract(doc, '$.field'))`, drastically reducing PowerShell deserialization overhead and memory allocation.
-* **`[PSLocalBase] orderBy([string]$field, [string]$direction = "asc")`**
-  * Validates field whitelist and directions (`ASC`/`DESC`).
-* **`[PSLocalBase] limit([int]$count)`**
-  * Constrains the result set size.
-* **`[PSLocalBase] skip([int]$offset)`**
-  * Skips `$offset` records for offset-based query pagination (`OFFSET`).
+* **`[PSLocalBaseCollection] whereLength([string]$field, [string]$op, [int]$expected)` / `whereLength([string]$field, [int]$count)`**
+  * Returns a cloned query instance filtering documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`.
+* **`[PSLocalBaseCollection] whereType([string]$field, [string]$expectedType)`**
+  * Returns a cloned query instance filtering documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `number`) via SQLite's `json_type(doc, '$.field')`.
+* **`[PSLocalBaseCollection] select([string[]]$fields)`**
+  * Returns a cloned query instance projecting only requested fields directly in SQLite using `json_object('field', json_extract(doc, '$.field'))`, drastically reducing PowerShell deserialization overhead and memory allocation.
+* **`[PSLocalBaseCollection] orderBy([string]$field, [string]$direction = "asc")`**
+  * Returns a cloned query instance with validated sorting direction (`ASC`/`DESC`).
+* **`[PSLocalBaseCollection] limit([int]$count)`**
+  * Returns a cloned query instance with constrained result set size.
+* **`[PSLocalBaseCollection] skip([int]$offset)`**
+  * Returns a cloned query instance skipping `$offset` records for offset-based query pagination (`OFFSET`).
+* **`[PSLocalBaseCollection] populate([string]$localField, [string]$targetCollection, [string]$foreignKey, [string]$asProperty)`**
+  * Returns a cloned query instance configured with relational `LEFT JOIN` resolution.
+* **`[PSLocalBaseCollection] union([PSLocalBaseCollection]$otherQuery)` / `unionAll([PSLocalBaseCollection]$otherQuery)`**
+  * Returns a new composite query instance capturing defensive clones of both branches. Mutations to either source branch after calling `union()` do not affect the composite query. Rejects nested unions and cross-connection queries.
 * **`[int] count()`**
-  * Returns the count of matching documents executed directly in SQL (`SELECT COUNT(*)`) with zero row deserialization in memory.
+  * Returns the count of matching documents executed directly in SQL (`SELECT COUNT(*)`) with zero row deserialization in memory. Non-destructive: preserves query filter clauses for reuse.
 * **`[bool] exists()`**
-  * High-performance boolean check executing `SELECT 1 ... LIMIT 1` directly in SQL ($O(1)$ on indexed lookups) without loading or deserializing documents.
+  * High-performance boolean check executing `SELECT 1 ... LIMIT 1` directly in SQL ($O(1)$ on indexed lookups) without loading or deserializing documents. Non-destructive.
 * **`[object] first([hashtable]$options)`**
-  * Retrieves the first matching document with a hardcoded `LIMIT 1` cursor, returning `[PSCustomObject]` or `$null`.
+  * Retrieves the first matching document with a hardcoded `LIMIT 1` cursor on a cloned instance, returning `[PSCustomObject]` or `$null`. Does not mutate caller limits.
 * **`[object[]] distinct([string]$field)`**
-  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`.
+  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`. Non-destructive.
 * **`[double] sum([string]$field)` / `[double] avg([string]$field)` / `[object] min([string]$field)` / `[object] max([string]$field)`**
-  * Executes aggregate functions directly inside SQLite C engine on numeric JSON fields without transferring or deserializing rows in PowerShell (`min`/`max` return `[object]` to cleanly represent `$null` when no matching records exist).
+  * Executes aggregate functions directly inside SQLite C engine on numeric JSON fields without transferring or deserializing rows in PowerShell (`min`/`max` return `[object]` to cleanly represent `$null` when no matching records exist). Non-destructive.
 * **`[object] get([hashtable]$options)`**
-  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`).
+  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`). Non-destructive: leaves query state intact.
   * If `$options.keys = $true`, returns objects structured as `@{ key = $k; data = $v }`.
 * **`[bool] validate()`**
   * Validates collection-wide JSON document integrity against SQLite's native `json_valid(doc)` constraint.
@@ -238,19 +250,19 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 #### Deletion & Transactions
 * **`[void] delete()`**
-  * Deletes a targeted document, a filtered document set, or drops the entire collection table when called without target or filter.
+  * Deletes a targeted document or a filtered document set. If called without target or criteria, truncates all document rows while keeping table schema and secondary indexes intact. Chained deletions with `orderBy()`, `limit()`, or `skip()` are rejected with `[System.InvalidOperationException]`.
 * **`[void] drop()`**
-  * Explicitly drops the current collection table.
+  * Explicitly drops the collection table from SQLite (`DROP TABLE IF EXISTS [col]`). Rejected on `collectionGroup()`.
 * **`[void] deleteDatabase()`**
   * Closes root connection and physically removes `.db`, `.db-wal`, and `.db-shm` files. Must be called on root instance (rejected on child collections).
 * **`[void] beginTransaction()`**, **`[void] commit()`**, **`[void] rollback()`**
-  * Manages native ACID transactions.
+  * Manages native ACID transactions with ground-truth tracking via `sqlite3_get_autocommit`.
 
 ---
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 64 out of 64 tests on both PowerShell 5.1 and PowerShell 7+:
+The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 83 out of 83 tests on both PowerShell 5.1 and PowerShell 7+:
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
@@ -321,6 +333,22 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-65** | **Secondary Unique Index Abort & Data Loss Prevention** | Precludes silent deletion of unrelated documents on secondary unique conflict, targeted `ON CONFLICT(key)` | **PASSED** |
 | **TC-66** | **DropIndex Field Sanitization & Anti-Injection** | Strict validation of field names in `dropIndex` preventing SQL injection and bracket escaping | **PASSED** |
 | **TC-67** | **View Isolation in Update (Decorator Immunity)** | Raw document retrieval in `update()` preventing view decorators (`select`, `populate`) from corrupting stored state | **PASSED** |
+| **TC-68** | **Collision-Free Index Naming & Dynamic Uniqueness Upgrade** | Deterministic 64-bit hash isolated index names and dynamic UNIQUE upgrading | **PASSED** |
+| **TC-69** | **Array Mutation Structural JSON Equality** | Recursive structural equality for array elements preserving scalar types (numbers vs strings, booleans) | **PASSED** |
+| **TC-70** | **Atomic update() on Non-Existent Document** | Evaluates partialData via _DeepMerge against empty document, resolving array sentinels and descriptors into arrays | **PASSED** |
+| **TC-71** | **Composite Query Scoping, Projection & Connection Isolation** | Enforces connection isolation across union queries, RHS document key scoping, and projection on collectionGroup and union | **PASSED** |
+| **TC-72** | **VACUUM INTO Consistent Snapshot for Concurrent WAL Mode** | Exports complete, committed database snapshot directly from live WAL writer without uncheckpointed data loss | **PASSED** |
+| **TC-73** | **Native Lexical & ISO Timestamp Ordering for MIN / MAX** | Operates directly on json_extract without casting to REAL, preserving ISO 8601 dates and lexical text ordering | **PASSED** |
+| **TC-74** | **Accidental Collection Drop Defense on Ordered Mutation** | Rejects delete() chained with orderBy() preserving collection tables and indexes | **PASSED** |
+| **TC-75** | **Upsert Identity Auto-Provisioning & GUID Generation** | Extracts explicit document identity (key, id, _key) or generates a unique GUID, preventing arbitrary field key derivation | **PASSED** |
+| **TC-76** | **Array Mutation Precision on Adjacent 64-Bit Integers** | Direct 64-bit integer comparison in _JsonValuesEqual preserving precision for values past 2^53 | **PASSED** |
+| **TC-77** | **Case-Insensitive Collection Schema Index Resolution** | Resolves collection casing via sqlite_master COLLATE NOCASE in dropIndex() | **PASSED** |
+| **TC-78** | **Point-Lookup Scope Preservation in Composite Queries** | Prevents early single-document return in get() when chained with union() or collectionGroup() | **PASSED** |
+| **TC-79** | **Missing Branch Parameter Isolation in Composite Queries** | Isolates query parameter bindings so non-existent collections in union queries do not cause parameter count mismatches | **PASSED** |
+| **TC-80** | **Array Type Enforcement for Array Operators** | Enforces json_type = 'array' for array-contains and array-contains-any, excluding scalar and object matches | **PASSED** |
+| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Enforces IEEE underflow threshold (< 1e-28) preventing collision between Double and Decimal in ArrayUnion/ArrayRemove | **PASSED** |
+| **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
+| **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |
 
 ---
 
@@ -352,9 +380,13 @@ $auditId = $db.collection("audit_events").add(@{
 $user = $db.collection("users").doc("usr-100").get()
 Write-Host "User: $($user.name) | Role: $($user.role)"
 
-# Query with JSON filtering
-$activeLeads = $db.collection("users").where("active", "=", $true).where("role", "LIKE", "%Architect%").get()
+# Query with JSON filtering (immutable chaining)
+$activeQuery = $db.collection("users").where("active", "=", $true)
+$activeLeads = $activeQuery.where("role", "LIKE", "%Architect%").get()
 $activeLeads | Format-Table name, role, active
+
+# Query branching via explicit fork / clone
+$activeUsers = $activeQuery.get() # Reusable! Filters were not wiped by .get()
 
 # Orderly shutdown and handle release
 $db.close()

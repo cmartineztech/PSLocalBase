@@ -1,4 +1,4 @@
-﻿# PSLocalBase Test Suite
+# PSLocalBase Test Suite
 
 Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions.
 
@@ -21,9 +21,22 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
+### Complete Multi-Suite Runner Overview (9 Suites / 154 Checks)
+
+The automated test runner (`_TESTS/run-tests.ps1`) executes 9 focused test suites:
+1. `PSLocalBase.Tests.ps1` – Core acceptance criteria & functional tests (83 test cases).
+2. `PSLocalBase.EdgeCases.Tests.ps1` – Corner cases, boundary values, and corruption defenses (17 tests).
+3. `PSLocalBase.NativeStress.Tests.ps1` – P/Invoke statement cleanup and high-concurrency lock contention (5 tests).
+4. `PSLocalBase.Independent-c57b52c.Tests.ps1` – Dotted/underscore field independence and numeric privacy (7 tests).
+5. `PSLocalBase.Revalidation-3ecc2c1.Tests.ps1` – JSON path casing, legacy hash verification, and aggregation scoping (11 tests).
+6. `PSLocalBase.Review-83ed742.Tests.ps1` – Index expression migration and roundtrip mutations (7 tests).
+7. `PSLocalBase.Followup-a526708.Tests.ps1` – Cross-edition numeric roundtrip and collectionGroup drop rejection (21 tests).
+8. `PSLocalBase.Boundary-86483c7.Tests.ps1` – Subnormal float preservation and decimal quantization boundaries (3 tests).
+9. `Playground/verify-playground.ps1` – WPF GUI components, XAML parsing, and syntax normalization (10 checks).
+
 ---
 
-## Verified Acceptance Criteria (80/80 Passed)
+## Verified Acceptance Criteria (83/83 Passed)
 
 | Test ID | Test Category | Validation Criteria | Status |
 | :--- | :--- | :--- | :--- |
@@ -107,3 +120,6 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 | **TC-78** | **Point-Lookup Scope Preservation in Composite Queries** | Prevents early single-document return in get() when chained with union() or collectionGroup() | **PASSED** |
 | **TC-79** | **Missing Branch Parameter Isolation in Composite Queries** | Isolates query parameter bindings so non-existent collections in union queries do not cause parameter count mismatches | **PASSED** |
 | **TC-80** | **Array Type Enforcement for Array Operators** | Enforces json_type = 'array' for array-contains and array-contains-any, excluding scalar and object matches | **PASSED** |
+| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Enforces IEEE underflow threshold (< 1e-28) preventing collision between Double and Decimal in ArrayUnion/ArrayRemove | **PASSED** |
+| **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
+| **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |

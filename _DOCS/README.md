@@ -44,6 +44,7 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
   - [Mathematical Aggregations (`sum`, `avg`, `min`, `max`)](#mathematical-aggregations-sum-avg-min-max)
   - [Sorting & Pagination (`orderBy`, `skip`, `limit`)](#sorting--pagination-orderby-skip-limit)
   - [Exposing Primary Keys (`keys = $true`)](#exposing-primary-keys-keys--true)
+  - [Query Immutability, Reusability & Branch Forking (`clone`, `fork`)](#query-immutability-reusability--branch-forking-clone-fork)
 - [5. Relational Lookups with `.populate()`](#5-relational-lookups-with-populate)
 - [6. Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)](#6-compound-queries--sharding-union-unionall-collectiongroup)
 - [7. Raw Cross-Collection Queries (`query`)](#7-raw-cross-collection-queries-query)
@@ -292,6 +293,9 @@ $db.collection("users").doc("usr-100").update(@{
 })
 ```
 
+> [!TIP]
+> **Numeric Precision & Subnormals:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons and preserve subnormal floating-point values (`|Double| < 1e-28`), preventing quantization loss and collisions between `Double` and `Decimal` types.
+
 ### Secondary Expression Indexes (`createIndex`, `dropIndex`)
 Create native B-Tree indexes on document JSON fields for sub-millisecond querying over millions of records:
 
@@ -477,6 +481,28 @@ foreach ($r in $records) {
 }
 ```
 
+### Query Immutability, Reusability & Branch Forking (`clone`, `fork`)
+
+Query modifiers (`where()`, `whereLength()`, `whereType()`, `orderBy()`, `limit()`, `skip()`, `select()`, `populate()`) are strictly **immutable**: each call returns a new isolated child query instance without modifying the parent.
+
+Furthermore, terminal methods (`get()`, `count()`, `exists()`, `distinct()`, `sum()`, `avg()`, `min()`, `max()`) are **non-destructive** and do not wipe filters:
+
+```powershell
+# Define base query
+$activeUsers = $db.collection("users").where("active", "==", $true)
+
+# Reuse the query definition multiple times
+$totalActive = $activeUsers.count()
+$firstActive = $activeUsers.first()
+
+# Safely branch / fork without mutating $activeUsers
+$adminUsers = $activeUsers.where("role", "==", "Admin").get()
+$guestUsers = $activeUsers.where("role", "==", "Guest").get()
+
+# Explicit clone / fork
+$customBranch = $activeUsers.clone().orderBy("name", "asc")
+```
+
 ---
 
 ## 5. Relational Lookups with `.populate()`
@@ -524,6 +550,11 @@ foreach ($err in $criticalErrors) {
     Write-Host "[$($err._collection)] $($err.timestamp): $($err.message)"
 }
 ```
+
+> [!NOTE]
+> **Snapshot Isolation:** Calling `.union()` or `.unionAll()` creates an immutable snapshot of both query branches via `.clone()`. Modifying source branches afterwards does not alter the composite query. Nested unions are prohibited.
+>
+> **Sharded Drop Protection:** Calling `.drop()` on `collectionGroup()` is strictly prohibited and throws `[System.InvalidOperationException]` to prevent accidental mass deletion across wildcard-matched tables.
 
 ---
 
