@@ -2728,7 +2728,7 @@ Assert-Test "TC-74: Accidental Collection Drop Defense on Ordered Mutation" {
     try {
         $users = $db.collection("users")
         $users.doc("u1").set(@{ name = "Alice"; role = "admin" })
-        $users.createIndex("name")
+        [void]$users.createIndex("name")
 
         # Attempting delete with orderBy must throw and preserve collection, documents, and indexes
         $rejected = $false
@@ -2827,7 +2827,7 @@ Assert-Test "TC-77: Case-Insensitive Collection Schema Index Resolution" {
     try {
         # Create unique index on users.email
         [void]$db.collection("users").createIndex("email", @{ unique = $true })
-        $db.collection("users").add(@{ email = "test@example.com" })
+        [void]$db.collection("users").add(@{ email = "test@example.com" })
 
         # Drop index via uppercase collection name
         [void]$db.collection("USERS").dropIndex("email")
@@ -2839,7 +2839,7 @@ Assert-Test "TC-77: Case-Insensitive Collection Schema Index Resolution" {
         # Duplicate email insert must now succeed since unique index was dropped
         $dupThrew = $false
         try {
-            $db.collection("users").add(@{ email = "test@example.com" })
+            [void]$db.collection("users").add(@{ email = "test@example.com" })
         } catch {
             $dupThrew = $true
         }
