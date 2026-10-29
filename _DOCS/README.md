@@ -8,7 +8,6 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 
 - [Quick Start in 2 Minutes](#quick-start-in-2-minutes)
 - [Visual Explorer: Interactive GUI Playground](#visual-explorer-interactive-gui-playground)
-- [Single Collection vs Multi Collection: Feature Matrix](#single-collection-vs-multi-collection-feature-matrix)
 - [1. Installation & Import](#1-installation--import)
 - [2. Database Initialization](#2-database-initialization)
   - [Standard File-Based Persistence](#standard-file-based-persistence)
@@ -110,35 +109,6 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 * **Live PowerShell Code Snippets:** Copy generated PowerShell syntax directly to your clipboard.
 * **Seed Demo Data:** 1-click loading of realistic users, products, and orders datasets.
 * **Theme Switching:** Sleek dark and light themes with automatic Windows OS theme detection.
-
----
-
-## Single Collection vs Multi Collection: Feature Matrix
-
-| Capacidad / Función | Single Collection (`$col`) | Multi Collection (`collectionGroup`, `union`, `populate`) | Motor / Función SQLite Nativa | Retorno en PowerShell |
-|---|:---:|:---:|---|:---:|
-| **Búsqueda por ID (`.doc("id")`)** | ✅ Sí | ❌ No *(buscar por `.where("key", "==", "id")`)* | B-Tree Primary Key (`WHERE key = ?`) | `[PSCustomObject]` |
-| **Proyección de Campos (`.select()`)** | ✅ Sí | ✅ Sí | `json_object()`, `json_extract()` | `[PSCustomObject[]]` |
-| **Filtros Escalares (`.where()`)** | ✅ Sí | ✅ Sí | `json_extract()` | `[PSLocalBase]` (chainable) |
-| **Pertenencia a Arrays (`array-contains`)** | ✅ Sí | ✅ Sí | `json_each()` | `[PSLocalBase]` (chainable) |
-| **Intersección de Arrays (`array-contains-any`)** | ✅ Sí | ✅ Sí | `json_each()` | `[PSLocalBase]` (chainable) |
-| **Longitud de Arrays (`whereLength`)** | ✅ Sí | ✅ Sí | `json_array_length()` | `[PSLocalBase]` (chainable) |
-| **Tipado Polimórfico (`whereType`)** | ✅ Sí | ✅ Sí | `json_type()` | `[PSLocalBase]` (chainable) |
-| **Indexación en Arrays (`items[0]`)** | ✅ Sí | ✅ Sí | `json_extract()` con path indexado | `[PSLocalBase]` (chainable) |
-| **Valores Únicos (`.distinct()`)** | ✅ Sí | ✅ Sí | `json_extract()` + `SELECT DISTINCT` | `[object[]]` |
-| **Ordenamiento (`.orderBy()`)** | ✅ Sí | ✅ Sí | `json_extract()` + `ORDER BY` | `[PSLocalBase]` (chainable) |
-| **Paginación (`.skip()`, `.limit()`)** | ✅ Sí | ✅ Sí | `LIMIT ? OFFSET ?` | `[PSLocalBase]` (chainable) |
-| **Agregaciones (`.sum()`, `.avg()`, `.min()`, `.max()`)** | ✅ Sí | ✅ Sí | `json_extract()` + Funciones Agregadas | `[double]` / `[object]` |
-| **Conteo (`.count()`)** | ✅ Sí | ✅ Sí | `COUNT(*)` / B-Tree Page Scan | `[int64]` |
-| **Verificación de Existencia (`.exists()`)** | ✅ Sí | ✅ Sí | `SELECT 1 ... LIMIT 1` ($O(1)$) | `[bool]` (`$true`/`$false`) |
-| **Actualización Parcial (`.update()`)** | ✅ Sí | ❌ No *(solo tablas individuales)* | `json_patch()` (RFC 7396 Merge Patch) | `[void]` |
-| **Mutaciones de Array (`ArrayUnion`, `ArrayRemove`)** | ✅ Sí | ❌ No *(solo tablas individuales)* | `json_set()`, `json_each()` | `[void]` |
-| **Upsert Atómico (`.upsert()`)** | ✅ Sí | ❌ No *(solo tablas individuales)* | `INSERT ... ON CONFLICT DO UPDATE` | `[void]` |
-| **Validación de Esquema (`.validate()`)** | ✅ Sí | ❌ No *(solo tablas individuales)* | `json_valid()` + `CHECK CONSTRAINT` | `[PSCustomObject]` |
-| **Índices Secundarios (`.createIndex()`)** | ✅ Sí | ❌ No *(solo tablas individuales)* | `CREATE INDEX ... (json_extract(...))` | `[void]` |
-| **Relaciones / Joins (`.populate()`)** | ❌ No | ✅ **Exclusivo** | `LEFT JOIN` + `json_set()` + `json()` | `[PSCustomObject[]]` |
-| **Consultas Sharded (`.collectionGroup()`)** | ❌ No | ✅ **Exclusivo** | `UNION ALL` + `json_set()` metadata | `[PSCustomObject[]]` |
-| **Uniones de Consultas (`.union()`, `.unionAll()`)** | ❌ No | ✅ **Exclusivo** | `UNION` / `UNION ALL` nativo | `[PSCustomObject[]]` |
 
 ---
 
