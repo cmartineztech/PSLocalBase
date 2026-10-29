@@ -6,7 +6,6 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 
 ## Table of Contents
 
-- [Security & Quality Audit (Claude Opus 5.5)](AUDIT-CLAUDE-OPUS-5.5.md)
 - [Quick Start in 2 Minutes](#quick-start-in-2-minutes)
 - [Visual Explorer: Interactive GUI Playground](#visual-explorer-interactive-gui-playground)
 - [1. Installation & Import](#1-installation--import)

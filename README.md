@@ -1,8 +1,7 @@
-﻿# PSLocalBase
+# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
-[![Security Audit: 94/100](https://img.shields.io/badge/Security%20Audit-94%2F100%20(Production%20Ready)-brightgreen.svg)](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -582,8 +581,6 @@ PSLocalBase was independently audited by **Claude Opus 5.5** (Commit: `c57b52c`,
 | **Documentation** | **92/100** | ✅ Excellent |
 | **Test Coverage** | **91/100** | ✅ Excellent |
 | **Overall Score** | **94/100** | ✅ **Production Ready** |
-
-📖 *Read the full audit report and findings breakdown in [_DOCS/AUDIT-CLAUDE-OPUS-5.5.md](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md).*
 
 ---
 
