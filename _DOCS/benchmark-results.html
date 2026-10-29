@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSLocalBase vs Flat JSON Benchmark Results (10,000 Records)</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-cyan: #06b6d4;
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --accent-purple: #8b5cf6;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+            --border-color: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 2.5rem 1.5rem;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .badge-header {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(59, 130, 246, 0.2));
+            color: var(--accent-cyan);
+            border: 1px solid var(--accent-cyan);
+            padding: 0.35rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.75rem;
+        }
+
+        .subtitle {
+            font-size: 1.15rem;
+            color: var(--text-secondary);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .meta-strip {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(30, 41, 59, 0.7);
+            padding: 0.4rem 0.85rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* KPI Cards Grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .kpi-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent-cyan);
+        }
+
+        .kpi-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+        }
+
+        .kpi-card.purple::before {
+            background: linear-gradient(90deg, var(--accent-purple), #ec4899);
+        }
+
+        .kpi-card.green::before {
+            background: linear-gradient(90deg, var(--accent-green), #059669);
+        }
+
+        .kpi-card.amber::before {
+            background: linear-gradient(90deg, var(--accent-amber), #ea580c);
+        }
+
+        .kpi-value {
+            font-size: 2.25rem;
+            font-weight: 800;
+            color: #fff;
+            margin-bottom: 0.25rem;
+            letter-spacing: -0.02em;
+        }
+
+        .kpi-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .kpi-subtext {
+            font-size: 0.8rem;
+            color: var(--accent-cyan);
+            margin-top: 0.5rem;
+            font-weight: 600;
+        }
+
+        /* Nav Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1rem;
+            font-weight: 600;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: rgba(51, 65, 85, 0.4);
+        }
+
+        .tab-btn.active {
+            color: #fff;
+            background: rgba(6, 182, 212, 0.2);
+            border: 1px solid var(--accent-cyan);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Section Styling */
+        .section-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .section-title::before {
+            content: "";
+            width: 5px;
+            height: 1.4rem;
+            background: var(--accent-cyan);
+            border-radius: 4px;
+        }
+
+        /* Benchmark Tables */
+        .table-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 2.5rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th, td {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background: rgba(15, 23, 42, 0.6);
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(51, 65, 85, 0.3);
+        }
+
+        .op-name {
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .time-pslb {
+            color: var(--accent-cyan);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-weight: 600;
+        }
+
+        .time-json {
+            color: #cbd5e1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .badge-winner {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.65rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .badge-json {
+            background: rgba(148, 163, 184, 0.15);
+            color: #94a3b8;
+            border: 1px solid rgba(148, 163, 184, 0.3);
+        }
+
+        .speedup-pill {
+            display: inline-block;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #38bdf8;
+        }
+
+        .speedup-massive {
+            color: #4ade80;
+            font-weight: 800;
+        }
+
+        /* Storage Cards Grid */
+        .storage-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .storage-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .storage-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+
+        .storage-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+            font-size: 0.9rem;
+        }
+
+        .storage-row:last-child {
+            border-bottom: none;
+        }
+
+        /* Architecture Card */
+        .arch-card {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.9));
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-top: 1.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .arch-grid { grid-template-columns: 1fr; }
+            h1 { font-size: 2rem; }
+        }
+
+        .arch-box {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.25rem;
+        }
+
+        .arch-box h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.75rem;
+            color: #fff;
+        }
+
+        .arch-box.win {
+            border-color: rgba(6, 182, 212, 0.4);
+        }
+
+        .arch-box.win h3 {
+            color: var(--accent-cyan);
+        }
+
+        .arch-box ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .arch-box li {
+            position: relative;
+            padding-left: 1.5rem;
+            margin-bottom: 0.6rem;
+            font-size: 0.9rem;
+            color: #cbd5e1;
+        }
+
+        .arch-box li::before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+
+        .arch-box.fail li::before {
+            content: "✗";
+            color: var(--accent-red);
+        }
+
+        footer {
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        footer a {
+            color: var(--accent-cyan);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="badge-header">Empirical Benchmark Suite (10,000 Records)</div>
+            <h1>PSLocalBase vs Native Flat JSON</h1>
+            <p class="subtitle">High-scale benchmark comparing persistent disk and in-memory synchronization paradigms with 10,000 real-world records.</p>
+            <div class="meta-strip">
+                <div class="meta-item"><span>📅</span> <strong>Date:</strong> 2026-10-27</div>
+                <div class="meta-item"><span>⚡</span> <strong>PowerShell:</strong> 7.6.9 Core</div>
+                <div class="meta-item"><span>💻</span> <strong>OS:</strong> Microsoft Windows 10.0.26340 (x64)</div>
+                <div class="meta-item"><span>📦</span> <strong>Engine:</strong> winsqlite3.dll (Zero Dependencies)</div>
+            </div>
+        </header>
+
+        <!-- KPI STATS -->
+        <div class="kpi-grid">
+            <div class="kpi-card green">
+                <div class="kpi-value">441.23x</div>
+                <div class="kpi-label">Faster Atomic Upserts</div>
+                <div class="kpi-subtext">33.37 ms vs 14,723.82 ms</div>
+            </div>
+            <div class="kpi-card green">
+                <div class="kpi-value">395.08x</div>
+                <div class="kpi-label">Faster Disk Deletions</div>
+                <div class="kpi-subtext">36.33 ms vs 14,353.35 ms</div>
+            </div>
+            <div class="kpi-card green">
+                <div class="kpi-value">138.44x</div>
+                <div class="kpi-label">Faster Disk Updates</div>
+                <div class="kpi-subtext">134.81 ms vs 18,663.74 ms</div>
+            </div>
+            <div class="kpi-card amber">
+                <div class="kpi-value">43.27x</div>
+                <div class="kpi-label">Faster Existence Check</div>
+                <div class="kpi-subtext">10.53 ms vs 455.65 ms</div>
+            </div>
+            <div class="kpi-card purple">
+                <div class="kpi-value">14.32x</div>
+                <div class="kpi-label">Faster Disk Sync Flush</div>
+                <div class="kpi-subtext">39.93 ms vs 571.63 ms</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value">13.37x</div>
+                <div class="kpi-label">Faster Field Projection</div>
+                <div class="kpi-subtext">32.25 ms vs 431.15 ms</div>
+            </div>
+        </div>
+
+        <!-- NAVIGATION TABS -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('part1')">Part 1: Persistent Disk (10k Records)</button>
+            <button class="tab-btn" onclick="switchTab('part2')">Part 2: In-Memory & Disk Sync (10k Records)</button>
+            <button class="tab-btn" onclick="switchTab('part5k')">5,000 Records Baseline</button>
+            <button class="tab-btn" onclick="switchTab('storage')">Storage & Architecture</button>
+        </div>
+
+        <!-- TAB 1: PART 1 PERSISTENT DISK -->
+        <div id="part1" class="tab-content active">
+            <h2 class="section-title">Part 1: Persistent Disk Storage (10,000 Records)</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">
+                Comparison between <strong>PSLocalBase (.db in WAL mode on disk)</strong> and <strong>Flat JSON File persistence</strong> on local NVMe disk.
+            </p>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>PSLocalBase (ms)</th>
+                            <th>Flat JSON (ms)</th>
+                            <th>Speedup Factor</th>
+                            <th>Winner</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="op-name">Atomic Document Upsert (10 records on disk)</td>
+                            <td class="time-pslb">33.37 ms</td>
+                            <td class="time-json">14,723.82 ms</td>
+                            <td><span class="speedup-pill speedup-massive">441.23x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Individual Document Deletions (10 records on disk)</td>
+                            <td class="time-pslb">36.33 ms</td>
+                            <td class="time-json">14,353.35 ms</td>
+                            <td><span class="speedup-pill speedup-massive">395.08x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Partial Document Updates (10 records on disk)</td>
+                            <td class="time-pslb">134.81 ms</td>
+                            <td class="time-json">18,663.74 ms</td>
+                            <td><span class="speedup-pill speedup-massive">138.44x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Instant Existence Verification (.exists())</td>
+                            <td class="time-pslb">10.53 ms</td>
+                            <td class="time-json">455.65 ms</td>
+                            <td><span class="speedup-pill speedup-massive">43.27x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Selective Field Projection (.select() 100 docs)</td>
+                            <td class="time-pslb">32.25 ms</td>
+                            <td class="time-json">431.15 ms</td>
+                            <td><span class="speedup-pill">13.37x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Sorting & Pagination (Top 10 DESC)</td>
+                            <td class="time-pslb">69.09 ms</td>
+                            <td class="time-json">812.84 ms</td>
+                            <td><span class="speedup-pill">11.76x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Scalar Aggregate Count (WHERE + count())</td>
+                            <td class="time-pslb">61.13 ms</td>
+                            <td class="time-json">667.50 ms</td>
+                            <td><span class="speedup-pill">10.92x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Engine Mathematical Sum (.sum())</td>
+                            <td class="time-pslb">59.83 ms</td>
+                            <td class="time-json">484.54 ms</td>
+                            <td><span class="speedup-pill">8.10x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Array Length Filtering (whereLength >= 3)</td>
+                            <td class="time-pslb">58.44 ms</td>
+                            <td class="time-json">426.62 ms</td>
+                            <td><span class="speedup-pill">7.30x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Point Lookups by Key (100 random IDs)</td>
+                            <td class="time-pslb">221.04 ms</td>
+                            <td class="time-json">1,141.27 ms</td>
+                            <td><span class="speedup-pill">5.16x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Dual Collection JOIN (5,000 orders x 5,000 users)</td>
+                            <td class="time-pslb">62.51 ms</td>
+                            <td class="time-json">276.91 ms</td>
+                            <td><span class="speedup-pill">4.43x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Multi-Criteria Filter Query (active + score >= 80)</td>
+                            <td class="time-pslb">253.97 ms</td>
+                            <td class="time-json">726.64 ms</td>
+                            <td><span class="speedup-pill">2.86x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Bulk Ingestion (10,000 records to disk)</td>
+                            <td class="time-pslb">5,735.07 ms</td>
+                            <td class="time-json">733.47 ms</td>
+                            <td><span class="speedup-pill" style="color: #94a3b8;">0.13x</span></td>
+                            <td><span class="badge-winner badge-json">Flat JSON</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 2: PART 2 IN-MEMORY & DISK SYNC -->
+        <div id="part2" class="tab-content">
+            <h2 class="section-title">Part 2: In-Memory Engine & Local Disk Sync (10,000 Records)</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">
+                Comparison between <strong>PSLocalBase [PSLocalBase]::new(":memory:")</strong> with atomic <code>VACUUM INTO</code> disk flush vs <strong>In-Memory PowerShell Object Array</strong> with <code>ConvertTo-Json</code> serialization disk flush.
+            </p>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>PSLocalBase In-Memory (ms)</th>
+                            <th>Flat JSON In-Memory (ms)</th>
+                            <th>Speedup Factor</th>
+                            <th>Winner</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="op-name">SYNC IN-MEMORY STATE TO LOCAL DISK (10,000 Records)</td>
+                            <td class="time-pslb">39.93 ms</td>
+                            <td class="time-json">571.63 ms</td>
+                            <td><span class="speedup-pill speedup-massive">14.32x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase (VACUUM INTO)</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Memory Point Lookups (100 random IDs)</td>
+                            <td class="time-pslb">24.66 ms</td>
+                            <td class="time-json">239.54 ms</td>
+                            <td><span class="speedup-pill speedup-massive">9.71x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Memory Sorting & Pagination (Top 10 DESC)</td>
+                            <td class="time-pslb">15.98 ms</td>
+                            <td class="time-json">83.81 ms</td>
+                            <td><span class="speedup-pill">5.24x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Memory 100 Document Updates</td>
+                            <td class="time-pslb">99.79 ms</td>
+                            <td class="time-json">302.31 ms</td>
+                            <td><span class="speedup-pill">3.03x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Loading 10,000 Records into RAM</td>
+                            <td class="time-pslb">925.14 ms</td>
+                            <td class="time-json">131.36 ms</td>
+                            <td><span class="speedup-pill" style="color: #94a3b8;">0.14x</span></td>
+                            <td><span class="badge-winner badge-json">Flat JSON</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Memory Aggregate Count (WHERE + count())</td>
+                            <td class="time-pslb">17.68 ms</td>
+                            <td class="time-json">5.58 ms</td>
+                            <td><span class="speedup-pill" style="color: #94a3b8;">0.32x</span></td>
+                            <td><span class="badge-winner badge-json">Flat JSON</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">In-Memory Multi-filter Query (active + score >= 80)</td>
+                            <td class="time-pslb">69.00 ms</td>
+                            <td class="time-json">7.82 ms</td>
+                            <td><span class="speedup-pill" style="color: #94a3b8;">0.11x</span></td>
+                            <td><span class="badge-winner badge-json">Flat JSON</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 3: 5,000 BASELINE -->
+        <div id="part5k" class="tab-content">
+            <h2 class="section-title">5,000 Records Baseline Benchmark</h2>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>PSLocalBase (ms)</th>
+                            <th>Flat JSON (ms)</th>
+                            <th>Speedup Factor</th>
+                            <th>Winner</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="op-name">Individual Document Deletions (10 docs)</td>
+                            <td class="time-pslb">23.60 ms</td>
+                            <td class="time-json">5,694.02 ms</td>
+                            <td><span class="speedup-pill speedup-massive">241.27x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Partial Document Updates (10 docs)</td>
+                            <td class="time-pslb">83.20 ms</td>
+                            <td class="time-json">8,520.80 ms</td>
+                            <td><span class="speedup-pill speedup-massive">102.41x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Sorting & Pagination (Top 10 DESC)</td>
+                            <td class="time-pslb">42.13 ms</td>
+                            <td class="time-json">335.41 ms</td>
+                            <td><span class="speedup-pill">7.96x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Scalar Aggregate Count (WHERE + count())</td>
+                            <td class="time-pslb">27.38 ms</td>
+                            <td class="time-json">200.50 ms</td>
+                            <td><span class="speedup-pill">7.32x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Relational JOIN (Orders JOIN Users)</td>
+                            <td class="time-pslb">20.39 ms</td>
+                            <td class="time-json">81.02 ms</td>
+                            <td><span class="speedup-pill">3.97x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                        <tr>
+                            <td class="op-name">Point Lookups by Key (100 random IDs)</td>
+                            <td class="time-pslb">134.95 ms</td>
+                            <td class="time-json">418.17 ms</td>
+                            <td><span class="speedup-pill">3.10x</span></td>
+                            <td><span class="badge-winner">🏆 PSLocalBase</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 4: STORAGE & ARCHITECTURE -->
+        <div id="storage" class="tab-content">
+            <h2 class="section-title">Storage Footprint & Architecture Breakdown</h2>
+            <div class="storage-grid">
+                <div class="storage-card">
+                    <h3>💾 10,000 Records Disk Footprint</h3>
+                    <div class="storage-row">
+                        <span>PSLocalBase (.db)</span>
+                        <strong style="color: var(--accent-cyan);">4,732 KB (4.62 MB)</strong>
+                    </div>
+                    <div class="storage-row">
+                        <span>Flat JSON File (.json)</span>
+                        <strong>2,017 KB (1.97 MB)</strong>
+                    </div>
+                    <div class="storage-row">
+                        <span>Overhead Ratio</span>
+                        <span>2.34x (Indexes + B-Tree)</span>
+                    </div>
+                </div>
+
+                <div class="storage-card">
+                    <h3>⚡ In-Memory Local Sync Footprint</h3>
+                    <div class="storage-row">
+                        <span>Synced DB (VACUUM INTO)</span>
+                        <strong style="color: var(--accent-cyan);">4,716 KB (4.60 MB)</strong>
+                    </div>
+                    <div class="storage-row">
+                        <span>Synced JSON File</span>
+                        <strong>2,025 KB (1.98 MB)</strong>
+                    </div>
+                    <div class="storage-row">
+                        <span>Sync Duration (PSLB vs JSON)</span>
+                        <strong style="color: var(--accent-green);">54.8 ms vs 632.5 ms (11.5x)</strong>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ARCHITECTURAL ADVANTAGES -->
+            <div class="arch-card">
+                <h2 style="font-size: 1.5rem; color: #fff; margin-bottom: 0.5rem;">Why is Flat JSON 188x to 448x Slower on Disk?</h2>
+                <p style="color: var(--text-secondary);">The fundamental bottleneck is full-file deserialization and serialization on every single mutation.</p>
+                
+                <div class="arch-grid">
+                    <div class="arch-box fail">
+                        <h3>❌ Flat JSON File Persistence</h3>
+                        <ul>
+                            <li>Reads the entire 2MB JSON file from disk into RAM.</li>
+                            <li>Deserializes all 10,000 objects into the .NET CLR heap.</li>
+                            <li>Performs an O(N) linear iteration to locate the targeted document.</li>
+                            <li><strong>Re-serializes all 10,000 objects</strong> back into a massive 2MB JSON string.</li>
+                            <li><strong>Rewrites the entire file to disk</strong> for every single document mutation.</li>
+                            <li>10 mutations = 11.5 seconds of disk blocking!</li>
+                            <li>Zero concurrency; high risk of JSON file corruption on interruption.</li>
+                        </ul>
+                    </div>
+                    <div class="arch-box win">
+                        <h3>✅ PSLocalBase (SQLite NoSQL Engine)</h3>
+                        <ul>
+                            <li>Locates the target row in O(log N) via SQLite's B-Tree index.</li>
+                            <li>Performs an in-place page modification in Write-Ahead Logging (WAL) mode.</li>
+                            <li>Modifies only the affected ~4KB page without touching the rest of the database.</li>
+                            <li>10 mutations = 61 milliseconds (188.5x faster!).</li>
+                            <li>In-Memory mode syncs cleanly to disk via atomic C-level <code>VACUUM INTO</code> in 54ms.</li>
+                            <li>Full ACID transactions with instant rollback and non-blocking concurrency.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Generated by <strong>PSLocalBase Benchmark Engine</strong> | Maintained by <a href="https://github.com/cmartineztech/PSLocalBase">Carlos Martinez (@cmartineztech)</a></p>
+            <p style="margin-top: 0.5rem; font-size: 0.8rem;">Licensed under MIT License</p>
+        </footer>
+    </div>
+
+    <script>
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+    </script>
+</body>
+</html>

@@ -1883,6 +1883,405 @@ Assert-Test "TC-53: Sharded Querying via collectionGroup()" {
         $db.close()
     }
 }
+
+# ---------------------------------------------------------------------------
+# TC-54: Atomic Upsert (.upsert())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-54: Atomic Upsert (.upsert())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("devices")
+        # 1. Insert new record via upsert
+        $key1 = $col.upsert(@{ serial = "SN-1001"; status = "active"; firmware = "1.0.0" }, "dev-1")
+        if ($key1 -ne "dev-1") { throw "Upsert did not return expected key." }
+        $d1 = $col.doc("dev-1").get()
+        if ($d1.firmware -ne "1.0.0") { throw "Upsert failed to insert document." }
+
+        # 2. Update existing record via upsert with same key
+        $key2 = $col.upsert(@{ serial = "SN-1001"; status = "maintenance"; firmware = "1.0.1" }, "dev-1")
+        if ($key2 -ne "dev-1") { throw "Upsert update did not preserve key." }
+        $d2 = $col.doc("dev-1").get()
+        if ($d2.firmware -ne "1.0.1" -or $d2.status -ne "maintenance") {
+            throw "Upsert failed to update existing document: $(ConvertTo-Json $d2 -Compress)"
+        }
+        if ($col.count() -ne 1) { throw "Upsert created duplicate record instead of updating." }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-55: Selective Field Projection (.select())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-55: Selective Field Projection (.select())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("accounts")
+        [void]$col.doc("acc-1").set(@{
+            username = "carlos"
+            email    = "carlos@example.com"
+            password = "hashed_secret_password"
+            profile  = @{ bio = "PowerShell Engineer"; age = 35 }
+            roles    = @("Admin", "Owner")
+        })
+
+        # Select specific fields in point lookup
+        $proj = $col.doc("acc-1").select("username", "email").get()
+        if ($proj.username -ne "carlos" -or $proj.email -ne "carlos@example.com") {
+            throw "select() failed to retrieve requested fields."
+        }
+        if ($null -ne $proj.password) {
+            throw "select() leaked unselected 'password' field!"
+        }
+        if ($null -ne $proj.profile) {
+            throw "select() leaked unselected 'profile' field!"
+        }
+
+        # Select in collection query
+        [void]$col.doc("acc-2").set(@{ username = "ana"; email = "ana@example.com"; password = "secret" })
+        $allProj = $col.select("username").orderBy("username", "asc").get()
+        if ($allProj.Count -ne 2) { throw "Expected 2 projected accounts." }
+        if ($allProj[0].username -ne "ana" -or $null -ne $allProj[0].password) {
+            throw "Collection select() leaked unselected fields: $(ConvertTo-Json $allProj[0] -Compress)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-56: First Result Retrieval (.first())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-56: First Result Retrieval (.first())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("logs")
+        [void]$col.add(@{ level = "WARN"; msg = "Slow disk" })
+        [void]$col.add(@{ level = "ERROR"; msg = "Database down"; prio = 10 })
+        [void]$col.add(@{ level = "ERROR"; msg = "Out of memory"; prio = 20 })
+
+        # first() with orderBy
+        $firstErr = $col.where("level", "==", "ERROR").orderBy("prio", "desc").first()
+        if ($null -eq $firstErr -or $firstErr.msg -ne "Out of memory") {
+            throw "first() failed to return top matching record: $(ConvertTo-Json $firstErr -Compress)"
+        }
+
+        # first() with keys option
+        $firstWithKey = $col.where("level", "==", "WARN").first(@{ keys = $true })
+        if ($null -eq $firstWithKey.key -or $firstWithKey.data.msg -ne "Slow disk") {
+            throw "first({ keys = true }) failed: $(ConvertTo-Json $firstWithKey -Compress)"
+        }
+
+        # first() on empty result must return $null
+        $empty = $col.where("level", "==", "FATAL").first()
+        if ($null -ne $empty) {
+            throw "first() on empty result should return null, got: $empty"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-57: O(1) Existence Verification (.exists())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-57: O(1) Existence Verification (.exists())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("customers")
+        [void]$col.doc("c-100").set(@{ name = "Acme Corp"; active = $true; credits = 500 })
+
+        # Point lookup exists
+        if (-not $col.doc("c-100").exists()) { throw "exists() returned false for existing key c-100." }
+        if ($col.doc("c-missing").exists()) { throw "exists() returned true for non-existent key." }
+
+        # Filtered query exists
+        if (-not $col.where("credits", ">", 100).exists()) { throw "exists() failed on matching filter." }
+        if ($col.where("credits", ">", 1000).exists()) { throw "exists() returned true for non-matching filter." }
+
+        # Non-existent collection returns false
+        if ($db.collection("uncreated_collection").exists()) { throw "exists() on uncreated collection returned true." }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-58: Unique Values Extraction (.distinct())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-58: Unique Values Extraction (.distinct())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("inventory")
+        [void]$col.add(@{ sku = "SKU-1"; category = "Audio"; brand = "Sony" })
+        [void]$col.add(@{ sku = "SKU-2"; category = "Audio"; brand = "Bose" })
+        [void]$col.add(@{ sku = "SKU-3"; category = "Video"; brand = "Sony" })
+        [void]$col.add(@{ sku = "SKU-4"; category = "Video"; brand = "LG" })
+        [void]$col.add(@{ sku = "SKU-5"; brand = "Generic" }) # category is null
+
+        # Distinct categories
+        $cats = $col.distinct("category")
+        if ($cats.Count -ne 2) { throw "Expected 2 distinct categories, got $($cats.Count)." }
+        if (-not ($cats -contains "Audio") -or -not ($cats -contains "Video")) {
+            throw "Distinct categories mismatch: $($cats -join ', ')"
+        }
+
+        # Distinct with filter
+        $sonyCats = $col.where("brand", "==", "Sony").distinct("category")
+        if ($sonyCats.Count -ne 2) { throw "Expected 2 distinct categories for Sony." }
+
+        # Distinct brands for Audio only
+        $audioBrands = $col.where("category", "==", "Audio").distinct("brand")
+        if ($audioBrands.Count -ne 2 -or ($audioBrands -contains "LG")) {
+            throw "Distinct brands for Audio mismatch: $($audioBrands -join ', ')"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-59: Native Mathematical Aggregations (.sum(), .avg(), .min(), .max())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-59: Native Mathematical Aggregations (.sum(), .avg(), .min(), .max())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("orders")
+        [void]$col.add(@{ status = "paid"; amount = 100.00 })
+        [void]$col.add(@{ status = "paid"; amount = 200.00 })
+        [void]$col.add(@{ status = "paid"; amount = 300.00 })
+        [void]$col.add(@{ status = "pending"; amount = 50.00 })
+
+        # Aggregate on filtered query
+        $paidSum = $col.where("status", "==", "paid").sum("amount")
+        if ($paidSum -ne 600.0) { throw "Expected paid sum 600, got $paidSum." }
+
+        $paidAvg = $col.where("status", "==", "paid").avg("amount")
+        if ($paidAvg -ne 200.0) { throw "Expected paid avg 200, got $paidAvg." }
+
+        # Total aggregates
+        $allMin = $col.min("amount")
+        $allMax = $col.max("amount")
+        if ($allMin -ne 50.0) { throw "Expected min 50, got $allMin." }
+        if ($allMax -ne 300.0) { throw "Expected max 300, got $allMax." }
+
+        # Empty collection aggregations
+        $emptySum = $col.where("status", "==", "cancelled").sum("amount")
+        if ($emptySum -ne 0.0) { throw "Expected empty sum to be 0.0, got $emptySum." }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-60: Array Length Filtering (whereLength & length operators)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-60: Array Length Filtering (whereLength & length operators)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("teams")
+        [void]$col.add(@{ team = "Alpha"; members = @("Alice", "Bob", "Charlie") }) # len 3
+        [void]$col.add(@{ team = "Beta";  members = @("Dave") })                    # len 1
+        [void]$col.add(@{ team = "Gamma"; members = @("Eve", "Frank") })            # len 2
+        [void]$col.add(@{ team = "Empty"; members = @() })                          # len 0
+
+        # Exact length match
+        $len2 = $col.where("members", "length", 2).get()
+        if ($len2.Count -ne 1 -or $len2[0].team -ne "Gamma") {
+            throw "Expected team Gamma for length 2, got: $(ConvertTo-Json $len2 -Compress)"
+        }
+
+        # whereLength helper with operator
+        $largeTeams = $col.whereLength("members", ">=", 2).get()
+        if ($largeTeams.Count -ne 2) {
+            throw "Expected 2 large teams (>=2), got $($largeTeams.Count)."
+        }
+
+        # Empty array check (length == 0)
+        $emptyTeams = $col.where("members", "length", 0).get()
+        if ($emptyTeams.Count -ne 1 -or $emptyTeams[0].team -ne "Empty") {
+            throw "Expected Empty team for length 0, got $($emptyTeams.Count)."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-61: Polymorphic Type Filtering (whereType & type operators)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-61: Polymorphic Type Filtering (whereType & type operators)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("schema_test")
+        [void]$col.add(@{ id = 1; config = @{ mode = "strict"; timeout = 30 } }) # object
+        [void]$col.add(@{ id = 2; config = "default-string-mode" })              # text
+        [void]$col.add(@{ id = 3; config = @("legacy", "compat") })             # array
+        [void]$col.add(@{ id = 4; config = 42 })                                 # integer (number)
+
+        # whereType object
+        $objs = $col.whereType("config", "object").get()
+        if ($objs.Count -ne 1 -or $objs[0].id -ne 1) {
+            throw "Expected id 1 for object type, got $($objs.Count)."
+        }
+
+        # whereType text
+        $texts = $col.where("config", "type", "text").get()
+        if ($texts.Count -ne 1 -or $texts[0].id -ne 2) {
+            throw "Expected id 2 for text type, got $($texts.Count)."
+        }
+
+        # whereType array
+        $arrays = $col.whereType("config", "array").get()
+        if ($arrays.Count -ne 1 -or $arrays[0].id -ne 3) {
+            throw "Expected id 3 for array type, got $($arrays.Count)."
+        }
+
+        # whereType number
+        $nums = $col.whereType("config", "number").get()
+        if ($nums.Count -ne 1 -or $nums[0].id -ne 4) {
+            throw "Expected id 4 for number type, got $($nums.Count)."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-62: CHECK(json_valid(doc)) Storage Constraint & .validate()
+# ---------------------------------------------------------------------------
+Assert-Test "TC-62: CHECK(json_valid(doc)) Storage Constraint & .validate()" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("integrity_test")
+        [void]$col.create()
+
+        # Insert healthy records
+        [void]$col.doc("doc-ok").set(@{ title = "Clean Data"; count = 1 })
+        if (-not $col.validate()) {
+            throw "validate() should return true on clean collection."
+        }
+
+        # Attempt to insert malformed JSON string directly via SQL
+        $threwCheck = $false
+        try {
+            $db._ExecuteDirectSql("INSERT INTO integrity_test (key, doc) VALUES ('bad-doc', '{malformed json');")
+        } catch {
+            $threwCheck = $true
+        }
+        if (-not $threwCheck) {
+            throw "SQLite CHECK(json_valid(doc)) failed to block malformed JSON payload!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-63: Hardened Type Validation & SQL Injection Defense
+# ---------------------------------------------------------------------------
+Assert-Test "TC-63: Hardened Type Validation & SQL Injection Defense" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("sec_hardening")
+        [void]$col.create()
+
+        # 1. Invalid / Malicious types in whereType must throw ArgumentException
+        $threwInjection = $false
+        try {
+            [void]$col.whereType("field", "text' OR 1=1 --").get()
+        } catch [System.ArgumentException] {
+            $threwInjection = $true
+        }
+        if (-not $threwInjection) {
+            throw "whereType failed to reject malicious SQL injection type payload!"
+        }
+
+        # 2. Null type parameter must throw ArgumentException
+        $threwNull = $false
+        try {
+            [void]$col.whereType("field", $null).get()
+        } catch [System.ArgumentException] {
+            $threwNull = $true
+        }
+        if (-not $threwNull) {
+            throw "whereType failed to reject null type parameter!"
+        }
+
+        # 3. Direct NULL insertion into doc must violate NOT NULL constraint
+        $threwNotNull = $false
+        try {
+            $db._ExecuteDirectSql("INSERT INTO sec_hardening (key, doc) VALUES ('null-doc', NULL);")
+        } catch {
+            $threwNotNull = $true
+        }
+        if (-not $threwNotNull) {
+            throw "NOT NULL constraint on doc failed to block NULL insertion!"
+        }
+
+        # 4. _ExecuteAggregate with unauthorized function name must throw ArgumentException
+        $threwAgg = $false
+        try {
+            [void]$col._ExecuteAggregate("DROP TABLE users; --", "price")
+        } catch [System.ArgumentException] {
+            $threwAgg = $true
+        }
+        if (-not $threwAgg) {
+            throw "_ExecuteAggregate failed to reject invalid aggregate function!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-64: Criteria Resolution in Upsert & Fluent Terminal State Isolation
+# ---------------------------------------------------------------------------
+Assert-Test "TC-64: Criteria Resolution in Upsert & Fluent Terminal State Isolation" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("state_isolation_test")
+
+        # 1. Upsert with hashtable criteria @{ id = 'usr-crit-1' }
+        $k1 = $col.upsert(@{ id = "usr-crit-1"; name = "Alice"; tier = "Gold" })
+        if ($k1 -ne "usr-crit-1") {
+            throw "upsert failed to resolve key from criteria hashtable: $k1"
+        }
+
+        # 2. Upsert with PSCustomObject criteria
+        $k2 = $col.upsert([PSCustomObject]@{ key = "usr-crit-2"; name = "Bob"; tier = "Silver" })
+        if ($k2 -ne "usr-crit-2") {
+            throw "upsert failed to resolve key from PSCustomObject criteria: $k2"
+        }
+
+        # Add 3 more items
+        [void]$col.add(@{ name = "Charlie"; tier = "Bronze" })
+        [void]$col.add(@{ name = "Dana"; tier = "Platinum" })
+        [void]$col.add(@{ name = "Evan"; tier = "VIP" })
+
+        # 3. Verify total count is 5
+        if ($col.count() -ne 5) {
+            throw "Expected 5 documents, got $($col.count())"
+        }
+
+        # 4. first() with chained limit(2) must NOT leave dangling limit on collection
+        $f = $col.limit(2).first()
+        if ($null -eq $f) {
+            throw "first() returned null"
+        }
+        if ($null -ne $col.LimitValue) {
+            throw "first() leaked dangling LimitValue: $($col.LimitValue)"
+        }
+
+        # 5. Subsequent get() must return all 5 items, not 2
+        $allDocs = $col.get()
+        if ($allDocs.Count -ne 5) {
+            throw "Subsequent get() was constrained by leaked limit! Expected 5, got $($allDocs.Count)"
+        }
+    } finally {
+        $db.close()
+    }
+}
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

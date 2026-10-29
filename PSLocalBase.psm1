@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -53,6 +53,7 @@ class PSLocalBase : System.IDisposable {
     [string]$UnionType = ""
     [bool]$IsCollectionGroup = $false
     [string[]]$GroupTables = @()
+    [System.Collections.Generic.List[string]]$SelectedFields
 
     # Default constructor (in-memory)
     PSLocalBase() {
@@ -79,6 +80,7 @@ class PSLocalBase : System.IDisposable {
         $this.WhereClauses = [System.Collections.Generic.List[string]]::new()
         $this.WhereParameters = [System.Collections.Generic.List[string]]::new()
         $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new()
+        $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
         $this.UnionQuery = $null
         $this.UnionType = ""
         $this.IsCollectionGroup = $false
@@ -94,6 +96,7 @@ class PSLocalBase : System.IDisposable {
         $this.WhereClauses = [System.Collections.Generic.List[string]]::new()
         $this.WhereParameters = [System.Collections.Generic.List[string]]::new()
         $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new()
+        $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
         $this.UnionQuery = $null
         $this.UnionType = ""
         $this.IsCollectionGroup = $false
@@ -227,6 +230,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -ne $this.WhereClauses) { $this.WhereClauses.Clear() }
         if ($null -ne $this.WhereParameters) { $this.WhereParameters.Clear() }
         if ($null -ne $this.PopulateClauses) { $this.PopulateClauses.Clear() }
+        if ($null -ne $this.SelectedFields) { $this.SelectedFields.Clear() }
         $this.UnionQuery = $null
         $this.UnionType = ""
         $this.OrderByClause = ""
@@ -250,8 +254,25 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified.")
         }
-        $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+        $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (json_valid(doc)));"
         $this._ExecuteDirectSql($createSql)
+    }
+
+    [bool] validate() {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified to validate. Call .collection('name').validate()")
+        }
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            return $true
+        }
+        try {
+            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
+            return ($rows.Count -eq 0)
+        } finally {
+            $this._ResetQueryState()
+        }
     }
 
     [PSLocalBase] create() {
@@ -488,6 +509,28 @@ class PSLocalBase : System.IDisposable {
         return $child
     }
 
+    [string] _ResolveKeyFromCriteria([object]$keyOrCriteria) {
+        if ($null -eq $keyOrCriteria) { return "" }
+        if ($keyOrCriteria -is [string]) { return $keyOrCriteria }
+        if ($keyOrCriteria -is [System.Collections.IDictionary]) {
+            if ($keyOrCriteria.Contains("key")) { return [string]$keyOrCriteria["key"] }
+            if ($keyOrCriteria.Contains("id")) { return [string]$keyOrCriteria["id"] }
+            if ($keyOrCriteria.Contains("_key")) { return [string]$keyOrCriteria["_key"] }
+            foreach ($val in $keyOrCriteria.Values) {
+                return [string]$val
+            }
+        }
+        if ($keyOrCriteria -is [System.Management.Automation.PSCustomObject]) {
+            if ($keyOrCriteria.PSObject.Properties["key"]) { return [string]$keyOrCriteria.key }
+            if ($keyOrCriteria.PSObject.Properties["id"]) { return [string]$keyOrCriteria.id }
+            if ($keyOrCriteria.PSObject.Properties["_key"]) { return [string]$keyOrCriteria._key }
+            foreach ($prop in $keyOrCriteria.PSObject.Properties) {
+                return [string]$prop.Value
+            }
+        }
+        return [string]$keyOrCriteria
+    }
+
     [PSLocalBase] doc([object]$keyOrCriteria) {
         $this._EnsureOpen()
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
@@ -498,35 +541,7 @@ class PSLocalBase : System.IDisposable {
         }
 
         # Support string key or object/hashtable criteria like @{ id = 1 } or @{ key = 'abc' }
-        $resolvedKey = ""
-        if ($keyOrCriteria -is [string]) {
-            $resolvedKey = $keyOrCriteria
-        } elseif ($keyOrCriteria -is [System.Collections.IDictionary]) {
-            if ($keyOrCriteria.Contains("key")) {
-                $resolvedKey = [string]$keyOrCriteria["key"]
-            } elseif ($keyOrCriteria.Contains("id")) {
-                $resolvedKey = [string]$keyOrCriteria["id"]
-            } else {
-                # Fallback to first entry or string representation
-                foreach ($val in $keyOrCriteria.Values) {
-                    $resolvedKey = [string]$val
-                    break
-                }
-            }
-        } elseif ($keyOrCriteria -is [System.Management.Automation.PSCustomObject]) {
-            if ($keyOrCriteria.PSObject.Properties["key"]) {
-                $resolvedKey = [string]$keyOrCriteria.key
-            } elseif ($keyOrCriteria.PSObject.Properties["id"]) {
-                $resolvedKey = [string]$keyOrCriteria.id
-            } else {
-                foreach ($prop in $keyOrCriteria.PSObject.Properties) {
-                    $resolvedKey = [string]$prop.Value
-                    break
-                }
-            }
-        } else {
-            $resolvedKey = [string]$keyOrCriteria
-        }
+        $resolvedKey = $this._ResolveKeyFromCriteria($keyOrCriteria)
 
         if ([string]::IsNullOrWhiteSpace($resolvedKey)) {
             throw [System.ArgumentException]::new("Document key could not be resolved from criteria.")
@@ -726,6 +741,44 @@ class PSLocalBase : System.IDisposable {
         return $this.add($data, "")
     }
 
+    [string] upsert([object]$data) {
+        return $this.upsert($data, "")
+    }
+
+    [string] upsert([object]$data, [string]$customKey) {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .upsert().")
+        }
+
+        try {
+            $targetKey = if (-not [string]::IsNullOrWhiteSpace($this.CurrentKey)) {
+                $this.CurrentKey
+            } elseif (-not [string]::IsNullOrWhiteSpace($customKey)) {
+                $customKey
+            } else {
+                $this._ResolveKeyFromCriteria($data)
+            }
+
+            if ([string]::IsNullOrWhiteSpace($targetKey)) {
+                $targetKey = [System.Guid]::NewGuid().ToString("N")
+            }
+
+            if ($targetKey.IndexOf([char]0) -ge 0) {
+                throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
+            }
+
+            $this._EnsureCollectionTable()
+            $json = $this._SerializeJson($data)
+            $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
+            $this._ExecuteBoundSql($sql, @($targetKey, $json))
+            return $targetKey
+        } finally {
+            $this.CurrentKey = ""
+            $this._ResetQueryState()
+        }
+    }
+
     [void] update([object]$partialData) {
         $this._EnsureOpen()
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
@@ -800,6 +853,13 @@ class PSLocalBase : System.IDisposable {
             '^(NOT[\s_-]?IN|-NOTIN)$'            { 'NOT IN' }
             '^(ARRAY-CONTAINS|-CONTAINS)$' { 'ARRAY-CONTAINS' }
             '^(ARRAY-CONTAINS-ANY)$'       { 'ARRAY-CONTAINS-ANY' }
+            '^(LENGTH|ARRAY-LENGTH|SIZE)$'       { 'LENGTH' }
+            '^(LENGTH>|LENGTH-GT|SIZE>)$'        { 'LENGTH>' }
+            '^(LENGTH>=|LENGTH-GE|SIZE>=)$'      { 'LENGTH>=' }
+            '^(LENGTH<|LENGTH-LT|SIZE<)$'        { 'LENGTH<' }
+            '^(LENGTH<=|LENGTH-LE|SIZE<=)$'      { 'LENGTH<=' }
+            '^(LENGTH!=|LENGTH-NE|SIZE!=)$'      { 'LENGTH!=' }
+            '^(TYPE|JSON-TYPE)$'                 { 'TYPE' }
             default {
                 throw [System.ArgumentException]::new("Unsupported operator '$operator' in where clause.")
             }
@@ -891,6 +951,57 @@ class PSLocalBase : System.IDisposable {
             return $this
         }
 
+        # Case A4: array length / size
+        if ($sqlOp -eq 'LENGTH' -or $sqlOp -eq 'ARRAY-LENGTH' -or $sqlOp -eq 'SIZE') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) = $len")
+            return $this
+        }
+        if ($sqlOp -eq 'LENGTH>' -or $sqlOp -eq 'LENGTH-GT' -or $sqlOp -eq 'SIZE>') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) > $len")
+            return $this
+        }
+        if ($sqlOp -eq 'LENGTH>=' -or $sqlOp -eq 'LENGTH-GE' -or $sqlOp -eq 'SIZE>=') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) >= $len")
+            return $this
+        }
+        if ($sqlOp -eq 'LENGTH<' -or $sqlOp -eq 'LENGTH-LT' -or $sqlOp -eq 'SIZE<') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) < $len")
+            return $this
+        }
+        if ($sqlOp -eq 'LENGTH<=' -or $sqlOp -eq 'LENGTH-LE' -or $sqlOp -eq 'SIZE<=') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) <= $len")
+            return $this
+        }
+        if ($sqlOp -eq 'LENGTH!=' -or $sqlOp -eq 'LENGTH-NE' -or $sqlOp -eq 'SIZE!=') {
+            $len = [int]$value
+            $this.WhereClauses.Add("COALESCE(json_array_length(doc, '$jsonField'), 0) != $len")
+            return $this
+        }
+
+        # Case A5: type / json-type
+        if ($sqlOp -eq 'TYPE' -or $sqlOp -eq 'JSON-TYPE') {
+            if ($null -eq $value) {
+                throw [System.ArgumentException]::new("Value for type operator cannot be null.")
+            }
+            $targetType = [string]$value.ToString().Trim().ToLowerInvariant()
+            if ($targetType -eq 'number' -or $targetType -eq 'numeric') {
+                $this.WhereClauses.Add("json_type(doc, '$jsonField') IN ('integer', 'real')")
+            } else {
+                $validTypes = @('null', 'integer', 'real', 'text', 'array', 'object')
+                if ($validTypes -notcontains $targetType) {
+                    throw [System.ArgumentException]::new("Invalid JSON type '$targetType'. Expected one of: $($validTypes -join ', '), number, numeric.")
+                }
+                $this.WhereClauses.Add("json_type(doc, '$jsonField') = ?")
+                $this.WhereParameters.Add($targetType)
+            }
+            return $this
+        }
+
         # Case B: Null comparisons
         if ($null -eq $value) {
             if ($sqlOp -eq '=') {
@@ -932,6 +1043,78 @@ class PSLocalBase : System.IDisposable {
         $this.WhereParameters.Add($paramVal)
 
         return $this
+    }
+
+    [PSLocalBase] whereLength([string]$field, [int]$count) {
+        return $this.where($field, "length", $count)
+    }
+
+    [PSLocalBase] whereLength([string]$field, [string]$operator, [int]$count) {
+        $cleanOp = $operator.Trim().ToLowerInvariant()
+        $op = switch ($cleanOp) {
+            '>'   { 'length>' }
+            '-gt' { 'length>' }
+            '>='  { 'length>=' }
+            '-ge' { 'length>=' }
+            '<'   { 'length<' }
+            '-lt' { 'length<' }
+            '<='  { 'length<=' }
+            '-le' { 'length<=' }
+            '!='  { 'length!=' }
+            '-ne' { 'length!=' }
+            default { 'length' }
+        }
+        return $this.where($field, $op, $count)
+    }
+
+    [PSLocalBase] whereType([string]$field, [string]$expectedType) {
+        return $this.where($field, "type", $expectedType)
+    }
+
+    [PSLocalBase] _ApplySelect([string[]]$fields) {
+        if ($null -eq $fields -or $fields.Length -eq 0) {
+            throw [System.ArgumentException]::new("Fields array cannot be null or empty in select().")
+        }
+        if ($null -eq $this.SelectedFields) {
+            $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
+        }
+        foreach ($f in $fields) {
+            if (-not [string]::IsNullOrWhiteSpace($f)) {
+                $clean = $f.Trim()
+                if ($clean.StartsWith("$.")) { $clean = $clean.Substring(2) }
+                if ($clean -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                    throw [System.ArgumentException]::new("Field name '$f' is invalid for select(). Only alphanumeric characters, underscores, and dots are allowed.")
+                }
+                if (-not $this.SelectedFields.Contains($clean)) {
+                    $this.SelectedFields.Add($clean)
+                }
+            }
+        }
+        return $this
+    }
+
+    [PSLocalBase] select([string[]]$fields) {
+        return $this._ApplySelect($fields)
+    }
+
+    [PSLocalBase] select([string]$field1) {
+        $arr = [string[]]@($field1)
+        return $this._ApplySelect($arr)
+    }
+
+    [PSLocalBase] select([string]$field1, [string]$field2) {
+        $arr = [string[]]@($field1, $field2)
+        return $this._ApplySelect($arr)
+    }
+
+    [PSLocalBase] select([string]$field1, [string]$field2, [string]$field3) {
+        $arr = [string[]]@($field1, $field2, $field3)
+        return $this._ApplySelect($arr)
+    }
+
+    [PSLocalBase] select([string]$field1, [string]$field2, [string]$field3, [string]$field4) {
+        $arr = [string[]]@($field1, $field2, $field3, $field4)
+        return $this._ApplySelect($arr)
     }
 
     [PSLocalBase] orderBy([string]$field) {
@@ -1014,10 +1197,21 @@ class PSLocalBase : System.IDisposable {
                 }
             }
 
+            $hasSelect = ($null -ne $this.SelectedFields -and $this.SelectedFields.Count -gt 0)
+            if ($hasSelect) {
+                $selectPairs = [System.Collections.Generic.List[string]]::new()
+                foreach ($f in $this.SelectedFields) {
+                    $selectPairs.Add("'$f', json_extract($docExpr, '`$.$f')")
+                }
+                $docExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
+            }
+
             # Case 1: Point lookup by key (.doc('key').get())
             if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
                 $sql = if ($hasPopulate) {
                     "SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m$($joinsBuilder.ToString()) WHERE m.key = ?;"
+                } elseif ($hasSelect) {
+                    "SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
                 } else {
                     "SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
                 }
@@ -1113,6 +1307,8 @@ class PSLocalBase : System.IDisposable {
                 if ($hasPopulate) {
                     [void]$sqlBuilder.Append("SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m")
                     [void]$sqlBuilder.Append($joinsBuilder.ToString())
+                } elseif ($hasSelect) {
+                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)]")
                 } else {
                     [void]$sqlBuilder.Append("SELECT key, doc FROM [$($this.CurrentCollection)]")
                 }
@@ -1167,6 +1363,172 @@ class PSLocalBase : System.IDisposable {
             }
 
             return [PSCustomObject[]]$results.ToArray()
+        } finally {
+            $this._ResetQueryState()
+        }
+    }
+
+    [object] first() {
+        return $this.first(@{})
+    }
+
+    [object] first([hashtable]$options) {
+        try {
+            $this.LimitValue = 1
+            $res = $this.get($options)
+            if ($null -eq $res) { return $null }
+            if ($res -is [System.Array]) {
+                if ($res.Length -gt 0) { return $res[0] }
+                return $null
+            }
+            return $res
+        } finally {
+            $this._ResetQueryState()
+        }
+    }
+
+    [bool] exists() {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
+        }
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            return $false
+        }
+        try {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
+                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
+                return ($rows.Count -gt 0)
+            }
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
+            $queryParams = [System.Collections.Generic.List[string]]::new()
+            if ($this.WhereClauses.Count -gt 0) {
+                [void]$sqlBuilder.Append(" WHERE ")
+                [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
+                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            }
+            [void]$sqlBuilder.Append(" LIMIT 1;")
+            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+            return ($rows.Count -gt 0)
+        } finally {
+            $this._ResetQueryState()
+        }
+    }
+
+    [object[]] distinct([string]$field) {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .distinct().")
+        }
+        if ([string]::IsNullOrWhiteSpace($field)) {
+            throw [System.ArgumentException]::new("Field name cannot be null or empty in distinct().")
+        }
+        $trimmedField = $field.Trim()
+        $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
+        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+            throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
+        }
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            return @()
+        }
+        try {
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
+            [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
+            $queryParams = [System.Collections.Generic.List[string]]::new()
+            $whereList = [System.Collections.Generic.List[string]]::new()
+            if ($this.WhereClauses.Count -gt 0) {
+                $whereList.AddRange($this.WhereClauses)
+                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            }
+            $whereList.Add("$jsonExtract IS NOT NULL")
+            [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
+            [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
+
+            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+            $distinctList = [System.Collections.Generic.List[object]]::new()
+            foreach ($row in $rows) {
+                if ($row.Count -gt 0 -and $null -ne $row[0]) {
+                    $distinctList.Add($row[0])
+                }
+            }
+            return [object[]]$distinctList.ToArray()
+        } finally {
+            $this._ResetQueryState()
+        }
+    }
+
+    [double] sum([string]$field) {
+        return [double]$this._ExecuteAggregate("SUM", $field)
+    }
+
+    [double] avg([string]$field) {
+        return [double]$this._ExecuteAggregate("AVG", $field)
+    }
+
+    [object] min([string]$field) {
+        return $this._ExecuteAggregate("MIN", $field)
+    }
+
+    [object] max([string]$field) {
+        return $this._ExecuteAggregate("MAX", $field)
+    }
+
+    [object] _ExecuteAggregate([string]$aggFunc, [string]$field) {
+        $this._EnsureOpen()
+        $cleanAgg = $aggFunc.Trim().ToUpperInvariant()
+        if ($cleanAgg -notmatch '^(SUM|AVG|MIN|MAX|COUNT)$') {
+            throw [System.ArgumentException]::new("Invalid aggregate function '$aggFunc'.")
+        }
+        if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .$aggFunc().")
+        }
+        if ([string]::IsNullOrWhiteSpace($field)) {
+            throw [System.ArgumentException]::new("Field name cannot be null or empty in $aggFunc().")
+        }
+        $trimmedField = $field.Trim()
+        $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
+        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+            throw [System.ArgumentException]::new("Field name '$field' is invalid in $aggFunc(). Only alphanumeric characters, underscores, and dots are allowed.")
+        }
+        if (-not $this._CollectionExists($this.CurrentCollection)) {
+            $this._ResetQueryState()
+            if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
+            return $null
+        }
+        try {
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            $jsonExtract = "CAST(json_extract(doc, '`$.$fieldToCheck') AS REAL)"
+            $aggExpr = if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") {
+                "COALESCE($aggFunc($jsonExtract), 0.0)"
+            } else {
+                "$aggFunc($jsonExtract)"
+            }
+            [void]$sqlBuilder.Append("SELECT $aggExpr FROM [$($this.CurrentCollection)]")
+            $queryParams = [System.Collections.Generic.List[string]]::new()
+            $whereList = [System.Collections.Generic.List[string]]::new()
+            if ($this.WhereClauses.Count -gt 0) {
+                $whereList.AddRange($this.WhereClauses)
+                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            }
+            $whereList.Add("json_extract(doc, '`$.$fieldToCheck') IS NOT NULL")
+            [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList) + ";")
+
+            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+            if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
+                $raw = $rows[0][0]
+                if ($null -eq $raw -or [string]::IsNullOrEmpty([string]$raw)) {
+                    if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
+                    return $null
+                }
+                return [double]$raw
+            }
+            if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
+            return $null
         } finally {
             $this._ResetQueryState()
         }
@@ -1833,7 +2195,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
                 throw [System.InvalidOperationException]::new("No collection specified.")
             }
-            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (json_valid(doc)));"
             $this._ExecuteDirectSql($createSql)
         } -Force
     }
@@ -1844,7 +2206,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
                 throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
             }
-            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
+            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (json_valid(doc)));"
             $this._ExecuteDirectSql($createSql)
             return $this
         } -Force
@@ -1995,6 +2357,150 @@ try {
             $child.GroupTables = $matchedTables.ToArray()
             $child._ResetQueryState()
             return $child
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('validate'))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName validate -Value {
+            $this._EnsureOpen()
+            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                throw [System.InvalidOperationException]::new("No collection specified to validate. Call .collection('name').validate()")
+            }
+            if (-not $this._CollectionExists($this.CurrentCollection)) {
+                $this._ResetQueryState()
+                return $true
+            }
+            try {
+                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
+                return ($rows.Count -eq 0)
+            } finally {
+                $this._ResetQueryState()
+            }
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('first', [type[]]@()))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName first -Value {
+            param([hashtable]$options = @{})
+            try {
+                $this.LimitValue = 1
+                $res = $this.get($options)
+                if ($null -eq $res) { return $null }
+                if ($res -is [System.Array]) {
+                    if ($res.Length -gt 0) { return $res[0] }
+                    return $null
+                }
+                return $res
+            } finally {
+                $this._ResetQueryState()
+            }
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('exists'))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName exists -Value {
+            $this._EnsureOpen()
+            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
+            }
+            if (-not $this._CollectionExists($this.CurrentCollection)) {
+                $this._ResetQueryState()
+                return $false
+            }
+            try {
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                    $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
+                    $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
+                    return ($rows.Count -gt 0)
+                }
+                $sqlBuilder = [System.Text.StringBuilder]::new()
+                [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
+                $queryParams = [System.Collections.Generic.List[string]]::new()
+                if ($this.WhereClauses.Count -gt 0) {
+                    [void]$sqlBuilder.Append(" WHERE ")
+                    [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
+                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                }
+                [void]$sqlBuilder.Append(" LIMIT 1;")
+                $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+                return ($rows.Count -gt 0)
+            } finally {
+                $this._ResetQueryState()
+            }
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('distinct', [type[]]@([string])))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName distinct -Value {
+            param([string]$field)
+            $this._EnsureOpen()
+            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
+                throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .distinct().")
+            }
+            if ([string]::IsNullOrWhiteSpace($field)) {
+                throw [System.ArgumentException]::new("Field name cannot be null or empty in distinct().")
+            }
+            $trimmedField = $field.Trim()
+            $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
+            if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
+            }
+            if (-not $this._CollectionExists($this.CurrentCollection)) {
+                $this._ResetQueryState()
+                return @()
+            }
+            try {
+                $sqlBuilder = [System.Text.StringBuilder]::new()
+                $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
+                [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
+                $queryParams = [System.Collections.Generic.List[string]]::new()
+                $whereList = [System.Collections.Generic.List[string]]::new()
+                if ($this.WhereClauses.Count -gt 0) {
+                    $whereList.AddRange($this.WhereClauses)
+                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                }
+                $whereList.Add("$jsonExtract IS NOT NULL")
+                [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
+                [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
+                $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+                $distinctList = [System.Collections.Generic.List[object]]::new()
+                foreach ($row in $rows) {
+                    if ($row.Count -gt 0 -and $null -ne $row[0]) {
+                        $distinctList.Add($row[0])
+                    }
+                }
+                return [object[]]$distinctList.ToArray()
+            } finally {
+                $this._ResetQueryState()
+            }
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('sum', [type[]]@([string])))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName sum -Value {
+            param([string]$field)
+            return [double]$this._ExecuteAggregate("SUM", $field)
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('avg', [type[]]@([string])))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName avg -Value {
+            param([string]$field)
+            return [double]$this._ExecuteAggregate("AVG", $field)
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('min', [type[]]@([string])))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName min -Value {
+            param([string]$field)
+            return $this._ExecuteAggregate("MIN", $field)
+        } -Force
+    }
+
+    if ($null -eq ([PSLocalBase].GetMethod('max', [type[]]@([string])))) {
+        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName max -Value {
+            param([string]$field)
+            return $this._ExecuteAggregate("MAX", $field)
         } -Force
     }
 } catch { }

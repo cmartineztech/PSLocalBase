@@ -1,4 +1,4 @@
-﻿# Technical Specification: PSLocalBase
+# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -141,7 +141,7 @@ Each collection referenced via `.collection("name")` maps to an independent SQLi
 ```sql
 CREATE TABLE IF NOT EXISTS [collection_name] (
     key TEXT PRIMARY KEY,
-    doc TEXT
+    doc TEXT NOT NULL CHECK (json_valid(doc))
 );
 ```
 * `key`: Unique document identifier (custom string or 32-character GUID).
@@ -197,13 +197,21 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes `.set()`, and returns the key.
 * **`[void] update([object]$partialData)`**
   * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Upserts if document does not exist.
+* **`[string] upsert([object]$data, [string]$customKey = "")`**
+  * Performs an atomic single-step `INSERT INTO [collection] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` without read-modify-write overhead. Supports auto-generated GUID or explicit custom keys.
 
 #### Querying & Filtering
 * **`[PSLocalBase] where([string]$field, [string]$operator, [object]$value)`**
   * Sanitizes field path via whitelist regex `^[a-zA-Z0-9_.\[\]]+$` supporting dot navigation and array indexing (`tags[0]`, `roles[1].title`).
-  * Sanitizes operators (`=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`).
+  * Sanitizes operators (`=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `not-in`, `array-contains`, `array-contains-any`, `length`, `length>`, `length>=`, `length<`, `length<=`, `length!=`, `type`, `json-type`).
   * Enforces parameterized query binding (`?`) for string values and dynamic placeholders for `IN`.
   * Extracts JSON fields using SQLite's native `json_extract(doc, '$.field')`.
+* **`[PSLocalBase] whereLength([string]$field, [string]$op, [int]$expected)` / `whereLength([string]$field, [int]$count)`**
+  * Filters documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`.
+* **`[PSLocalBase] whereType([string]$field, [string]$expectedType)`**
+  * Filters documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `number`) via SQLite's `json_type(doc, '$.field')`.
+* **`[PSLocalBase] select([string[]]$fields)`**
+  * Projects only requested fields directly in SQLite using `json_object('field', json_extract(doc, '$.field'))`, drastically reducing PowerShell deserialization overhead and memory allocation.
 * **`[PSLocalBase] orderBy([string]$field, [string]$direction = "asc")`**
   * Validates field whitelist and directions (`ASC`/`DESC`).
 * **`[PSLocalBase] limit([int]$count)`**
@@ -212,9 +220,19 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Skips `$offset` records for offset-based query pagination (`OFFSET`).
 * **`[int] count()`**
   * Returns the count of matching documents executed directly in SQL (`SELECT COUNT(*)`) with zero row deserialization in memory.
+* **`[bool] exists()`**
+  * High-performance boolean check executing `SELECT 1 ... LIMIT 1` directly in SQL ($O(1)$ on indexed lookups) without loading or deserializing documents.
+* **`[object] first([hashtable]$options)`**
+  * Retrieves the first matching document with a hardcoded `LIMIT 1` cursor, returning `[PSCustomObject]` or `$null`.
+* **`[object[]] distinct([string]$field)`**
+  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`.
+* **`[double] sum([string]$field)` / `[double] avg([string]$field)` / `[object] min([string]$field)` / `[object] max([string]$field)`**
+  * Executes aggregate functions directly inside SQLite C engine on numeric JSON fields without transferring or deserializing rows in PowerShell (`min`/`max` return `[object]` to cleanly represent `$null` when no matching records exist).
 * **`[object] get([hashtable]$options)`**
   * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`).
   * If `$options.keys = $true`, returns objects structured as `@{ key = $k; data = $v }`.
+* **`[bool] validate()`**
+  * Validates collection-wide JSON document integrity against SQLite's native `json_valid(doc)` constraint.
 * **`[PSCustomObject[]] query([string]$sql, [object[]]$parameters)`**
   * Executes arbitrary custom SQL (including cross-collection `JOIN`s and aggregations) with strongly-typed parameter binding (`int64`, `double`, `string`, `null`) and parameter count parity enforcement.
 
@@ -232,7 +250,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 45 out of 45 tests on both PowerShell 5.1 and PowerShell 7+:
+The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 64 out of 64 tests on both PowerShell 5.1 and PowerShell 7+:
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
@@ -289,6 +307,17 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-51** | **Relational .populate() Joins** | Dynamic `LEFT JOIN` and `json_set` compilation resolving foreign keys without N+1 overhead | **PASSED** |
 | **TC-52** | **Compound Queries (.union() / .unionAll())** | Pure SQL `UNION` (deduplication) and `UNION ALL` across collections with ordering and count | **PASSED** |
 | **TC-53** | **Sharded collectionGroup()** | Wildcard multi-collection querying (`audit_*`) with automated `._collection` origin metadata | **PASSED** |
+| **TC-54** | **Atomic Upsert** | Single-step atomic `INSERT ... ON CONFLICT(key) DO UPDATE` inserting or updating records | **PASSED** |
+| **TC-55** | **Selective Field Projection** | Native `json_object` and `json_extract` field filtering in SQL, eliminating unselected field memory overhead | **PASSED** |
+| **TC-56** | **First Result Retrieval** | Single document cursor retrieval with `LIMIT 1` returning PSCustomObject or null | **PASSED** |
+| **TC-57** | **O(1) Existence Verification** | Instant boolean verification (`SELECT 1 ... LIMIT 1`) on point lookups and filtered queries | **PASSED** |
+| **TC-58** | **Unique Values Extraction** | Native `SELECT DISTINCT json_extract()` leveraging B-Tree index scans for unique sets | **PASSED** |
+| **TC-59** | **Mathematical Aggregations** | Direct in-engine `SUM`, `AVG`, `MIN`, and `MAX` calculations without PowerShell memory deserialization | **PASSED** |
+| **TC-60** | **Array Length Filtering** | Evaluates array cardinality directly in C via SQLite's `json_array_length()` (`length`, `whereLength`) | **PASSED** |
+| **TC-61** | **Polymorphic Type Filtering** | Inspects dynamic NoSQL document schemas using SQLite's `json_type()` (`type`, `whereType`) | **PASSED** |
+| **TC-62** | **CHECK(json_valid(doc)) Storage Constraint**| Enforces native SQLite table-level JSON schema integrity and exposes collection `.validate()` | **PASSED** |
+| **TC-63** | **Hardened Type Validation & SQL Injection Defense** | Validates allowlist types for `whereType` with parameter binding `?`, rejects malicious payloads, enforces `NOT NULL` on doc | **PASSED** |
+| **TC-64** | **Criteria Resolution in Upsert & Fluent State Isolation** | Resolves keys from criteria objects in `upsert()`, prevents `first()` from leaking limits to subsequent queries | **PASSED** |
 
 ---
 
@@ -342,3 +371,7 @@ try {
     $db.close()
 }
 ```
+
+### Multi-Client Reading over SMB Network Shares
+
+SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Quick Start Guide](QUICKSTART.md#11-multi-client-reading--smb--network-shares) for the Staging / Snapshot pattern (`Open-LocalBaseFromSmb`) and direct read PRAGMA directives.

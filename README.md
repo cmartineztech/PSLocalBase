@@ -1,4 +1,4 @@
-﻿# PSLocalBase
+# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -28,7 +28,7 @@
   - [Querying & Filtering (`get`, `where`, `orderBy`, `limit`, `query`)](#querying--filtering-get-where-orderby-limit-query)
   - [Relational Lookups (`populate`)](#relational-lookups-populate)
   - [Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)](#compound-queries--sharding-union-unionall-collectiongroup)
-  - [Deleting Data (`delete`, `deleteDatabase`)](#deleting-data-delete-deletedatabase)
+  - [Deleting Data (`drop`, `delete`, `deleteDatabase`)](#deleting-data-drop-delete-deletedatabase)
   - [ACID Transactions](#acid-transactions)
   - [Resource Cleanup & Disposal](#resource-cleanup--disposal)
   - [Production Best Practices & Crash Resilience](#production-best-practices--crash-resilience)
@@ -221,6 +221,8 @@ $db.collection("users").doc("usr-100").update(@{
 })
 ```
 
+> 💡 **Looking for `upsert()` or storage schema validation?** See [`_DOCS/QUICKSTART.md`](_DOCS/QUICKSTART.md#3-writing-documents) for single-statement atomic upserts (`.upsert()`) and schema integrity checks (`.validate()`).
+
 ---
 
 ### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
@@ -279,7 +281,7 @@ $db.collection("users").dropIndex("email")
 
 ---
 
-### Querying & Filtering (`get`, `where`, `orderBy`, `limit`)
+### Querying & Filtering (`get`, `where`, `orderBy`, `limit`, `query`)
 
 #### `where([string]$field, [string]$operator, [object]$value)`
 Filters documents using SQLite's native `json_extract` and `json_each`. Conditions can be chained together.
@@ -382,6 +384,8 @@ $report | Format-Table -AutoSize
 # Parameterized queries with strongly-typed binding and parameter count parity
 $activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM users WHERE json_extract(doc, '$.age') >= ?;", @(30))
 ```
+
+> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type queries (`whereLength()`, `whereType()`), see the complete [Quick Start Guide (`_DOCS/QUICKSTART.md`)](_DOCS/QUICKSTART.md#4-querying-documents).
 
 ---
 
@@ -535,11 +539,17 @@ try {
 * **Process Exit Cleanup:** When a PowerShell process terminates (e.g. running via `powershell -File script.ps1`, GitHub Actions, or Windows Scheduled Tasks), the Windows kernel automatically reclaims all unmanaged handles and closes all file descriptors.
 * **Interactive Sessions:** If a script fails inside an interactive session (VS Code or PowerShell console), the handle remains bound to that session's variable until closed. Simply invoke `$db.close()` or close the terminal window to release the file lock.
 
+#### Multi-Client Reading Over Network Shares (SMB)
+
+* **Why SQLite WAL Prohibits Direct SMB Access:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot be coordinated across separate operating system kernels over SMB/CIFS. Attempting to open a WAL database directly across a network share triggers `SQLITE_IOERR` or database corruption. PSLocalBase actively rejects direct UNC and mapped network drive paths in WAL mode.
+* **The Recommended Staging / Snapshot Pattern:** For multi-client read scenarios (e.g. querying a shared software catalog or inventory across multiple machines), copy the database file to `$env:TEMP` before opening (`Open-LocalBaseFromSmb`). This provides zero file lock contention on the SMB file server, eliminates network latency per query, and delivers full 100,000+ ops/sec local NVMe read speed.
+* **Detailed SMB Guide & PRAGMAs:** For the complete copy-pasteable `Open-LocalBaseFromSmb` pattern, cache invalidation logic, and direct read PRAGMA directives (`PRAGMA query_only = ON;`, `PRAGMA busy_timeout = 5000;`, `PRAGMA cache_size = -32768;`), see [Section 11 of the Quick Start Guide](_DOCS/QUICKSTART.md#11-multi-client-reading--smb--network-shares).
+
 ---
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 45 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 64 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -550,7 +560,7 @@ powershell -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
-For the complete breakdown of all 45 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+For the complete breakdown of all 64 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
 ---
 
