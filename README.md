@@ -1,4 +1,4 @@
-# PSLocalBase
+﻿# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -542,14 +542,14 @@ try {
 
 #### Multi-Client Reading Over Network Shares (SMB)
 
-* **Why SQLite WAL Prohibits Direct SMB Access:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB.
-* **Recommended Pattern (Local Snapshot):** Copy the `.db` snapshot to `$env:TEMP` before reading (`Copy-Item -Destination $env:TEMP`). This eliminates file locks on the network share and queries at full local NVMe speed.
-* **Direct Read (Non-WAL):** For environments requiring direct reads without copying, the database must use rollback journals (`journal_mode = DELETE`) with `PRAGMA query_only = ON;` and `PRAGMA busy_timeout = 5000;`. See [Section 11 in Full Documentation](_DOCS/#11-reading-over-smb--network-shares).
+* **Why Direct SMB Access is Blocked:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB. Direct UNC and mapped paths are rejected to prevent file corruption.
+* **Writer Snapshot Export (`VACUUM INTO`):** To share data over SMB without downtime, the writer process exports a consistent snapshot via `$db.query("VACUUM INTO 'snapshot.db';")` and publishes the completed file to the share.
+* **Client Consumption (Local Temp):** Readers copy the published snapshot to a unique `$env:TEMP` path and query at full local NVMe speed with zero network lock contention. See [Section 11 in Full Documentation](_DOCS/#11-reading-over-smb--network-shares).
 ---
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 67 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 73 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell

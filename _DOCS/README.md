@@ -1,4 +1,4 @@
-# PSLocalBase Documentation & Reference Guide
+﻿# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -51,8 +51,9 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 - [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
 - [10. PowerShell Pipeline Integration & Object Standard](#10-powershell-pipeline-integration--object-standard)
 - [11. Reading Over SMB / Network Shares](#11-reading-over-smb--network-shares)
-  - [Recommended Pattern: Local Temp Snapshot](#recommended-pattern-local-temp-snapshot)
-  - [Direct SMB Read (Non-WAL Databases Only)](#direct-smb-read-non-wal-databases-only)
+  - [Why Direct SMB Access is Blocked](#why-direct-smb-access-is-blocked)
+  - [Writer Pattern: Publishing Consistent Snapshots via VACUUM INTO](#writer-pattern-publishing-consistent-snapshots-via-vacuum-into)
+  - [Client Pattern: Safe Local Temp Consumption](#client-pattern-safe-local-temp-consumption)
 ---
 
 ## Quick Start in 2 Minutes
@@ -608,38 +609,49 @@ $db.collectionGroup("logs_2026_*").get() |
 
 ## 11. Reading Over SMB / Network Shares
 
-When reading a database located on a network share (`\\server\share\data.db`), SQLite's default **Write-Ahead Logging (`WAL`)** mode cannot coordinate shared memory across separate physical machines over SMB.
+PSLocalBase enforces local drive access and strictly rejects UNC (`\\server\share`) and mapped network paths because SQLite's default **Write-Ahead Logging (`WAL`)** mode relies on shared memory (`.db-shm`) and OS-level locking primitives that network shares cannot safely coordinate.
 
-### Recommended Pattern: Local Temp Snapshot
+### Why Direct SMB Access is Blocked
 
-The standard, zero-contention way to query a database over SMB is to copy a snapshot to `$env:TEMP` before reading. This provides **zero locks** on the network share and **100,000+ ops/sec** local NVMe speed:
+Opening a live SQLite database directly over SMB invites locking deadlocks and silent database corruption. Furthermore, simply copying a live `.db` file while a writer has active WAL transactions leaves committed changes in `.db-wal`, producing an incomplete or stale copy.
+
+### Writer Pattern: Publishing Consistent Snapshots via `VACUUM INTO`
+
+To safely distribute databases across network shares, the writer process exports a clean, completed snapshot directly using SQLite's native `VACUUM INTO`, then publishes the finished snapshot file to the share:
 
 ```powershell
-$smbPath   = "\\server\share\catalog.db"
-$localPath = Join-Path $env:TEMP "catalog.db"
+# 1. On the writer server: export consistent snapshot from live WAL DB
+$db.query("VACUUM INTO 'C:\Staging\catalog_snapshot.db';")
 
-# 1. Copy snapshot to local temporary storage
-Copy-Item -LiteralPath $smbPath -Destination $localPath -Force
-
-# 2. Query at full local speed
-$db = [PSLocalBase]::new($localPath)
-try {
-    $products = $db.collection("hardware").where("inStock", "==", $true).get()
-    $products | Format-Table id, name, price
-} finally {
-    $db.close()
-}
+# 2. Atomically publish the completed snapshot to the SMB share
+Move-Item -LiteralPath "C:\Staging\catalog_snapshot.db" -Destination "\\server\share\catalog.db" -Force
 ```
 
-### Direct SMB Read (Non-WAL Databases Only)
+### Client Pattern: Safe Local Temp Consumption
 
-If copying locally is prohibited, the database must **not** use WAL mode (`journal_mode = DELETE` or `OFF`). Execute these PRAGMAs to prevent lock contention across clients:
+Clients query published snapshots by copying them to a unique local temporary file, executing queries at full local NVMe speeds (**100,000+ ops/sec**) with zero network lock contention, and cleaning up in `finally`:
 
-```sql
-PRAGMA journal_mode = DELETE;  -- Rollback journal instead of WAL
-PRAGMA query_only = ON;        -- Read-only mode: prevents write lock escalation
-PRAGMA busy_timeout = 5000;    -- Waits up to 5s on transient network lock contention
-PRAGMA cache_size = -32768;    -- 32 MB client RAM cache to minimize SMB round-trips
+```powershell
+$smbSnapshot = "\\server\share\catalog.db"
+$tempPath    = Join-Path ([System.IO.Path]::GetTempPath()) ("pslocalbase_" + [System.Guid]::NewGuid().ToString("N") + ".db")
+
+try {
+    # 1. Copy snapshot to unique local temporary storage
+    Copy-Item -LiteralPath $smbSnapshot -Destination $tempPath -Force
+
+    # 2. Query at full local speed with zero network contention
+    $db = [PSLocalBase]::new($tempPath)
+    try {
+        $products = $db.collection("hardware").where("inStock", "==", $true).get()
+        $products | Format-Table id, name, price
+    } finally {
+        $db.close()
+    }
+} finally {
+    if (Test-Path $tempPath) {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+}
 ```
 
 ---

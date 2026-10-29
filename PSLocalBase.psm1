@@ -308,15 +308,35 @@ class PSLocalBase : System.IDisposable {
 
         $this._EnsureCollectionTable()
 
-        $cleanField = $fieldToCheck.Replace(".", "_")
-        $indexName = "idx_$($this.CurrentCollection)_$cleanField"
-        $uniqueStr = ""
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
+        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
+        $cleanCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
+        $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
+        $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
+        $legacyIndexName = "idx_$($this.CurrentCollection)_$cleanField"
+
+        $isUnique = $false
         $orderStr = "ASC"
         if ($options -is [bool]) {
-            if ($options) { $uniqueStr = "UNIQUE" }
+            $isUnique = $options
         } elseif ($options -is [System.Collections.IDictionary]) {
-            if ($options["unique"] -eq $true) { $uniqueStr = "UNIQUE" }
+            if ($options["unique"] -eq $true) { $isUnique = $true }
             if ([string]$options["order"] -match '^(?i)desc$') { $orderStr = "DESC" }
+        }
+        $uniqueStr = if ($isUnique) { "UNIQUE" } else { "" }
+
+        # Check if index already exists in sqlite_master
+        $existingRows = $this._ExecuteBoundQuery("SELECT sql FROM sqlite_master WHERE type = 'index' AND (name = ? OR name = ?);", @($indexName, $legacyIndexName))
+        if ($existingRows.Count -gt 0 -and $null -ne $existingRows[0][0]) {
+            $existingSql = [string]$existingRows[0][0]
+            $wasUnique = ($existingSql -match '(?i)\bCREATE\s+UNIQUE\s+INDEX\b')
+            if ($wasUnique -eq $isUnique) {
+                # Already matching definition
+                return $this
+            }
+            # Uniqueness changed: drop existing index to install new constraint
+            $this._ExecuteDirectSql("DROP INDEX IF EXISTS [$indexName]; DROP INDEX IF EXISTS [$legacyIndexName];")
         }
 
         $indexSql = "CREATE $uniqueStr INDEX IF NOT EXISTS [$indexName] ON [$($this.CurrentCollection)] ((json_extract(doc, '`$.$fieldToCheck')) $orderStr);"
@@ -338,10 +358,15 @@ class PSLocalBase : System.IDisposable {
         if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
             throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
         }
-        $cleanField = $fieldToCheck.Replace(".", "_")
-        $indexName = "idx_$($this.CurrentCollection)_$cleanField"
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
+        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
+        $cleanCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
+        $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
+        $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
+        $legacyIndexName = "idx_$($this.CurrentCollection)_$cleanField"
 
-        $dropSql = "DROP INDEX IF EXISTS [$indexName];"
+        $dropSql = "DROP INDEX IF EXISTS [$indexName]; DROP INDEX IF EXISTS [$legacyIndexName];"
         $this._ExecuteDirectSql($dropSql)
 
         return $this
@@ -814,8 +839,10 @@ class PSLocalBase : System.IDisposable {
             }
             $this.CurrentKey = $targetKey
             if ($null -eq $existing) {
-                # If document doesn't exist, create it with partialData (upsert behavior)
-                $this.set($partialData)
+                # If document doesn't exist, evaluate partialData against an empty document
+                # so that array mutations (ArrayUnion, ArrayRemove, descriptors) are properly applied!
+                $merged = $this._DeepMerge(@{}, $partialData)
+                $this.set($merged)
                 if ($startedTx) { $this._ExecuteDirectSql("COMMIT;") }
                 return
             }
@@ -1263,7 +1290,11 @@ class PSLocalBase : System.IDisposable {
                 $innerSql = [string]::Join(" UNION ALL ", $subqueries)
 
                 $sqlBuilder = [System.Text.StringBuilder]::new()
-                [void]$sqlBuilder.Append("SELECT key, doc FROM ($innerSql)")
+                                if ($hasSelect) {
+                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM ($innerSql)")
+                } else {
+                    [void]$sqlBuilder.Append("SELECT key, doc FROM ($innerSql)")
+                }
                 if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
                     [void]$sqlBuilder.Append(" $($this.OrderByClause)")
                 }
@@ -1278,23 +1309,42 @@ class PSLocalBase : System.IDisposable {
                 }
                 $querySql = $sqlBuilder.ToString()
             } elseif ($null -ne $this.UnionQuery) {
+                if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
+                    throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+                }
                 $q1Exists = $this._CollectionExists($this.CurrentCollection)
                 $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
                 if (-not $q1Exists -and -not $q2Exists) {
                     return @()
                 }
 
-                $q1Where = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
-                $q1Sql = if ($q1Exists) {
+                $q1Conditions = [System.Collections.Generic.List[string]]::new()
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                    $q1Conditions.Add("key = ?")
+                    $queryParams.Add($this.CurrentKey)
+                }
+                if ($this.WhereClauses.Count -gt 0) {
+                    $q1Conditions.AddRange($this.WhereClauses)
                     if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                }
+                $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
+                $q1Sql = if ($q1Exists) {
                     "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
                 } else {
                     "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
-                $q2Where = if ($this.UnionQuery.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.UnionQuery.WhereClauses) } else { "" }
-                $q2Sql = if ($q2Exists) {
+                $q2Conditions = [System.Collections.Generic.List[string]]::new()
+                if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
+                    $q2Conditions.Add("key = ?")
+                    $queryParams.Add($this.UnionQuery.CurrentKey)
+                }
+                if ($this.UnionQuery.WhereClauses.Count -gt 0) {
+                    $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
                     if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
+                }
+                $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
+                $q2Sql = if ($q2Exists) {
                     "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
                 } else {
                     "SELECT '' AS key, '' AS doc WHERE 0"
@@ -1302,7 +1352,11 @@ class PSLocalBase : System.IDisposable {
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
                 $sqlBuilder = [System.Text.StringBuilder]::new()
-                [void]$sqlBuilder.Append("SELECT key, doc FROM ($q1Sql $uType $q2Sql)")
+                if ($hasSelect) {
+                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM ($q1Sql $uType $q2Sql)")
+                } else {
+                    [void]$sqlBuilder.Append("SELECT key, doc FROM ($q1Sql $uType $q2Sql)")
+                }
                 if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
                     [void]$sqlBuilder.Append(" $($this.OrderByClause)")
                 }
@@ -1406,6 +1460,37 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
         }
+        if ($this.IsCollectionGroup) {
+            if ($this.GroupTables.Count -eq 0) {
+                $this._ResetQueryState()
+                return $false
+            }
+            try {
+                $wherePart = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
+                $subqueries = [System.Collections.Generic.List[string]]::new()
+                $queryParams = [System.Collections.Generic.List[string]]::new()
+                foreach ($tbl in $this.GroupTables) {
+                    $subqueries.Add("SELECT 1 FROM [$tbl]$wherePart")
+                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                }
+                $innerSql = [string]::Join(" UNION ALL ", $subqueries)
+                $sql = "SELECT 1 FROM ($innerSql) LIMIT 1;"
+                $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
+                return ($rows.Count -gt 0)
+            } finally {
+                $this._ResetQueryState()
+            }
+        }
+
+        if ($null -ne $this.UnionQuery) {
+            try {
+                $rows = $this.limit(1).get()
+                return ($null -ne $rows -and $rows.Count -gt 0)
+            } finally {
+                $this._ResetQueryState()
+            }
+        }
+
         if (-not $this._CollectionExists($this.CurrentCollection)) {
             $this._ResetQueryState()
             return $false
@@ -1516,8 +1601,13 @@ class PSLocalBase : System.IDisposable {
         }
         try {
             $sqlBuilder = [System.Text.StringBuilder]::new()
-            $jsonExtract = "CAST(json_extract(doc, '`$.$fieldToCheck') AS REAL)"
-            $aggExpr = if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") {
+            $isNumericAgg = ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG")
+            $jsonExtract = if ($isNumericAgg) {
+                "CAST(json_extract(doc, '`$.$fieldToCheck') AS REAL)"
+            } else {
+                "json_extract(doc, '`$.$fieldToCheck')"
+            }
+            $aggExpr = if ($isNumericAgg) {
                 "COALESCE($aggFunc($jsonExtract), 0.0)"
             } else {
                 "$aggFunc($jsonExtract)"
@@ -1536,12 +1626,28 @@ class PSLocalBase : System.IDisposable {
             if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
                 $raw = $rows[0][0]
                 if ($null -eq $raw -or [string]::IsNullOrEmpty([string]$raw)) {
-                    if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
+                    if ($isNumericAgg) { return 0.0 }
                     return $null
                 }
-                return [double]$raw
+                if ($isNumericAgg) {
+                    return [double]$raw
+                }
+                # For MIN / MAX: if value is an ISO date or text, preserve as string
+                $strRaw = [string]$raw
+                if ($strRaw -match '^\d{4}-\d{2}') {
+                    return $strRaw
+                }
+                $numVal = 0.0
+                if ([double]::TryParse($strRaw, [System.Globalization.NumberStyles]::Float -bor [System.Globalization.NumberStyles]::AllowThousands, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$numVal)) {
+                    if ($strRaw -match '^-?\d+$') {
+                        $longVal = 0L
+                        if ([int64]::TryParse($strRaw, [ref]$longVal)) { return $longVal }
+                    }
+                    return $numVal
+                }
+                return $strRaw
             }
-            if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
+            if ($isNumericAgg) { return 0.0 }
             return $null
         } finally {
             $this._ResetQueryState()
@@ -1565,7 +1671,17 @@ class PSLocalBase : System.IDisposable {
                     if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
                 }
                 $innerSql = [string]::Join(" UNION ALL ", $subqueries)
-                $sql = "SELECT COUNT(*) FROM ($innerSql);"
+                $pagedSql = $innerSql
+                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
+                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+                        $pagedSql = "$innerSql LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
+                    } else {
+                        $pagedSql = "$innerSql LIMIT $($this.LimitValue)"
+                    }
+                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+                    $pagedSql = "$innerSql LIMIT -1 OFFSET $($this.SkipValue)"
+                }
+                $sql = "SELECT COUNT(*) FROM ($pagedSql);"
                 $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
                 if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
                     return [int]$rows[0][0]
@@ -1577,6 +1693,9 @@ class PSLocalBase : System.IDisposable {
         }
 
         if ($null -ne $this.UnionQuery) {
+            if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
+                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
             try {
                 $q1Exists = $this._CollectionExists($this.CurrentCollection)
                 $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
@@ -1584,24 +1703,51 @@ class PSLocalBase : System.IDisposable {
                     return 0
                 }
                 $queryParams = [System.Collections.Generic.List[string]]::new()
-                $q1Where = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
-                $q1Sql = if ($q1Exists) {
+                $q1Conditions = [System.Collections.Generic.List[string]]::new()
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                    $q1Conditions.Add("key = ?")
+                    $queryParams.Add($this.CurrentKey)
+                }
+                if ($this.WhereClauses.Count -gt 0) {
+                    $q1Conditions.AddRange($this.WhereClauses)
                     if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                }
+                $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
+                $q1Sql = if ($q1Exists) {
                     "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
                 } else {
                     "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
-                $q2Where = if ($this.UnionQuery.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.UnionQuery.WhereClauses) } else { "" }
-                $q2Sql = if ($q2Exists) {
+                $q2Conditions = [System.Collections.Generic.List[string]]::new()
+                if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
+                    $q2Conditions.Add("key = ?")
+                    $queryParams.Add($this.UnionQuery.CurrentKey)
+                }
+                if ($this.UnionQuery.WhereClauses.Count -gt 0) {
+                    $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
                     if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
+                }
+                $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
+                $q2Sql = if ($q2Exists) {
                     "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
                 } else {
                     "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
-                $sql = "SELECT COUNT(*) FROM ($q1Sql $uType $q2Sql);"
+                $innerUnion = "$q1Sql $uType $q2Sql"
+                $pagedSql = $innerUnion
+                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
+                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+                        $pagedSql = "$innerUnion LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
+                    } else {
+                        $pagedSql = "$innerUnion LIMIT $($this.LimitValue)"
+                    }
+                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+                    $pagedSql = "$innerUnion LIMIT -1 OFFSET $($this.SkipValue)"
+                }
+                $sql = "SELECT COUNT(*) FROM ($pagedSql);"
                 $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
                 if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
                     return [int]$rows[0][0]
@@ -2026,6 +2172,83 @@ class PSLocalBase : System.IDisposable {
         return $results
     }
 
+    # -----------------------------------------------------------------------
+    # Structural JSON Model Equality (Preserves scalar types, numbers vs strings,
+    # and normalizes IDictionary vs PSCustomObject representations)
+    # -----------------------------------------------------------------------
+    static [bool] _JsonValuesEqual([object]$a, [object]$b) {
+        if ($null -eq $a -and $null -eq $b) { return $true }
+        if ($null -eq $a -or $null -eq $b) { return $false }
+
+        # Booleans
+        if ($a -is [bool] -or $b -is [bool]) {
+            if ($a -is [bool] -and $b -is [bool]) {
+                return $a -eq $b
+            }
+            return $false
+        }
+
+        # Numbers: byte, int16, int32, int64, single, double, decimal
+        $isNumA = ($a -is [byte] -or $a -is [int16] -or $a -is [int32] -or $a -is [int64] -or $a -is [single] -or $a -is [double] -or $a -is [decimal])
+        $isNumB = ($b -is [byte] -or $b -is [int16] -or $b -is [int32] -or $b -is [int64] -or $b -is [single] -or $b -is [double] -or $b -is [decimal])
+        if ($isNumA -or $isNumB) {
+            if ($isNumA -and $isNumB) {
+                return ([double]$a) -eq ([double]$b)
+            }
+            return $false
+        }
+
+        # Strings
+        if ($a -is [string] -or $b -is [string]) {
+            if ($a -is [string] -and $b -is [string]) {
+                return $a -ceq $b
+            }
+            return $false
+        }
+
+        # Arrays
+        $isArrA = ($a -is [System.Collections.IEnumerable] -and $a -isnot [string] -and $a -isnot [System.Collections.IDictionary] -and $a -isnot [System.Management.Automation.PSCustomObject])
+        $isArrB = ($b -is [System.Collections.IEnumerable] -and $b -isnot [string] -and $b -isnot [System.Collections.IDictionary] -and $b -isnot [System.Management.Automation.PSCustomObject])
+        if ($isArrA -or $isArrB) {
+            if ($isArrA -and $isArrB) {
+                $listA = @($a)
+                $listB = @($b)
+                if ($listA.Count -ne $listB.Count) { return $false }
+                for ($i = 0; $i -lt $listA.Count; $i++) {
+                    if (-not [PSLocalBase]::_JsonValuesEqual($listA[$i], $listB[$i])) {
+                        return $false
+                    }
+                }
+                return $true
+            }
+            return $false
+        }
+
+        # Objects (Hashtable, Dictionary, or PSCustomObject)
+        $isObjA = ($a -is [System.Collections.IDictionary] -or $a -is [System.Management.Automation.PSCustomObject])
+        $isObjB = ($b -is [System.Collections.IDictionary] -or $b -is [System.Management.Automation.PSCustomObject])
+        if ($isObjA -and $isObjB) {
+            $propsA = if ($a -is [System.Collections.IDictionary]) { @($a.Keys) } else { @($a.PSObject.Properties | ForEach-Object { $_.Name }) }
+            $propsB = if ($b -is [System.Collections.IDictionary]) { @($b.Keys) } else { @($b.PSObject.Properties | ForEach-Object { $_.Name }) }
+            
+            $sortedA = @($propsA) | Sort-Object
+            $sortedB = @($propsB) | Sort-Object
+            if ($sortedA.Count -ne $sortedB.Count) { return $false }
+            for ($i = 0; $i -lt $sortedA.Count; $i++) {
+                if ($sortedA[$i] -ne $sortedB[$i]) { return $false }
+            }
+            foreach ($prop in $propsA) {
+                $valA = if ($a -is [System.Collections.IDictionary]) { $a[$prop] } else { $a.$prop }
+                $valB = if ($b -is [System.Collections.IDictionary]) { $b[$prop] } else { $b.$prop }
+                if (-not [PSLocalBase]::_JsonValuesEqual($valA, $valB)) {
+                    return $false
+                }
+            }
+            return $true
+        }
+
+        return [object]::Equals($a, $b)
+    }
     [object] _DeepMerge([object]$target, [object]$source) {
         if ($null -eq $target) { return $source }
         if ($null -eq $source) { return $target }
@@ -2083,7 +2306,7 @@ class PSLocalBase : System.IDisposable {
                     foreach ($val in $opVals) {
                         $found = $false
                         foreach ($ex in $existingArr) {
-                            if ([object]::Equals($ex, $val) -or [string]::Equals([string]$ex, [string]$val, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            if ([PSLocalBase]::_JsonValuesEqual($ex, $val)) {
                                 $found = $true
                                 break
                             }
@@ -2097,7 +2320,7 @@ class PSLocalBase : System.IDisposable {
                     foreach ($ex in $existingArr) {
                         $match = $false
                         foreach ($val in $opVals) {
-                            if ([object]::Equals($ex, $val) -or [string]::Equals([string]$ex, [string]$val, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            if ([PSLocalBase]::_JsonValuesEqual($ex, $val)) {
                                 $match = $true
                                 break
                             }

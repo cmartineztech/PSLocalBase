@@ -1596,8 +1596,8 @@ Assert-Test "TC-46: Expression Indexing & Unique Constraints" {
         [void]$col.createIndex("email", @{ unique = $true })
 
         # Verify index exists in sqlite_master
-        $idxRows = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_users_email';")
-        if ($idxRows.Count -ne 1) { throw "Expected idx_users_email in sqlite_master." }
+        $idxRows = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users' AND name LIKE 'idx_users__email_%';")
+        if ($idxRows.Count -ne 1) { throw "Expected idx_users__email_* in sqlite_master." }
 
         # Attempt to insert duplicate email; must throw unique constraint exception
         $duplicateFailed = $false
@@ -1612,8 +1612,8 @@ Assert-Test "TC-46: Expression Indexing & Unique Constraints" {
 
         # Drop index
         [void]$col.dropIndex("email")
-        $idxDropped = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_users_email';")
-        if ($idxDropped.Count -ne 0) { throw "idx_users_email was not dropped." }
+        $idxDropped = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users' AND name LIKE 'idx_users__email_%';")
+        if ($idxDropped.Count -ne 0) { throw "Index idx_users__email_* was not dropped." }
 
         # Insertion should now succeed without unique index
         [void]$col.add(@{ email = "alice@example.com"; name = "Alice 2" })
@@ -2412,6 +2412,309 @@ Assert-Test "TC-67: View Isolation in Update (Decorator Immunity)" {
         }
         if ($o1.userId -ne "u1" -or $o1.userId -isnot [string]) {
             throw "userId was overwritten with joined object! Got type: $($o1.userId.GetType().FullName)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
+# TC-68: Collision-Free Index Naming & Dynamic Uniqueness Upgrade (Issue #6)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-68: Collision-Free Index Naming & Dynamic Uniqueness Upgrade" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("items")
+
+        # Create index on dot notation vs underscore notation
+        $null = $col.createIndex("profile.code")
+        $null = $col.createIndex("profile_code", @{ unique = $true })
+
+        # Verify both indexes exist with distinct names
+        $indexes = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='items';")
+        if ($indexes.Count -lt 2) {
+            throw "Expected at least 2 distinct indexes on items, got $($indexes.Count)."
+        }
+
+        # Unique constraint on profile_code must reject duplicates
+        $null = $col.add(@{ profile_code = "same"; profile = @{ code = "a" } }, "id1")
+        $dupThrew = $false
+        try {
+            $col.add(@{ profile_code = "same"; profile = @{ code = "b" } }, "id2")
+        } catch {
+            $dupThrew = $true
+        }
+        if (-not $dupThrew) {
+            throw "Inserting duplicate profile_code should have thrown unique constraint violation."
+        }
+
+        # Non-unique profile.code must allow duplicate values
+        $col.add(@{ profile_code = "diff1"; profile = @{ code = "shared" } }, "id3")
+        $col.add(@{ profile_code = "diff2"; profile = @{ code = "shared" } }, "id4")
+
+        # Test index uniqueness upgrade on the same field
+        $users = $db.collection("users")
+        $null = $users.createIndex("nickname") # non-unique initially
+        $null = $users.add(@{ nickname = "bob" })
+
+        # Upgrade to UNIQUE
+        $null = $users.createIndex("nickname", @{ unique = $true })
+        $nickDupThrew = $false
+        try {
+            $null = $users.add(@{ nickname = "bob" })
+        } catch {
+            $nickDupThrew = $true
+        }
+        if (-not $nickDupThrew) {
+            throw "Upgraded unique index on nickname failed to enforce uniqueness constraint."
+        }
+
+        # Cross-collection collision check: foo_bar / baz vs foo / bar_baz
+        $c1 = $db.collection("foo_bar")
+        $c2 = $db.collection("foo")
+        $null = $c1.createIndex("baz", @{ unique = $true })
+        $null = $c2.createIndex("bar_baz", @{ unique = $true })
+        $allIdx = $db.query("SELECT tbl_name, name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' AND tbl_name IN ('foo_bar', 'foo');")
+        if ($allIdx.Count -ne 2) {
+            throw "Cross-collection indexes collided or failed to create."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-69: ArrayUnion / ArrayRemove Structural JSON Equality (Issue #7)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-69: ArrayUnion / ArrayRemove Structural JSON Equality" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("arrays")
+
+        # 1. Distinct objects in ArrayUnion must both be preserved
+        $col.doc("a").set(@{ items = @() })
+        $col.doc("a").update(@{ items = [PSLocalBase]::ArrayUnion(@{ id = 1 }, @{ id = 2 }) })
+        $docA = $col.doc("a").get()
+        if ($docA.items.Count -ne 2) {
+            throw "Expected 2 objects in items array, got $($docA.items.Count)."
+        }
+
+        # 2. Number 1 vs String '1' scalar type distinction
+        $col.doc("b").set(@{ items = @(1, "1") })
+        $col.doc("b").update(@{ items = [PSLocalBase]::ArrayRemove("1") })
+        $docB = $col.doc("b").get()
+        if ($docB.items.Count -ne 1) {
+            throw "Expected 1 item after removing string '1', got $($docB.items.Count)."
+        }
+        if ($docB.items[0] -ne 1) {
+            throw "Expected numeric 1 to be retained, got $($docB.items[0])."
+        }
+
+        # 3. Object removal with reordered keys
+        $col.doc("c").set(@{ items = @(@{ id = 1; name = "target" }, @{ id = 2; name = "keep" }) })
+        $col.doc("c").update(@{ items = [PSLocalBase]::ArrayRemove(@{ name = "target"; id = 1 }) })
+        $docC = $col.doc("c").get()
+        if ($docC.items.Count -ne 1 -or $docC.items[0].id -ne 2) {
+            throw "Object removal with reordered keys failed. Items: $(ConvertTo-Json -InputObject $docC.items -Compress)"
+        }
+
+        # 4. Hashtable descriptor forms ($arrayUnion and $arrayRemove)
+        $col.doc("d").set(@{ items = @("x") })
+        $col.doc("d").update(@{ items = @{ '$arrayUnion' = @("y", "z") } })
+        $docD = $col.doc("d").get()
+        if ($docD.items.Count -ne 3) {
+            throw "Hashtable `$arrayUnion descriptor failed to append items."
+        }
+        $col.doc("d").update(@{ items = @{ '$arrayRemove' = @("y") } })
+        $docD2 = $col.doc("d").get()
+        if ($docD2.items.Count -ne 2 -or ($docD2.items -contains "y")) {
+            throw "Hashtable `$arrayRemove descriptor failed to remove item."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-70: Atomic update() on Non-Existent Document with Array Mutations (Issue #8)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-70: Atomic update() on Non-Existent Document with Array Mutations" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("items")
+
+        # 1. Update missing doc with ArrayUnion sentinel
+        $col.doc("missing1").update(@{ tags = [PSLocalBase]::ArrayUnion("alpha", "beta") })
+        $doc1 = $col.doc("missing1").get()
+        if ($null -eq $doc1) { throw "Document was not created on update()." }
+        if ($doc1.tags -isnot [System.Collections.IEnumerable]) {
+            throw "tags is not an array! Got: $($doc1.tags)"
+        }
+        if ($doc1.tags.Count -ne 2) {
+            throw "Expected 2 tags, got $($doc1.tags.Count)."
+        }
+        if ($doc1.PSObject.Properties["OpType"] -or ($doc1.tags -contains "OpType")) {
+            throw "Internal sentinel leaked into persisted document."
+        }
+
+        # 2. Update missing doc with $arrayUnion descriptor
+        $col.doc("missing2").update(@{ categories = @{ '$arrayUnion' = @("gadgets") } })
+        $doc2 = $col.doc("missing2").get()
+        if ($null -eq $doc2) { throw "Document was not created on update()." }
+        if ($doc2.categories -isnot [System.Collections.IEnumerable]) {
+            throw "categories is not an array! Got: $($doc2.categories)"
+        }
+        if ($doc2.categories.Count -ne 1 -or $doc2.categories[0] -ne "gadgets") {
+            throw "Expected array ['gadgets'], got: $(ConvertTo-Json -InputObject $doc2.categories -Compress)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-71: Composite Query Scoping, Projection, Exists and Connection Isolation (Issue #9)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-71: Composite Query Scoping, Projection, Exists and Connection Isolation" {
+    $db1 = [PSLocalBase]::new(":memory:")
+    $db2 = [PSLocalBase]::new(":memory:")
+    try {
+        # 1. Cross-connection union rejection
+        $connThrew = $false
+        try {
+            $null = $db1.collection("colA").unionAll($db2.collection("colB")).get()
+        } catch [System.InvalidOperationException] {
+            $connThrew = $true
+        }
+        if (-not $connThrew) {
+            throw "Cross-database connection union must throw InvalidOperationException."
+        }
+
+        # 2. RHS document scoping in unionAll
+        $db1.collection("a").set(@(
+            @{ id = "one"; n = 1; secret = "s1" },
+            @{ id = "two"; n = 2; secret = "s2" }
+        ))
+        $db1.collection("b").doc("three").set(@{ id = "three"; n = 3; secret = "s3" })
+
+        $res = $db1.collection("b").unionAll($db1.collection("a").doc("one")).get()
+        if ($res.Count -ne 2) {
+            throw "Expected exactly 2 documents (one and three), got $($res.Count)."
+        }
+        $ids = @($res | ForEach-Object { $_.id })
+        if ($ids -contains "two") {
+            throw "RHS doc scope was ignored: document 'two' was unexpectedly returned in union."
+        }
+
+        # 3. collectionGroup projection
+        $db1.collection("shard_east").add(@{ n = 10; secret = "s_east" }, "k1")
+        $db1.collection("shard_west").add(@{ n = 20; secret = "s_west" }, "k2")
+
+        $projectedShards = $db1.collectionGroup("shard_*").select("n").get()
+        if ($projectedShards.Count -ne 2) {
+            throw "Expected 2 shard documents, got $($projectedShards.Count)."
+        }
+        foreach ($item in $projectedShards) {
+            if ($null -ne $item.secret) {
+                throw "select('n') projection was ignored on collectionGroup! secret leaked: $($item.secret)"
+            }
+            if ($null -eq $item.n) {
+                throw "select('n') projection did not include projected field n."
+            }
+        }
+
+        # 4. union count with limit
+        $pagedCount = $db1.collection("a").unionAll($db1.collection("b")).limit(1).count()
+        if ($pagedCount -ne 1) {
+            throw "Expected paged count of 1, got $pagedCount."
+        }
+
+        # 5. exists() on collectionGroup and union
+        $groupExists = $db1.collectionGroup("shard_*").exists()
+        if (-not $groupExists) {
+            throw "exists() returned false on populated collectionGroup."
+        }
+        $unionExists = $db1.collection("a").unionAll($db1.collection("b")).exists()
+        if (-not $unionExists) {
+            throw "exists() returned false on populated union."
+        }
+    } finally {
+        $db1.close()
+        $db2.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-72: VACUUM INTO Consistent Snapshot for Concurrent WAL Mode (Issue #10)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-72: VACUUM INTO Consistent Snapshot for Concurrent WAL Mode" {
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pslocalbase_snap_" + [System.Guid]::NewGuid().ToString("N"))
+    $null = New-Item -ItemType Directory -Path $tempDir -Force
+    $srcDbPath = Join-Path $tempDir "source.db"
+    $snapDbPath = Join-Path $tempDir "snapshot.db"
+
+    try {
+        $db = [PSLocalBase]::new($srcDbPath)
+        $db.collection("records").add(@{ title = "Record 1"; status = "active" })
+        $db.collection("records").add(@{ title = "Record 2"; status = "active" })
+
+        # Export consistent completed snapshot
+        $db.query("VACUUM INTO '$snapDbPath';")
+
+        # Open snapshot in separate connection
+        $snapDb = [PSLocalBase]::new($snapDbPath)
+        try {
+            $count = $snapDb.collection("records").count()
+            if ($count -ne 2) {
+                throw "Expected 2 records in completed snapshot, got $count."
+            }
+        } finally {
+            $snapDb.close()
+        }
+        $db.close()
+    } finally {
+        if (Test-Path $tempDir) {
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-73: Native Lexical & ISO Timestamp Ordering for MIN / MAX (Issue #11)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-73: Native Lexical & ISO Timestamp Ordering for MIN / MAX" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $logs = $db.collection("audit_logs")
+        $logs.doc("a").set(@{ timestamp = "2026-01-01T01:00:00Z"; code = "bravo"; score = 10 })
+        $logs.doc("b").set(@{ timestamp = "2026-12-31T23:00:00Z"; code = "alpha"; score = 20 })
+        $logs.doc("c").set(@{ timestamp = "2026-06-15T12:00:00Z"; code = "zeta"; score = 5 })
+
+        # 1. max(timestamp) must return full ISO string, not numeric year
+        $maxTime = $logs.max("timestamp")
+        if ($maxTime -ne "2026-12-31T23:00:00Z") {
+            throw "Expected '2026-12-31T23:00:00Z', got: $maxTime"
+        }
+
+        # 2. min(timestamp)
+        $minTime = $logs.min("timestamp")
+        if ($minTime -ne "2026-01-01T01:00:00Z") {
+            throw "Expected '2026-01-01T01:00:00Z', got: $minTime"
+        }
+
+        # 3. Lexical min/max on string field
+        $minCode = $logs.min("code")
+        if ($minCode -ne "alpha") {
+            throw "Expected lexical min 'alpha', got: $minCode"
+        }
+        $maxCode = $logs.max("code")
+        if ($maxCode -ne "zeta") {
+            throw "Expected lexical max 'zeta', got: $maxCode"
+        }
+
+        # 4. Numeric aggregation maintains numeric return
+        $sumScore = $logs.sum("score")
+        if ($sumScore -ne 35.0) {
+            throw "Expected numeric sum 35.0, got: $sumScore"
         }
     } finally {
         $db.close()
