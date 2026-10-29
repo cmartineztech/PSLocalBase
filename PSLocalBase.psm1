@@ -249,6 +249,15 @@ class PSLocalBase : System.IDisposable {
         return $this._CollectionExists($name)
     }
 
+    [string] _ResolveCanonicalCollectionName([string]$name) {
+        if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+        $rows = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE LIMIT 1;", @($name))
+        if ($rows.Count -gt 0 -and $rows[0].Count -gt 0 -and $null -ne $rows[0][0]) {
+            return [string]$rows[0][0]
+        }
+        return $name.ToLowerInvariant()
+    }
+
     [void] _EnsureCollectionTable() {
         $this._EnsureOpen()
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
@@ -308,13 +317,13 @@ class PSLocalBase : System.IDisposable {
 
         $this._EnsureCollectionTable()
 
+        $canonicalCol = $this._ResolveCanonicalCollectionName($this.CurrentCollection)
         $hasher = [System.Security.Cryptography.SHA256]::Create()
-        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
+        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($canonicalCol):$($fieldToCheck)"))
         $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
-        $cleanCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
+        $cleanCol = $canonicalCol -replace '[^a-zA-Z0-9_]', '_'
         $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
         $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
-        $legacyIndexName = "idx_$($this.CurrentCollection)_$cleanField"
 
         $isUnique = $false
         $orderStr = "ASC"
@@ -326,20 +335,25 @@ class PSLocalBase : System.IDisposable {
         }
         $uniqueStr = if ($isUnique) { "UNIQUE" } else { "" }
 
-        # Check if index already exists in sqlite_master
-        $existingRows = $this._ExecuteBoundQuery("SELECT sql FROM sqlite_master WHERE type = 'index' AND (name = ? OR name = ?);", @($indexName, $legacyIndexName))
-        if ($existingRows.Count -gt 0 -and $null -ne $existingRows[0][0]) {
-            $existingSql = [string]$existingRows[0][0]
+        # Check if index already exists for this table and field in sqlite_master (case-insensitive)
+        $existingRows = $this._ExecuteBoundQuery("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name = ? OR name LIKE ?);", @($this.CurrentCollection, $indexName, "%__${cleanField}_${pathHash}"))
+        if ($existingRows.Count -gt 0 -and $null -ne $existingRows[0][1]) {
+            $existingSql = [string]$existingRows[0][1]
             $wasUnique = ($existingSql -match '(?i)\bCREATE\s+UNIQUE\s+INDEX\b')
             if ($wasUnique -eq $isUnique) {
-                # Already matching definition
                 return $this
             }
-            # Uniqueness changed: drop existing index to install new constraint
-            $this._ExecuteDirectSql("DROP INDEX IF EXISTS [$indexName]; DROP INDEX IF EXISTS [$legacyIndexName];")
+            # Uniqueness changed: drop all prior indexes for this field
+            foreach ($row in $existingRows) {
+                $idxNameToDrop = [string]$row[0]
+                if (-not [string]::IsNullOrEmpty($idxNameToDrop)) {
+                    $escapedName = $idxNameToDrop.Replace('"', '""')
+                    $this._ExecuteDirectSql("DROP INDEX IF EXISTS ""$escapedName"";")
+                }
+            }
         }
 
-        $indexSql = "CREATE $uniqueStr INDEX IF NOT EXISTS [$indexName] ON [$($this.CurrentCollection)] ((json_extract(doc, '`$.$fieldToCheck')) $orderStr);"
+        $indexSql = "CREATE $uniqueStr INDEX IF NOT EXISTS ""$indexName"" ON [$canonicalCol] ((json_extract(doc, '`$.$fieldToCheck')) $orderStr);"
         $this._ExecuteDirectSql($indexSql)
 
         return $this
@@ -359,15 +373,27 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
         }
 
-        # Query sqlite_master case-insensitively for any index on this collection and field
+        $canonicalCol = $this._ResolveCanonicalCollectionName($this.CurrentCollection)
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($canonicalCol):$($fieldToCheck)"))
+        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
+        $cleanCol = $canonicalCol -replace '[^a-zA-Z0-9_]', '_'
         $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
-        $fieldPattern = "%__${cleanField}_%"
-        $legacyPattern = "%_${cleanField}"
-        $indexes = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name LIKE ? OR name LIKE ?);", @($this.CurrentCollection, $fieldPattern, $legacyPattern))
+        $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
+        $hashPattern = "%__${cleanField}_${pathHash}"
+        $legacyPattern = "idx_${canonicalCol}_${cleanField}"
+        $rawCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
+        $rawHashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
+        $rawPathHash = [BitConverter]::ToString($rawHashBytes).Replace("-", "").Substring(0, 8)
+        $rawIndexName = "idx_${rawCol}__${cleanField}_${rawPathHash}"
+
+        # Target only indexes belonging to this specific field and collection
+        $indexes = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name = ? OR name = ? OR name = ? OR name LIKE ?);", @($this.CurrentCollection, $indexName, $rawIndexName, $legacyPattern, $hashPattern))
         foreach ($row in $indexes) {
             $idxName = [string]$row[0]
             if (-not [string]::IsNullOrEmpty($idxName)) {
-                $this._ExecuteDirectSql("DROP INDEX IF EXISTS [$idxName];")
+                $escapedName = $idxName.Replace('"', '""')
+                $this._ExecuteDirectSql("DROP INDEX IF EXISTS ""$escapedName"";")
             }
         }
 
@@ -585,6 +611,9 @@ class PSLocalBase : System.IDisposable {
 
     [PSLocalBase] doc([object]$keyOrCriteria) {
         $this._EnsureOpen()
+        if ($this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("collectionGroup does not support point document lookups via .doc().")
+        }
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .doc().")
         }
@@ -667,6 +696,9 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureOpen()
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .set().")
+        }
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot execute mutation operation on a composite query (union/collectionGroup).")
         }
         $this._EnsureCollectionTable()
 
@@ -1260,7 +1292,7 @@ class PSLocalBase : System.IDisposable {
             if ($hasSelect) {
                 $selectPairs = [System.Collections.Generic.List[string]]::new()
                 foreach ($f in $this.SelectedFields) {
-                    $selectPairs.Add("'$f', json_extract($docExpr, '`$.$f')")
+                    $selectPairs.Add("'$f', CASE WHEN json_type($docExpr, '`$.$f') IN ('array', 'object') THEN json(json_extract($docExpr, '`$.$f')) WHEN json_type($docExpr, '`$.$f') = 'true' THEN json('true') WHEN json_type($docExpr, '`$.$f') = 'false' THEN json('false') ELSE json_extract($docExpr, '`$.$f') END")
                 }
                 $docExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
             }
@@ -1560,6 +1592,10 @@ class PSLocalBase : System.IDisposable {
             [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
             $queryParams = [System.Collections.Generic.List[string]]::new()
             $whereList = [System.Collections.Generic.List[string]]::new()
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                $whereList.Add("key = ?")
+                $queryParams.Add($this.CurrentKey)
+            }
             if ($this.WhereClauses.Count -gt 0) {
                 $whereList.AddRange($this.WhereClauses)
                 if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
@@ -1635,6 +1671,10 @@ class PSLocalBase : System.IDisposable {
             [void]$sqlBuilder.Append("SELECT $aggExpr FROM [$($this.CurrentCollection)]")
             $queryParams = [System.Collections.Generic.List[string]]::new()
             $whereList = [System.Collections.Generic.List[string]]::new()
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                $whereList.Add("key = ?")
+                $queryParams.Add($this.CurrentKey)
+            }
             if ($this.WhereClauses.Count -gt 0) {
                 $whereList.AddRange($this.WhereClauses)
                 if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
@@ -1937,6 +1977,9 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .delete().")
         }
 
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot execute mutation operation on a composite query (union/collectionGroup).")
+        }
         if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue -or -not [string]::IsNullOrEmpty($this.OrderByClause)) {
             throw [System.InvalidOperationException]::new("delete() does not support orderBy(), limit(), or skip(). Use point document deletion (.doc('key').delete()), filter deletion (.where(...).delete()), or explicit collection drop (.drop()).")
         }
@@ -2210,20 +2253,18 @@ class PSLocalBase : System.IDisposable {
             return $false
         }
 
-        # Numbers: byte, int16, int32, int64, single, double, decimal
-        $isIntA = ($a -is [byte] -or $a -is [sbyte] -or $a -is [int16] -or $a -is [uint16] -or $a -is [int32] -or $a -is [uint32] -or $a -is [int64] -or $a -is [uint64])
-        $isIntB = ($b -is [byte] -or $b -is [sbyte] -or $b -is [int16] -or $b -is [uint16] -or $b -is [int32] -or $b -is [uint32] -or $b -is [int64] -or $b -is [uint64])
-        if ($isIntA -and $isIntB) {
-            return ([int64]$a) -eq ([int64]$b)
-        }
-        $isNumA = ($isIntA -or $a -is [single] -or $a -is [double] -or $a -is [decimal])
-        $isNumB = ($isIntB -or $b -is [single] -or $b -is [double] -or $b -is [decimal])
+        # Numbers: byte, int16, int32, int64, single, double, decimal, uint, biginteger
+        $isNumA = ($a -is [byte] -or $a -is [sbyte] -or $a -is [int16] -or $a -is [uint16] -or $a -is [int32] -or $a -is [uint32] -or $a -is [int64] -or $a -is [uint64] -or $a -is [single] -or $a -is [double] -or $a -is [decimal] -or $a -is [System.Numerics.BigInteger])
+        $isNumB = ($b -is [byte] -or $b -is [sbyte] -or $b -is [int16] -or $b -is [uint16] -or $b -is [int32] -or $b -is [uint32] -or $b -is [int64] -or $b -is [uint64] -or $b -is [single] -or $b -is [double] -or $b -is [decimal] -or $b -is [System.Numerics.BigInteger])
         if ($isNumA -or $isNumB) {
             if ($isNumA -and $isNumB) {
-                if ($a -is [decimal] -or $b -is [decimal]) {
-                    return ([decimal]$a) -eq ([decimal]$b)
+                try {
+                    $decA = [decimal]$a
+                    $decB = [decimal]$b
+                    return $decA -eq $decB
+                } catch {
+                    return ([double]$a) -eq ([double]$b)
                 }
-                return ([double]$a) -eq ([double]$b)
             }
             return $false
         }

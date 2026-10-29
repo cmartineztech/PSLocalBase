@@ -1,4 +1,4 @@
-# Targeted regression probes from the security/functionality review.
+﻿# Targeted regression probes from the security/functionality review.
 # Run in a fresh PowerShell process. All databases are in memory.
 # These checks describe the desired behavior; failures are unresolved findings.
 $ErrorActionPreference = 'Stop'
