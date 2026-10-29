@@ -374,4 +374,4 @@ try {
 
 ### Multi-Client Reading over SMB Network Shares
 
-SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Quick Start Guide](QUICKSTART.md#11-multi-client-reading--smb--network-shares) for the Staging / Snapshot pattern (`Open-LocalBaseFromSmb`) and direct read PRAGMA directives.
+SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Full Documentation](README.md#11-multi-client-reading--smb--network-shares) for the Staging / Snapshot pattern (`Open-LocalBaseFromSmb`) and direct read PRAGMA directives.
