@@ -542,10 +542,9 @@ try {
 
 #### Multi-Client Reading Over Network Shares (SMB)
 
-* **Why SQLite WAL Prohibits Direct SMB Access:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot be coordinated across separate operating system kernels over SMB/CIFS. Attempting to open a WAL database directly across a network share triggers `SQLITE_IOERR` or database corruption. PSLocalBase actively rejects direct UNC and mapped network drive paths in WAL mode.
-* **The Recommended Staging / Snapshot Pattern:** For multi-client read scenarios (e.g. querying a shared software catalog or inventory across multiple machines), copy the database file to `$env:TEMP` before opening (`Open-LocalBaseFromSmb`). This provides zero file lock contention on the SMB file server, eliminates network latency per query, and delivers full 100,000+ ops/sec local NVMe read speed.
-* **Detailed SMB Guide & PRAGMAs:** For the complete copy-pasteable `Open-LocalBaseFromSmb` pattern, cache invalidation logic, and direct read PRAGMA directives (`PRAGMA query_only = ON;`, `PRAGMA busy_timeout = 5000;`, `PRAGMA cache_size = -32768;`), see [Section 11 of the Full Documentation](_DOCS/README.md#11-multi-client-reading--smb--network-shares).
-
+* **Why SQLite WAL Prohibits Direct SMB Access:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB.
+* **Recommended Pattern (Local Snapshot):** Copy the `.db` snapshot to `$env:TEMP` before reading (`Copy-Item -Destination $env:TEMP`). This eliminates file locks on the network share and queries at full local NVMe speed.
+* **Direct Read (Non-WAL):** For environments requiring direct reads without copying, the database must use rollback journals (`journal_mode = DELETE`) with `PRAGMA query_only = ON;` and `PRAGMA busy_timeout = 5000;`. See [Section 11 in Full Documentation](_DOCS/README.md#11-reading-over-smb--network-shares).
 ---
 
 ## Test Suite & Quality Verification

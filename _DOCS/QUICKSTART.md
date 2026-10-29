@@ -50,12 +50,9 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 - [8. Atomic ACID Transactions](#8-atomic-acid-transactions)
 - [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
 - [10. PowerShell Pipeline Integration & Object Standard](#10-powershell-pipeline-integration--object-standard)
-- [11. Multi-Client Reading & SMB / Network Shares](#11-multi-client-reading--smb--network-shares)
-  - [Why SQLite WAL Mode Cannot Coordinate Over SMB](#why-sqlite-wal-mode-cannot-coordinate-over-smb)
-  - [The Recommended Pattern: Staging / Local Snapshot](#the-recommended-pattern-staging--local-snapshot)
-  - [Helper Pattern: `Open-LocalBaseFromSmb`](#helper-pattern-open-localbasefromsmb)
-  - [Direct SMB PRAGMA Directives (Technical Reference)](#direct-smb-pragma-directives-technical-reference)
-
+- [11. Reading Over SMB / Network Shares](#11-reading-over-smb--network-shares)
+  - [Recommended Pattern: Local Temp Snapshot](#recommended-pattern-local-temp-snapshot)
+  - [Direct SMB Read (Non-WAL Databases Only)](#direct-smb-read-non-wal-databases-only)
 ---
 
 ## Quick Start in 2 Minutes
@@ -609,165 +606,41 @@ $db.collectionGroup("logs_2026_*").get() |
 
 ---
 
-## 11. Multi-Client Reading & SMB / Network Shares
+## 11. Reading Over SMB / Network Shares
 
-When deploying PowerShell tools, deployment frameworks (e.g., LiteDeploy), or enterprise reporting scripts across multiple machines, you may need dozens or hundreds of client machines to query a centralized catalog or configuration database hosted on a network share (`\\server\share\data.db`).
+When reading a database located on a network share (`\\server\share\data.db`), SQLite's default **Write-Ahead Logging (`WAL`)** mode cannot coordinate shared memory across separate physical machines over SMB.
 
-Understanding the relationship between SQLite, Write-Ahead Logging (WAL), and the SMB protocol is essential for rock-solid stability and high throughput.
+### Recommended Pattern: Local Temp Snapshot
 
-### Why SQLite WAL Mode Cannot Coordinate Over SMB
-
-PSLocalBase defaults to SQLite **Write-Ahead Logging (`WAL`)** mode for maximum local write concurrency and speed. However, SQLite WAL mode relies fundamentally on a shared-memory index file (`.db-shm`).
-
-* In Windows, shared memory is implemented at the NT kernel level via memory-mapped files (`MapViewOfFile`).
-* The SMB/CIFS protocol transports file data and byte-range locks across the network, but **operating system kernels cannot coordinate shared memory across separate physical machines**.
-* If multiple computers attempt to connect to a WAL database directly over an SMB share, the local shared memory indices fall out of sync, causing immediate `SQLITE_IOERR_SHMSIZE`, byte-range lock contention, deadlocks, or database corruption.
-* **Built-in Guard:** To protect your data, PSLocalBase actively detects and rejects UNC network paths (`\\server\share\...`) and network-mapped drives (`Z:\...`) when initialized in WAL mode.
-
----
-
-### The Recommended Pattern: Staging / Local Snapshot
-
-Because SQLite is an embedded engine designed for direct disk and memory access, the industry-standard pattern for multi-client read access over SMB is the **Staging / Local Snapshot Pattern**:
-
-```mermaid
-flowchart LR
-    Master[("Master Database<br/>\\server\share\catalog.db")]
-    Client1["Client Machine 1<br/>Local Cache ($env:TEMP)"]
-    Client2["Client Machine 2<br/>Local Cache ($env:TEMP)"]
-    ClientN["Client Machine N<br/>Local Cache ($env:TEMP)"]
-
-    Master -.->|"1x Fast SMB Copy<br/>(~15ms over 1Gbps)"| Client1
-    Master -.->|"1x Fast SMB Copy<br/>(~15ms over 1Gbps)"| Client2
-    Master -.->|"1x Fast SMB Copy<br/>(~15ms over 1Gbps)"| ClientN
-
-    Client1 -->|"100,000+ ops/sec<br/>Local NVMe / WAL"| App1["PowerShell Script"]
-    Client2 -->|"100,000+ ops/sec<br/>Local NVMe / WAL"| App2["PowerShell Script"]
-    ClientN -->|"100,000+ ops/sec<br/>Local NVMe / WAL"| AppN["PowerShell Script"]
-```
-
-#### Why This Is Superior
-1. **Zero Lock Contention:** The SMB file is only opened for a brief sequential read copy. It leaves **zero persistent file locks** on the file server, allowing infinite concurrent reader machines without `SQLITE_BUSY` errors.
-2. **Extreme Performance:** Copying a 10 MB - 50 MB database over a standard 1 Gbps LAN takes roughly 10–50 ms. Once copied locally, all queries run against local NVMe/SSD at **100,000+ operations/second**, completely avoiding chatty network round-trips for every B-tree traversal.
-3. **Smart Invalidation:** Clients compare the remote file's `LastWriteTimeUtc` and file size before copying. If the master database hasn't changed, the existing local snapshot is reused instantly with zero network transfer.
-4. **Network Resilience:** If the network share drops momentarily while a script is executing complex queries, the local database remains fully functional and never crashes.
-
----
-
-### Helper Pattern: `Open-LocalBaseFromSmb`
-
-Here is a ready-to-use production helper function that you can incorporate into your deployment and administration scripts:
+The standard, zero-contention way to query a database over SMB is to copy a snapshot to `$env:TEMP` before reading. This provides **zero locks** on the network share and **100,000+ ops/sec** local NVMe speed:
 
 ```powershell
-function Open-LocalBaseFromSmb {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$SmbPath,
+$smbPath   = "\\server\share\catalog.db"
+$localPath = Join-Path $env:TEMP "catalog.db"
 
-        [Parameter()]
-        [switch]$CacheLocally,
+# 1. Copy snapshot to local temporary storage
+Copy-Item -LiteralPath $smbPath -Destination $localPath -Force
 
-        [Parameter()]
-        [int]$CacheSizeMB = 32
-    )
-
-    if (-not (Test-Path -LiteralPath $SmbPath)) {
-        throw [System.IO.FileNotFoundException]::new("Network database not found: '$SmbPath'")
-    }
-
-    # Generate a deterministic cache folder based on the share path hash
-    $hasher = [System.Security.Cryptography.SHA256]::Create()
-    $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($SmbPath.ToLower()))
-    $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 12)
-    
-    $cacheDir = [System.IO.Path]::Combine($env:TEMP, "PSLocalBase_Cache", $pathHash)
-    if (-not [System.IO.Directory]::Exists($cacheDir)) {
-        [void][System.IO.Directory]::CreateDirectory($cacheDir)
-    }
-
-    $fileName = [System.IO.Path]::GetFileName($SmbPath)
-    $localDbPath = [System.IO.Path]::Combine($cacheDir, $fileName)
-
-    $remoteFile = Get-Item -LiteralPath $SmbPath
-    $needsCopy = $true
-
-    if ($CacheLocally -and [System.IO.File]::Exists($localDbPath)) {
-        $localFile = Get-Item -LiteralPath $localDbPath
-        # Reuse existing local snapshot if timestamps and sizes match
-        if ($localFile.LastWriteTimeUtc -eq $remoteFile.LastWriteTimeUtc -and $localFile.Length -eq $remoteFile.Length) {
-            $needsCopy = $false
-        }
-    }
-
-    if ($needsCopy) {
-        # Copy master snapshot with overwrite
-        Copy-Item -LiteralPath $SmbPath -Destination $localDbPath -Force
-        # Synchronize timestamp for future cache invalidation checks
-        (Get-Item -LiteralPath $localDbPath).LastWriteTimeUtc = $remoteFile.LastWriteTimeUtc
-    }
-
-    # Open local copy with full WAL speed and enlarged RAM cache
-    return [PSLocalBase]::new($localDbPath, @{
-        wal         = $true
-        cacheSizeMB = $CacheSizeMB
-        busyTimeout = 5000
-    })
-}
-```
-
-#### Usage Example
-
-```powershell
-# Query central hardware inventory hosted on a network share
-$db = Open-LocalBaseFromSmb -SmbPath "\\fileserver\deploy\inventory.db" -CacheLocally
-
+# 2. Query at full local speed
+$db = [PSLocalBase]::new($localPath)
 try {
-    # Instant, zero-latency local queries
-    $servers = $db.collection("servers") `
-        .where("datacenter", "==", "East-1") `
-        .where("status", "==", "active") `
-        .orderBy("hostname", "asc") `
-        .get()
-
-    $servers | Format-Table hostname, ip, rack, osVersion
+    $products = $db.collection("hardware").where("inStock", "==", $true).get()
+    $products | Format-Table id, name, price
 } finally {
     $db.close()
 }
 ```
 
----
+### Direct SMB Read (Non-WAL Databases Only)
 
-### Direct SMB PRAGMA Directives (Technical Reference)
-
-If your environment strictly prohibits copying files to local disk and requires clients to query an SQLite file directly across an SMB share, the database **cannot** use WAL mode. It must use rollback journal mode (`DELETE` or `OFF`) and the client connections must execute specific PRAGMA directives immediately upon opening:
+If copying locally is prohibited, the database must **not** use WAL mode (`journal_mode = DELETE` or `OFF`). Execute these PRAGMAs to prevent lock contention across clients:
 
 ```sql
-PRAGMA journal_mode = DELETE;  -- Rollback journal instead of WAL; compatible with SMB byte-range locking
-PRAGMA query_only = ON;        -- Prohibits all writes and schema alterations; guarantees read-only access
-PRAGMA busy_timeout = 5000;    -- Waits up to 5,000ms on SMB oplock breaks before throwing SQLITE_BUSY
-PRAGMA cache_size = -32768;    -- Reserves 32 MB client RAM cache to minimize chatty network round-trips
+PRAGMA journal_mode = DELETE;  -- Rollback journal instead of WAL
+PRAGMA query_only = ON;        -- Read-only mode: prevents write lock escalation
+PRAGMA busy_timeout = 5000;    -- Waits up to 5s on transient network lock contention
+PRAGMA cache_size = -32768;    -- 32 MB client RAM cache to minimize SMB round-trips
 ```
-
-#### Detailed PRAGMA Breakdown
-
-| PRAGMA Directive | Value | Purpose & Network Behavior |
-|---|---|---|
-| `PRAGMA journal_mode` | `DELETE` or `OFF` | **Mandatory on SMB.** Unlike WAL, standard rollback journals do not require kernel shared memory (`.db-shm`), making them functional across SMB shares. Setting to `OFF` eliminates journal file creation entirely for pure read-only sources. |
-| `PRAGMA query_only` | `ON` | Instructs SQLite to reject any write operation at the SQL parser level. Prevents accidental write attempts, temporary table creations, or write lock escalations on the network share. |
-| `PRAGMA busy_timeout` | `5000` (5s) | Network shares experience latency spikes and temporary file lock contention when multiple machines read the same database pages. Setting a 5,000ms timeout prevents premature `SQLITE_BUSY` exceptions by automatically retrying. |
-| `PRAGMA cache_size` | `-32768` (32MB) | By default, SQLite only caches 2MB of pages in RAM. Negative values denote size in KiB (`-32768` = 32,768 KiB / 32 MB). Over high-latency network links, an enlarged client-side cache keeps index nodes and documents in RAM, drastically reducing SMB network round-trips. |
-
-#### Architectural Trade-Off Matrix
-
-| Feature | Staging / Local Snapshot Pattern | Direct SMB Read Connection |
-|---|---|---|
-| **Write-Ahead Logging (WAL)** | ✅ **Supported** (executes on local disk) | ❌ **Forbidden** (causes `SQLITE_IOERR`) |
-| **Query Performance** | ⚡ **100,000+ ops/sec** (Local NVMe/RAM) | 🐢 **50–500 ops/sec** (SMB round-trip bound) |
-| **Server Lock Contention** | 🟢 **Zero locks** on file server | ⚠️ Shared read locks held across network |
-| **Offline / Network Resilience** | 🟢 Survives transient network disconnects | ❌ Crashes immediately on network drop |
-| **Disk Footprint** | Requires temp disk space on client ($env:TEMP) | Zero local disk usage |
-| **Recommended Usage** | ⭐ **Standard for all PowerShell automation** | Fallback for restricted thin clients |
 
 ---
 
