@@ -549,7 +549,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 73 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 80 comprehensive test cases (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell

@@ -2721,6 +2721,137 @@ Assert-Test "TC-73: Native Lexical & ISO Timestamp Ordering for MIN / MAX" {
     }
 }
 # ---------------------------------------------------------------------------
+# TC-74: Accidental Collection Drop Defense on Ordered Mutation (Audit F01)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-74: Accidental Collection Drop Defense on Ordered Mutation" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("users").doc("u1").set(@{ name = "Alice" })
+        $rejected = $false
+        try {
+            $db.collection("users").orderBy("name").delete()
+        } catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "delete() with orderBy() was not rejected with an exception."
+        }
+        if (-not $db.collectionExists("users")) {
+            throw "Collection was dropped despite orderBy().delete() rejection!"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-75: Upsert Identity Auto-Provisioning & GUID Generation (Audit F02)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-75: Upsert Identity Auto-Provisioning & GUID Generation" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $first = $db.collection("users").upsert([pscustomobject][ordered]@{ role = "reader"; name = "Alice" })
+        $second = $db.collection("users").upsert([pscustomobject][ordered]@{ role = "reader"; name = "Bob" })
+        $count = $db.collection("users").count()
+        if ($first -eq $second) {
+            throw "Two upserts without identity generated identical keys: $first"
+        }
+        if ($count -ne 2) {
+            throw "Expected 2 documents after upserting distinct objects, got $count."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-76: Array Mutation Precision on Adjacent 64-Bit Integers (Audit F03)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-76: Array Mutation Precision on Adjacent 64-Bit Integers" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $a = [long]9007199254740992
+        $b = [long]9007199254740993
+        $db.collection("items").doc("one").set(@{ ids = @($a, $b) })
+        $db.collection("items").doc("one").update(@{ ids = [PSLocalBase]::ArrayRemove($a) })
+        $remaining = @($db.collection("items").doc("one").get().ids)
+        if ($remaining.Count -ne 1 -or $remaining[0] -ne $b) {
+            throw "Expected remaining [$b], got [$($remaining -join ',')]."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-77: Case-Insensitive Collection Schema Index Resolution (Audit F04)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-77: Case-Insensitive Collection Schema Index Resolution" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        [void]$db.collection("users").createIndex("email", @{ unique = $true })
+        [void]$db.collection("USERS").dropIndex("email")
+        $indexes = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%';")
+        if ($indexes.Count -ne 0) {
+            throw "Indexes still present after dropIndex from USERS: $($indexes.name -join ',')"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-78: Point-Lookup Scope Preservation in Composite Queries (Audit F05)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-78: Point-Lookup Scope Preservation in Composite Queries" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("a").doc("a1").set(@{ n = 1 })
+        $db.collection("b").doc("b1").set(@{ n = 2 })
+        $actual = @($db.collection("a").doc("a1").union($db.collection("b")).get())
+        $count = $db.collection("a").doc("a1").union($db.collection("b")).count()
+        if ($actual.Count -ne 2 -or $count -ne 2) {
+            throw "get returned $($actual.Count); count returned $count; expected 2 for both."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-79: Missing Branch Parameter Isolation in Composite Queries (Audit F06)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-79: Missing Branch Parameter Isolation in Composite Queries" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("b").doc("b1").set(@{ name = "Bob" })
+        $actual = @($db.collection("missing").where("name", "=", "Alice").union($db.collection("b")).get())
+        if ($actual.Count -ne 1 -or $actual[0].name -ne "Bob") {
+            throw "Expected surviving branch containing Bob; got $($actual.Count) rows."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-80: Array Type Enforcement for Array Operators (Audit F07)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-80: Array Type Enforcement for Array Operators" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $db.collection("items").doc("array").set(@{ tags = @("admin") })
+        $db.collection("items").doc("scalar").set(@{ tags = "admin" })
+        $db.collection("items").doc("object").set(@{ tags = @{ role = "admin" } })
+        $actual = $db.collection("items").where("tags", "array-contains", "admin").get(@{ keys = $true })
+        if ($actual.Count -ne 1 -or $actual[0].key -ne "array") {
+            throw "Matched keys=[$($actual.key -join ',')]; expected [array]."
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan

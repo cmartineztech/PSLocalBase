@@ -358,16 +358,18 @@ class PSLocalBase : System.IDisposable {
         if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
             throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
         }
-        $hasher = [System.Security.Cryptography.SHA256]::Create()
-        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
-        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
-        $cleanCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
-        $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
-        $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
-        $legacyIndexName = "idx_$($this.CurrentCollection)_$cleanField"
 
-        $dropSql = "DROP INDEX IF EXISTS [$indexName]; DROP INDEX IF EXISTS [$legacyIndexName];"
-        $this._ExecuteDirectSql($dropSql)
+        # Query sqlite_master case-insensitively for any index on this collection and field
+        $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
+        $fieldPattern = "%__${cleanField}_%"
+        $legacyPattern = "%_${cleanField}"
+        $indexes = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name LIKE ? OR name LIKE ?);", @($this.CurrentCollection, $fieldPattern, $legacyPattern))
+        foreach ($row in $indexes) {
+            $idxName = [string]$row[0]
+            if (-not [string]::IsNullOrEmpty($idxName)) {
+                $this._ExecuteDirectSql("DROP INDEX IF EXISTS [$idxName];")
+            }
+        }
 
         return $this
     }
@@ -543,7 +545,23 @@ class PSLocalBase : System.IDisposable {
         return $child
     }
 
-    [string] _ResolveKeyFromCriteria([object]$keyOrCriteria) {
+        [string] _ExtractDocumentId([object]$data) {
+        if ($null -eq $data) { return "" }
+        if ($data -is [System.Collections.IDictionary]) {
+            if ($data.Contains("key") -and -not [string]::IsNullOrWhiteSpace([string]$data["key"])) { return [string]$data["key"] }
+            if ($data.Contains("id") -and -not [string]::IsNullOrWhiteSpace([string]$data["id"])) { return [string]$data["id"] }
+            if ($data.Contains("_key") -and -not [string]::IsNullOrWhiteSpace([string]$data["_key"])) { return [string]$data["_key"] }
+            return ""
+        }
+        if ($data -is [System.Management.Automation.PSCustomObject]) {
+            if ($data.PSObject.Properties["key"] -and -not [string]::IsNullOrWhiteSpace([string]$data.key)) { return [string]$data.key }
+            if ($data.PSObject.Properties["id"] -and -not [string]::IsNullOrWhiteSpace([string]$data.id)) { return [string]$data.id }
+            if ($data.PSObject.Properties["_key"] -and -not [string]::IsNullOrWhiteSpace([string]$data._key)) { return [string]$data._key }
+            return ""
+        }
+        return ""
+    }
+[string] _ResolveKeyFromCriteria([object]$keyOrCriteria) {
         if ($null -eq $keyOrCriteria) { return "" }
         if ($keyOrCriteria -is [string]) { return $keyOrCriteria }
         if ($keyOrCriteria -is [System.Collections.IDictionary]) {
@@ -653,7 +671,7 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureCollectionTable()
 
         # Case 1: Targeted document (.doc('key').set(data))
-        if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
             if ($this.CurrentKey.IndexOf([char]0) -ge 0) {
                 throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
             }
@@ -791,7 +809,7 @@ class PSLocalBase : System.IDisposable {
             } elseif (-not [string]::IsNullOrWhiteSpace($customKey)) {
                 $customKey
             } else {
-                $this._ResolveKeyFromCriteria($data)
+                $this._ExtractDocumentId($data)
             }
 
             if ([string]::IsNullOrWhiteSpace($targetKey)) {
@@ -960,13 +978,13 @@ class PSLocalBase : System.IDisposable {
             }
             if ($value -is [bool]) {
                 $boolLit = if ($value) { "1" } else { "0" }
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit)")
+                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit))")
             } elseif ($value -is [byte] -or $value -is [int16] -or $value -is [int32] -or $value -is [int64] -or
                       $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
                 $numLit = [System.Convert]::ToString($value, [System.Globalization.CultureInfo]::InvariantCulture)
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $numLit)")
+                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $numLit))")
             } else {
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?)")
+                $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
                 $this.WhereParameters.Add([string]$value)
             }
             return $this
@@ -987,7 +1005,7 @@ class PSLocalBase : System.IDisposable {
                 return $this
             }
             $jsonArray = ConvertTo-Json -InputObject $items -Compress
-            $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?)))")
+            $this.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?))))")
             $this.WhereParameters.Add($jsonArray)
             return $this
         }
@@ -1212,7 +1230,7 @@ class PSLocalBase : System.IDisposable {
 
         if (-not $this.IsCollectionGroup -and ($null -eq $this.UnionQuery) -and -not $this._CollectionExists($this.CurrentCollection)) {
             $this._ResetQueryState()
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 return $null
             }
             return @()
@@ -1248,7 +1266,7 @@ class PSLocalBase : System.IDisposable {
             }
 
             # Case 1: Point lookup by key (.doc('key').get())
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 $sql = if ($hasPopulate) {
                     "SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m$($joinsBuilder.ToString()) WHERE m.key = ?;"
                 } elseif ($hasSelect) {
@@ -1318,36 +1336,38 @@ class PSLocalBase : System.IDisposable {
                     return @()
                 }
 
-                $q1Conditions = [System.Collections.Generic.List[string]]::new()
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                    $q1Conditions.Add("key = ?")
-                    $queryParams.Add($this.CurrentKey)
-                }
-                if ($this.WhereClauses.Count -gt 0) {
-                    $q1Conditions.AddRange($this.WhereClauses)
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
-                $q1Sql = if ($q1Exists) {
-                    "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
+                $q1Sql = ""
+                if ($q1Exists) {
+                    $q1Conditions = [System.Collections.Generic.List[string]]::new()
+                    if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                        $q1Conditions.Add("key = ?")
+                        $queryParams.Add($this.CurrentKey)
+                    }
+                    if ($this.WhereClauses.Count -gt 0) {
+                        $q1Conditions.AddRange($this.WhereClauses)
+                        if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                    }
+                    $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
+                    $q1Sql = "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
                 } else {
-                    "SELECT '' AS key, '' AS doc WHERE 0"
+                    $q1Sql = "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
-                $q2Conditions = [System.Collections.Generic.List[string]]::new()
-                if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
-                    $q2Conditions.Add("key = ?")
-                    $queryParams.Add($this.UnionQuery.CurrentKey)
-                }
-                if ($this.UnionQuery.WhereClauses.Count -gt 0) {
-                    $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
-                    if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
-                }
-                $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
-                $q2Sql = if ($q2Exists) {
-                    "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
+                $q2Sql = ""
+                if ($q2Exists) {
+                    $q2Conditions = [System.Collections.Generic.List[string]]::new()
+                    if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
+                        $q2Conditions.Add("key = ?")
+                        $queryParams.Add($this.UnionQuery.CurrentKey)
+                    }
+                    if ($this.UnionQuery.WhereClauses.Count -gt 0) {
+                        $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
+                        if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
+                    }
+                    $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
+                    $q2Sql = "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
                 } else {
-                    "SELECT '' AS key, '' AS doc WHERE 0"
+                    $q2Sql = "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
@@ -1496,7 +1516,7 @@ class PSLocalBase : System.IDisposable {
             return $false
         }
         try {
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
                 $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
                 return ($rows.Count -gt 0)
@@ -1703,36 +1723,38 @@ class PSLocalBase : System.IDisposable {
                     return 0
                 }
                 $queryParams = [System.Collections.Generic.List[string]]::new()
-                $q1Conditions = [System.Collections.Generic.List[string]]::new()
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                    $q1Conditions.Add("key = ?")
-                    $queryParams.Add($this.CurrentKey)
-                }
-                if ($this.WhereClauses.Count -gt 0) {
-                    $q1Conditions.AddRange($this.WhereClauses)
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
-                $q1Sql = if ($q1Exists) {
-                    "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
+                $q1Sql = ""
+                if ($q1Exists) {
+                    $q1Conditions = [System.Collections.Generic.List[string]]::new()
+                    if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                        $q1Conditions.Add("key = ?")
+                        $queryParams.Add($this.CurrentKey)
+                    }
+                    if ($this.WhereClauses.Count -gt 0) {
+                        $q1Conditions.AddRange($this.WhereClauses)
+                        if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+                    }
+                    $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
+                    $q1Sql = "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
                 } else {
-                    "SELECT '' AS key, '' AS doc WHERE 0"
+                    $q1Sql = "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
-                $q2Conditions = [System.Collections.Generic.List[string]]::new()
-                if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
-                    $q2Conditions.Add("key = ?")
-                    $queryParams.Add($this.UnionQuery.CurrentKey)
-                }
-                if ($this.UnionQuery.WhereClauses.Count -gt 0) {
-                    $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
-                    if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
-                }
-                $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
-                $q2Sql = if ($q2Exists) {
-                    "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
+                $q2Sql = ""
+                if ($q2Exists) {
+                    $q2Conditions = [System.Collections.Generic.List[string]]::new()
+                    if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
+                        $q2Conditions.Add("key = ?")
+                        $queryParams.Add($this.UnionQuery.CurrentKey)
+                    }
+                    if ($this.UnionQuery.WhereClauses.Count -gt 0) {
+                        $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
+                        if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
+                    }
+                    $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
+                    $q2Sql = "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
                 } else {
-                    "SELECT '' AS key, '' AS doc WHERE 0"
+                    $q2Sql = "SELECT '' AS key, '' AS doc WHERE 0"
                 }
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
@@ -1769,7 +1791,7 @@ class PSLocalBase : System.IDisposable {
 
         try {
             # Point lookup count by key
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 $sql = "SELECT COUNT(*) FROM [$($this.CurrentCollection)] WHERE key = ?;"
                 $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
                 if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
@@ -1915,8 +1937,8 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .delete().")
         }
 
-        if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue) {
-            throw [System.InvalidOperationException]::new("delete() does not support limit() or skip(). Use point document deletion (.doc('key').delete()) or filter deletion (.where(...).delete()).")
+        if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue -or -not [string]::IsNullOrEmpty($this.OrderByClause)) {
+            throw [System.InvalidOperationException]::new("delete() does not support orderBy(), limit(), or skip(). Use point document deletion (.doc('key').delete()), filter deletion (.where(...).delete()), or explicit collection drop (.drop()).")
         }
 
         if (-not $this._CollectionExists($this.CurrentCollection)) {
@@ -1925,7 +1947,7 @@ class PSLocalBase : System.IDisposable {
         }
 
         try {
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 # Delete single document
                 $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE key = ?;"
                 $this._ExecuteBoundSql($sql, @($this.CurrentKey))
@@ -2189,10 +2211,18 @@ class PSLocalBase : System.IDisposable {
         }
 
         # Numbers: byte, int16, int32, int64, single, double, decimal
-        $isNumA = ($a -is [byte] -or $a -is [int16] -or $a -is [int32] -or $a -is [int64] -or $a -is [single] -or $a -is [double] -or $a -is [decimal])
-        $isNumB = ($b -is [byte] -or $b -is [int16] -or $b -is [int32] -or $b -is [int64] -or $b -is [single] -or $b -is [double] -or $b -is [decimal])
+        $isIntA = ($a -is [byte] -or $a -is [sbyte] -or $a -is [int16] -or $a -is [uint16] -or $a -is [int32] -or $a -is [uint32] -or $a -is [int64] -or $a -is [uint64])
+        $isIntB = ($b -is [byte] -or $b -is [sbyte] -or $b -is [int16] -or $b -is [uint16] -or $b -is [int32] -or $b -is [uint32] -or $b -is [int64] -or $b -is [uint64])
+        if ($isIntA -and $isIntB) {
+            return ([int64]$a) -eq ([int64]$b)
+        }
+        $isNumA = ($isIntA -or $a -is [single] -or $a -is [double] -or $a -is [decimal])
+        $isNumB = ($isIntB -or $b -is [single] -or $b -is [double] -or $b -is [decimal])
         if ($isNumA -or $isNumB) {
             if ($isNumA -and $isNumB) {
+                if ($a -is [decimal] -or $b -is [decimal]) {
+                    return ([decimal]$a) -eq ([decimal]$b)
+                }
                 return ([double]$a) -eq ([double]$b)
             }
             return $false
@@ -2648,7 +2678,7 @@ try {
                 return $false
             }
             try {
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                     $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
                     $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
                     return ($rows.Count -gt 0)
