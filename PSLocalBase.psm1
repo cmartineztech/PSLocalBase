@@ -353,8 +353,9 @@ class PSLocalBase : System.IDisposable {
         }
         $uniqueStr = if ($isUnique) { "UNIQUE" } else { "" }
 
+        $docColPattern = '(?:["''`\[]?\w+["''`\]]?\.)?(?:["''`\[]doc["''`\]]|doc)'
         $escapedField = [regex]::Escape($fieldToCheck)
-        $jsonExtractRegex = "json_extract\s*\(\s*doc\s*,\s*['""]\$\.(?:""$escapedField""|$escapedField)['""]\s*\)"
+        $jsonExtractRegex = "json_extract\s*\(\s*${docColPattern}\s*,\s*['\""]\$\.(?:\""$escapedField\""|$escapedField)['\""]\s*\)"
 
         # Check if index already exists for this table and field in sqlite_master (case-insensitive collection, exact field expression)
         $allCandidateRows = $this._ExecuteBoundQuery("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name = ? OR name LIKE ? OR name LIKE ?);", @($this.CurrentCollection, $indexName, "%__${cleanField}_${pathHash}", "%__${cleanField}_${pathHash8}"))
@@ -433,8 +434,10 @@ class PSLocalBase : System.IDisposable {
         $rawPathHash = [BitConverter]::ToString($rawHashBytes).Replace("-", "").Substring(0, 16)
         $rawIndexName = "idx_${rawCol}__${cleanField}_${rawPathHash}"
 
+        $docColPattern = '(?:["''`\[]?\w+["''`\]]?\.)?(?:["''`\[]doc["''`\]]|doc)'
         $escapedField = [regex]::Escape($fieldToCheck)
-        $jsonExtractRegex = "json_extract\s*\(\s*doc\s*,\s*['\""]\$\.(?:\""$escapedField\""|$escapedField)['\""]\s*\)"
+        $jsonExtractRegex = "json_extract\s*\(\s*${docColPattern}\s*,\s*['\""]\$\.(?:\""$escapedField\""|$escapedField)['\""]\s*\)"
+        $anyJsonExtractPattern = "json_extract\s*\(\s*${docColPattern}\s*,"
 
         # Inspect actual index definition sql column in sqlite_master
         $indexes = $this._ExecuteBoundQuery("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE;", @($this.CurrentCollection))
@@ -446,7 +449,7 @@ class PSLocalBase : System.IDisposable {
             $shouldDrop = $false
             if (-not [string]::IsNullOrEmpty($idxSql) -and $idxSql -cmatch $jsonExtractRegex) {
                 $shouldDrop = $true
-            } elseif ([string]::IsNullOrEmpty($idxSql) -or $idxSql -notmatch "json_extract\s*\(\s*doc") {
+            } elseif ([string]::IsNullOrEmpty($idxSql) -or -not ($idxSql -match $anyJsonExtractPattern)) {
                 if ($idxName -ceq $indexName -or $idxName -ceq $rawIndexName -or $idxName -clike $hashPattern16 -or $idxName -clike $hashPattern8) {
                     $shouldDrop = $true
                 }
@@ -1457,6 +1460,12 @@ class PSLocalBase : System.IDisposable {
                 if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
                     throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
                 }
+                if ($null -ne $this.UnionQuery.UnionQuery) {
+                    throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+                }
+                if ($null -ne $this.UnionQuery.PopulateClauses -and $this.UnionQuery.PopulateClauses.Count -gt 0) {
+                    throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
+                }
                 $q1Exists = $this._CollectionExists($this.CurrentCollection)
                 $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
                 if (-not $q1Exists -and -not $q2Exists) {
@@ -1630,6 +1639,12 @@ class PSLocalBase : System.IDisposable {
         }
 
         if ($null -ne $this.UnionQuery) {
+            if ($null -ne $this.UnionQuery.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+            }
+            if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
+                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
             try {
                 $rows = $this.limit(1).get()
                 return ($null -ne $rows -and $rows.Count -gt 0)
@@ -1856,6 +1871,12 @@ class PSLocalBase : System.IDisposable {
         if ($null -ne $this.UnionQuery) {
             if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
                 throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
+            if ($null -ne $this.UnionQuery.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+            }
+            if ($null -ne $this.UnionQuery.PopulateClauses -and $this.UnionQuery.PopulateClauses.Count -gt 0) {
+                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
             try {
                 $q1Exists = $this._CollectionExists($this.CurrentCollection)
@@ -2426,16 +2447,18 @@ class PSLocalBase : System.IDisposable {
                 if (($isDecA -and $isFloatB) -or ($isFloatA -and $isDecB)) {
                     $fVal = if ($isFloatA) { [double]$a } else { [double]$b }
                     $dVal = if ($isDecA) { [decimal]$a } else { [decimal]$b }
-                    if ([double]$dVal -ne $fVal) {
-                        return $false
-                    }
+                    if ([double]::IsNaN($fVal) -or [double]::IsInfinity($fVal)) { return $false }
                     try {
-                        $fStr = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
-                        $fDec = [decimal]::Parse($fStr, [System.Globalization.CultureInfo]::InvariantCulture)
-                        return $dVal -eq $fDec
-                    } catch {
-                        return $false
-                    }
+                        $fStrR = $fVal.ToString("R", [System.Globalization.CultureInfo]::InvariantCulture)
+                        $fDecR = [decimal]::Parse($fStrR, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
+                        if ($dVal -eq $fDecR) { return $true }
+                    } catch {}
+                    try {
+                        $fStrG = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
+                        $fDecG = [decimal]::Parse($fStrG, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
+                        if ($dVal -eq $fDecG) { return $true }
+                    } catch {}
+                    return $false
                 }
             }
             return $false
@@ -2799,6 +2822,9 @@ try {
                 throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
             }
             $this.UnionQuery = $otherQuery
+            if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
+                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
+            }
             $this.UnionType = "UNION"
             return $this
         } -Force
@@ -2814,6 +2840,9 @@ try {
                 throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
             }
             $this.UnionQuery = $otherQuery
+            if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
+                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
+            }
             $this.UnionType = "UNION ALL"
             return $this
         } -Force
