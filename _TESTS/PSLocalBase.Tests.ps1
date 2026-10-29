@@ -932,10 +932,10 @@ Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation
             throw "Explicit .create() failed to create collection table."
         }
 
-        # 4. Explicit .delete() drops table
-        $db.collection("my_custom_coll").delete()
+        # 4. Explicit .drop() drops table
+        $db.collection("my_custom_coll").drop()
         if (@($db.listCollections()).Count -ne 0) {
-            throw "Collection table still exists after .delete()."
+            throw "Collection table still exists after .drop()."
         }
 
         # 5. Writing data creates table automatically
@@ -1026,9 +1026,9 @@ Assert-Test "TC-29: Collection Schema Lifecycle (createCollection, Exists, Drop 
         }
 
         # 4. Drop collection table completely
-        $db.collection("audit_trail").delete()
+        $db.collection("audit_trail").drop()
         if ($db.collectionExists("audit_trail")) {
-            throw "audit_trail should not exist after .delete()."
+            throw "audit_trail should not exist after .drop()."
         }
         $colls = @($db.listCollections())
         if ($colls -contains "audit_trail") {
@@ -1101,7 +1101,7 @@ Assert-Test "TC-30: Multiple Collection Isolation & Relational Integrity" {
         }
 
         # 5. Drop 'orders' collection
-        $db.collection("orders").delete()
+        $db.collection("orders").drop()
         if ($db.collectionExists("orders")) {
             throw "orders collection should be deleted."
         }

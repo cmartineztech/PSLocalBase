@@ -466,12 +466,12 @@ $db.collection("users").doc("usr-100").delete()
 $db.collection("logs").where("level", "=", "DEBUG").delete()
 ```
 
-#### Dropping an Entire Collection Table
+#### Dropping vs Truncating a Collection Table
 ```powershell
-# Drop the collection table cleanly
+# Drop the collection table cleanly (removes table schema and secondary indexes from sqlite_master)
 $db.collection("temporary_data").drop()
 
-# Or delete without document key or where filter (drops the collection table)
+# Or truncate all records from a collection (DELETE FROM [col], preserving schema and indexes)
 $db.collection("temporary_data").delete()
 ```
 > [!NOTE]

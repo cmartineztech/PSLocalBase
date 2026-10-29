@@ -1,4 +1,4 @@
-﻿# PSLocalBase Documentation & Reference Guide
+# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -330,6 +330,9 @@ $db.collection("users").doc("usr-100").delete()
 
 # Delete matching filtered documents
 $db.collection("audit_logs").where("timestamp", "<", (Get-Date).AddDays(-30).ToString("o")).delete()
+
+# Truncate all records from collection (preserves table schema and indexes)
+$db.collection("temporary_data").delete()
 
 # Drop entire collection table
 $db.collection("temporary_data").drop()

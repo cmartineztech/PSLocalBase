@@ -9,7 +9,8 @@ $tests = @(
     "PSLocalBase.Audit.Tests.ps1",
     "PSLocalBase.Reevaluation.Tests.ps1",
     "PSLocalBase.NativeStress.Tests.ps1",
-    "PSLocalBase.Independent-c57b52c.Tests.ps1"
+    "PSLocalBase.Independent-c57b52c.Tests.ps1",
+    "PSLocalBase.Revalidation-3ecc2c1.Tests.ps1"
 )
 
 foreach ($testFile in $tests) {

@@ -314,6 +314,9 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to create index. Call .collection('name').createIndex('field')")
         }
+        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("createIndex is not supported on composite queries (union) or collection groups.")
+        }
         if ([string]::IsNullOrWhiteSpace($field)) {
             throw [System.ArgumentException]::new("Field name cannot be null or empty in createIndex.")
         }
@@ -344,8 +347,18 @@ class PSLocalBase : System.IDisposable {
         }
         $uniqueStr = if ($isUnique) { "UNIQUE" } else { "" }
 
-        # Check if index already exists for this table and field in sqlite_master (case-insensitive)
-        $existingRows = $this._ExecuteBoundQuery("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name = ? OR name LIKE ? OR name LIKE ?);", @($this.CurrentCollection, $indexName, "%__${cleanField}_${pathHash}", "%__${cleanField}_${pathHash8}"))
+        $escapedField = [regex]::Escape($fieldToCheck)
+        $jsonExtractRegex = "json_extract\s*\(\s*doc\s*,\s*['""]\$\.(?:""$escapedField""|$escapedField)['""]\s*\)"
+
+        # Check if index already exists for this table and field in sqlite_master (case-insensitive collection, exact field expression)
+        $allCandidateRows = $this._ExecuteBoundQuery("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND (name = ? OR name LIKE ? OR name LIKE ?);", @($this.CurrentCollection, $indexName, "%__${cleanField}_${pathHash}", "%__${cleanField}_${pathHash8}"))
+        $existingRows = [System.Collections.Generic.List[object[]]]::new()
+        foreach ($row in $allCandidateRows) {
+            $candSql = if ($row.Length -gt 1 -and $null -ne $row[1]) { [string]$row[1] } else { "" }
+            if (-not [string]::IsNullOrEmpty($candSql) -and $candSql -cmatch $jsonExtractRegex) {
+                $existingRows.Add($row)
+            }
+        }
         if ($existingRows.Count -gt 0 -and $null -ne $existingRows[0][1]) {
             $existingSql = [string]$existingRows[0][1]
             $wasUnique = ($existingSql -match '(?i)\bCREATE\s+UNIQUE\s+INDEX\b')
@@ -386,6 +399,9 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to drop index. Call .collection('name').dropIndex('field')")
         }
+        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("dropIndex is not supported on composite queries (union) or collection groups.")
+        }
         if ([string]::IsNullOrWhiteSpace($field)) {
             throw [System.ArgumentException]::new("Field name cannot be null or empty in dropIndex.")
         }
@@ -422,9 +438,9 @@ class PSLocalBase : System.IDisposable {
             if ([string]::IsNullOrEmpty($idxName)) { continue }
 
             $shouldDrop = $false
-            if (-not [string]::IsNullOrEmpty($idxSql) -and $idxSql -match $jsonExtractRegex) {
+            if (-not [string]::IsNullOrEmpty($idxSql) -and $idxSql -cmatch $jsonExtractRegex) {
                 $shouldDrop = $true
-            } elseif ($idxName -eq $indexName -or $idxName -eq $rawIndexName -or $idxName -like $hashPattern16 -or $idxName -like $hashPattern8) {
+            } elseif ($idxName -ceq $indexName -or $idxName -ceq $rawIndexName -or $idxName -clike $hashPattern16 -or $idxName -clike $hashPattern8) {
                 $shouldDrop = $true
             }
 
@@ -551,7 +567,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
         }
-        if ($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) {
+        if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
         $this.UnionQuery = $otherQuery
@@ -563,7 +579,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
         }
-        if ($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) {
+        if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
         $this.UnionQuery = $otherQuery
@@ -888,6 +904,12 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureOpen()
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .upsert().")
+        }
+        if ($this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot upsert documents in a collectionGroup. Collection groups are read-only.")
+        }
+        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0) {
+            throw [System.InvalidOperationException]::new("Cannot upsert documents on a composite query (union).")
         }
 
         try {
@@ -1709,6 +1731,12 @@ class PSLocalBase : System.IDisposable {
         if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in $aggFunc(). Only alphanumeric characters, underscores, and dots are allowed.")
         }
+        if ($null -ne $this.UnionQuery -or $this.CompoundOperations.Count -gt 0 -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Aggregate functions ($aggFunc) are not supported on composite queries (union) or collection groups.")
+        }
+        if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue) {
+            throw [System.InvalidOperationException]::new("Aggregate functions ($aggFunc) do not support pagination (limit/skip).")
+        }
         if (-not $this._CollectionExists($this.CurrentCollection)) {
             $this._ResetQueryState()
             if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
@@ -2062,10 +2090,9 @@ class PSLocalBase : System.IDisposable {
                 $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE $whereStr;"
                 $this._ExecuteBoundSql($sql, $this.WhereParameters.ToArray())
             } else {
-                # Drop entire collection table
-                $sql = "DROP TABLE IF EXISTS [$($this.CurrentCollection)];"
+                # Truncate collection records while preserving table schema and secondary indexes
+                $sql = "DELETE FROM [$($this.CurrentCollection)];"
                 $this._ExecuteDirectSql($sql)
-                $this.CurrentCollection = ""
             }
         } finally {
             $this._ResetQueryState()
@@ -2385,10 +2412,13 @@ class PSLocalBase : System.IDisposable {
                 if (($isDecA -and $isFloatB) -or ($isFloatA -and $isDecB)) {
                     $fVal = if ($isFloatA) { [double]$a } else { [double]$b }
                     $dVal = if ($isDecA) { [decimal]$a } else { [decimal]$b }
+                    if ([double]$dVal -ne $fVal) {
+                        return $false
+                    }
                     try {
                         return $dVal -eq [decimal]$fVal
                     } catch {
-                        return [double]$dVal -eq $fVal
+                        return $false
                     }
                 }
             }
