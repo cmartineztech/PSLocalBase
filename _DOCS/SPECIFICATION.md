@@ -130,7 +130,7 @@ public class WinSqlite3 {
   PRAGMA cache_size = -16000;
   ```
   - **WAL (Write-Ahead Logging):** Eliminates reader/writer concurrency lock contention. Note: WAL requires shared-memory (`-shm`) locking; therefore, UNC network paths (`\\server\share`) and mapped network drives are strictly rejected to prevent silent data corruption over SMB.
-  - **synchronous = NORMAL:** Maximizes throughput while retaining crash resilience against process crashes. (Note: in WAL mode, fsync to physical platter/flash occurs primarily during checkpoints, providing complete crash-safety from application termination while optimizing disk I/O).
+  - **synchronous = NORMAL:** Configurable via constructor $options.synchronous (EXTRA, FULL, NORMAL, OFF), defaulting to NORMAL. Maximizes throughput while retaining crash resilience against process crashes. (Note: in WAL mode, fsync to physical platter/flash occurs primarily during checkpoints, providing complete crash-safety from application termination while optimizing disk I/O).
   - **busy_timeout = 5000:** Automatically sleeps and retries up to 5,000 ms on write collisions.
   - **temp_store = MEMORY:** Performs sorting and temporary indices directly in RAM.
   - **cache_size = -16000 / configurable:** Allocates warm page cache memory (configurable via `cacheSizeMB` option).
@@ -237,7 +237,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 * **`[object] first([hashtable]$options)`**
   * Retrieves the first matching document with a hardcoded `LIMIT 1` cursor on a cloned instance, returning `[PSCustomObject]` or `$null`. Does not mutate caller limits.
 * **`[object[]] distinct([string]$field)`**
-  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`. Non-destructive.
+  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`. Non-destructive: preserves query filter clauses for reuse. Explicitly rejected on composite queries (`union`/`unionAll`) and collection groups.
 * **`[double] sum([string]$field)` / `[double] avg([string]$field)` / `[object] min([string]$field)` / `[object] max([string]$field)`**
   * Executes aggregate functions directly inside SQLite C engine on numeric JSON fields without transferring or deserializing rows in PowerShell (`min`/`max` return `[object]` to cleanly represent `$null` when no matching records exist). Non-destructive.
 * **`[object] get([hashtable]$options)`**

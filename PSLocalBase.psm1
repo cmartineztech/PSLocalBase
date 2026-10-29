@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -55,6 +55,8 @@ class PSLocalBase : System.IDisposable {
     [bool]$IsCollectionGroup = $false
     [string[]]$GroupTables = @()
     [bool]$IsComposedInUnion = $false
+    [PSLocalBase]$_OriginalRightBranch = $null
+    [bool]$_HasSubsequentUnion = $false
     [System.Collections.Generic.List[string]]$SelectedFields
 
     # Default constructor (in-memory)
@@ -621,9 +623,12 @@ class PSLocalBase : System.IDisposable {
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $otherQuery.IsComposedInUnion = $true
+        $this._HasSubsequentUnion = $true
         $target = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
+        $target.UnionQuery.IsComposedInUnion = $true
+        $target.IsComposedInUnion = $true
+        $target._OriginalRightBranch = $otherQuery
         $target.UnionType = "UNION"
         return $target
     }
@@ -641,9 +646,12 @@ class PSLocalBase : System.IDisposable {
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $otherQuery.IsComposedInUnion = $true
+        $this._HasSubsequentUnion = $true
         $target = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
+        $target.UnionQuery.IsComposedInUnion = $true
+        $target.IsComposedInUnion = $true
+        $target._OriginalRightBranch = $otherQuery
         $target.UnionType = "UNION ALL"
         return $target
     }
@@ -1507,6 +1515,9 @@ class PSLocalBase : System.IDisposable {
                 }
                 $querySql = $sqlBuilder.ToString()
             } elseif ($null -ne $this.UnionQuery) {
+                if ($null -ne $this._OriginalRightBranch -and $this._OriginalRightBranch._HasSubsequentUnion) {
+                    throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+                }
                 if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
                     throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
                 }
@@ -1700,32 +1711,31 @@ class PSLocalBase : System.IDisposable {
         if (-not $this._CollectionExists($this.CurrentCollection)) {
             return $false
         }
-        try {
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
-                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-                return ($rows.Count -gt 0)
-            }
-            $sqlBuilder = [System.Text.StringBuilder]::new()
-            [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
-            $queryParams = [System.Collections.Generic.List[object]]::new()
-            if ($this.WhereClauses.Count -gt 0) {
-                [void]$sqlBuilder.Append(" WHERE ")
-                [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-            }
-            [void]$sqlBuilder.Append(" LIMIT 1;")
-            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
+            $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
+            $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
             return ($rows.Count -gt 0)
-        } finally {
-            $this._ResetQueryState()
         }
+        $sqlBuilder = [System.Text.StringBuilder]::new()
+        [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+        if ($this.WhereClauses.Count -gt 0) {
+            [void]$sqlBuilder.Append(" WHERE ")
+            [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
+            if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+        }
+        [void]$sqlBuilder.Append(" LIMIT 1;")
+        $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+        return ($rows.Count -gt 0)
     }
 
     [object[]] distinct([string]$field) {
         $this._EnsureOpen()
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .distinct().")
+        }
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("distinct() is not supported on composite queries (union) or collection groups.")
         }
         if ([string]::IsNullOrWhiteSpace($field)) {
             throw [System.ArgumentException]::new("Field name cannot be null or empty in distinct().")
@@ -1738,35 +1748,31 @@ class PSLocalBase : System.IDisposable {
         if (-not $this._CollectionExists($this.CurrentCollection)) {
             return @()
         }
-        try {
-            $sqlBuilder = [System.Text.StringBuilder]::new()
-            $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
-            [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
-            $queryParams = [System.Collections.Generic.List[object]]::new()
-            $whereList = [System.Collections.Generic.List[string]]::new()
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                $whereList.Add("key = ?")
-                $queryParams.Add($this.CurrentKey)
-            }
-            if ($this.WhereClauses.Count -gt 0) {
-                $whereList.AddRange($this.WhereClauses)
-                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-            }
-            $whereList.Add("$jsonExtract IS NOT NULL")
-            [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
-            [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
-
-            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
-            $distinctList = [System.Collections.Generic.List[object]]::new()
-            foreach ($row in $rows) {
-                if ($row.Count -gt 0 -and $null -ne $row[0]) {
-                    $distinctList.Add($row[0])
-                }
-            }
-            return [object[]]$distinctList.ToArray()
-        } finally {
-            $this._ResetQueryState()
+        $sqlBuilder = [System.Text.StringBuilder]::new()
+        $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
+        [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+        $whereList = [System.Collections.Generic.List[string]]::new()
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            $whereList.Add("key = ?")
+            $queryParams.Add($this.CurrentKey)
         }
+        if ($this.WhereClauses.Count -gt 0) {
+            $whereList.AddRange($this.WhereClauses)
+            if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+        }
+        $whereList.Add("$jsonExtract IS NOT NULL")
+        [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
+        [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
+
+        $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+        $distinctList = [System.Collections.Generic.List[object]]::new()
+        foreach ($row in $rows) {
+            if ($row.Count -gt 0 -and $null -ne $row[0]) {
+                $distinctList.Add($row[0])
+            }
+        }
+        return [object[]]$distinctList.ToArray()
     }
 
     [double] sum([string]$field) {
@@ -1809,12 +1815,10 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("Aggregate functions ($aggFunc) do not support pagination (limit/skip).")
         }
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
             return $null
         }
-        try {
-            $sqlBuilder = [System.Text.StringBuilder]::new()
+        $sqlBuilder = [System.Text.StringBuilder]::new()
             $isNumericAgg = ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG")
             $jsonExtract = if ($isNumericAgg) {
                 "CAST(json_extract(doc, '`$.$fieldToCheck') AS REAL)"
@@ -1867,10 +1871,7 @@ class PSLocalBase : System.IDisposable {
             }
             if ($isNumericAgg) { return 0.0 }
             return $null
-        } finally {
-            $this._ResetQueryState()
         }
-    }
 
     [int] count() {
         $this._EnsureOpen()

@@ -1,4 +1,4 @@
-﻿# Convenient test runner for PSLocalBase
+# Convenient test runner for PSLocalBase
 [CmdletBinding()]
 param(
     [switch]$VerboseOutput
@@ -13,7 +13,8 @@ $tests = @(
     "PSLocalBase.Revalidation-3ecc2c1.Tests.ps1",
     "PSLocalBase.Review-83ed742.Tests.ps1",
     "PSLocalBase.Followup-a526708.Tests.ps1",
-    "PSLocalBase.Boundary-86483c7.Tests.ps1"
+    "PSLocalBase.Boundary-86483c7.Tests.ps1",
+    "PSLocalBase.Review-3c890fd.Tests.ps1"
 )
 
 foreach ($testFile in $tests) {

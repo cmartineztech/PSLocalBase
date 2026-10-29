@@ -21,9 +21,9 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (9 Suites / 154 Checks)
+### Complete Multi-Suite Runner Overview (10 Suites / 161 Checks)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 9 focused test suites:
+The automated test runner (`_TESTS/run-tests.ps1`) executes 10 focused test suites:
 1. `PSLocalBase.Tests.ps1` – Core acceptance criteria & functional tests (83 test cases).
 2. `PSLocalBase.EdgeCases.Tests.ps1` – Corner cases, boundary values, and corruption defenses (17 tests).
 3. `PSLocalBase.NativeStress.Tests.ps1` – P/Invoke statement cleanup and high-concurrency lock contention (5 tests).
@@ -32,7 +32,8 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 9 focused test suite
 6. `PSLocalBase.Review-83ed742.Tests.ps1` – Index expression migration and roundtrip mutations (7 tests).
 7. `PSLocalBase.Followup-a526708.Tests.ps1` – Cross-edition numeric roundtrip and collectionGroup drop rejection (21 tests).
 8. `PSLocalBase.Boundary-86483c7.Tests.ps1` – Subnormal float preservation and decimal quantization boundaries (3 tests).
-9. `Playground/verify-playground.ps1` – WPF GUI components, XAML parsing, and syntax normalization (10 checks).
+9. `PSLocalBase.Review-3c890fd.Tests.ps1` - Read terminal filter preservation, RHS union reuse, and synchronous options (7 tests).
+10. `Playground/verify-playground.ps1` - WPF GUI components, XAML parsing, and syntax normalization (10 checks).
 
 ---
 
