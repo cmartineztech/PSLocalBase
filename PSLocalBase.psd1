@@ -44,7 +44,7 @@
     # Private data to pass to the module specified in RootModule
     PrivateData          = @{
         PSData = @{
-            Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB')
+            Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
             ReleaseNotes = 'Initial production release of PSLocalBase embedded NoSQL engine for PowerShell.'
