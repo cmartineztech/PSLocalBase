@@ -65,5 +65,39 @@ Check-Followup 'Imported legacy index with quoted doc must preserve its unrelate
     catch [System.InvalidOperationException] { $blocked = $true }
     if (-not $blocked) { throw 'Imported first-path UNIQUE no longer enforced.' }
 }
+Check-Followup 'H01 - Subnormal floats must not equal Decimal zero' {
+    param($db)
+    if ([PSLocalBase]::_JsonValuesEqual([double]1e-35, [decimal]0)) { throw '1e-35 must not equal decimal 0' }
+    if ([PSLocalBase]::_JsonValuesEqual([double]::Epsilon, [decimal]0)) { throw 'Epsilon must not equal decimal 0' }
+    if ([PSLocalBase]::_JsonValuesEqual([double]-1e-35, [decimal]0)) { throw '-1e-35 must not equal decimal 0' }
+    if (-not [PSLocalBase]::_JsonValuesEqual([double]0.0, [decimal]0)) { throw '0.0 must equal decimal 0' }
+}
+Check-Followup 'H02 - Deserialized JSON PSCustomObject array operations' {
+    param($db)
+    $col = $db.collection('h02_ops')
+    $col.doc('d1').set(@{ tags = @('a', 'b') })
+    $jsonU = '{"tags": {"$arrayUnion": ["c", "a"]}}'
+    $col.doc('d1').update((ConvertFrom-Json $jsonU))
+    $resU = $col.doc('d1').get()
+    if (($resU.tags -join ',') -ne 'a,b,c') { throw "Expected a,b,c after PSCustomObject arrayUnion; got: $($resU.tags -join ',')" }
+    $jsonR = '{"tags": {"$arrayRemove": ["b"]}}'
+    $col.doc('d1').update((ConvertFrom-Json $jsonR))
+    $resR = $col.doc('d1').get()
+    if (($resR.tags -join ',') -ne 'a,c') { throw "Expected a,c after PSCustomObject arrayRemove; got: $($resR.tags -join ',')" }
+}
+Check-Followup 'H04 - collectionGroup drop must reject with InvalidOperationException' {
+    param($db)
+    $col = $db.collection('cg_drop_target')
+    $col.add(@{ val = 42 })
+    $cg = $db.collectionGroup('cg_drop_target')
+    $threw = $false
+    try {
+        $cg.drop()
+    } catch [System.InvalidOperationException] {
+        if ($_.Exception.Message -match 'composite|collectionGroup|read-only') { $threw = $true }
+    }
+    if (-not $threw) { throw 'collectionGroup.drop() must throw InvalidOperationException' }
+    if ($col.count() -ne 1) { throw 'collectionGroup.drop() must not have dropped the underlying collection' }
+}
 Write-Host "Followup a526708: passed=$script:passed; failed=$script:failed"
 if ($script:failed -gt 0) { exit 1 }

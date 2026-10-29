@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -2088,6 +2088,9 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .drop().")
         }
+        if ($this.IsCollectionGroup -or $null -ne $this.UnionQuery) {
+            throw [System.InvalidOperationException]::new("Cannot drop collection from a composite query (union/collectionGroup). Collection groups are read-only.")
+        }
         if ($this._CollectionExists($this.CurrentCollection)) {
             $sql = "DROP TABLE IF EXISTS [$($this.CurrentCollection)];"
             $this._ExecuteDirectSql($sql)
@@ -2451,12 +2454,12 @@ class PSLocalBase : System.IDisposable {
                     try {
                         $fStrR = $fVal.ToString("R", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecR = [decimal]::Parse($fStrR, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
-                        if ($dVal -eq $fDecR) { return $true }
+                        if ($dVal -eq $fDecR -and ($fDecR -ne [decimal]0 -or $fVal -eq 0.0)) { return $true }
                     } catch {}
                     try {
                         $fStrG = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecG = [decimal]::Parse($fStrG, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
-                        if ($dVal -eq $fDecG) { return $true }
+                        if ($dVal -eq $fDecG -and ($fDecG -ne [decimal]0 -or $fVal -eq 0.0)) { return $true }
                     } catch {}
                     return $false
                 }
@@ -2559,6 +2562,20 @@ class PSLocalBase : System.IDisposable {
                     $isArrayOp = $true
                     $opType = 'remove'
                     $v = $srcVal['$arrayRemove']
+                    $opVals = if ($v -is [System.Collections.IEnumerable] -and $v -isnot [string]) { @($v) } else { @($v) }
+                }
+            } elseif ($srcVal -is [System.Management.Automation.PSCustomObject]) {
+                $propUnion = $srcVal.PSObject.Properties['$arrayUnion']
+                $propRemove = $srcVal.PSObject.Properties['$arrayRemove']
+                if ($null -ne $propUnion) {
+                    $isArrayOp = $true
+                    $opType = 'union'
+                    $v = $propUnion.Value
+                    $opVals = if ($v -is [System.Collections.IEnumerable] -and $v -isnot [string]) { @($v) } else { @($v) }
+                } elseif ($null -ne $propRemove) {
+                    $isArrayOp = $true
+                    $opType = 'remove'
+                    $v = $propRemove.Value
                     $opVals = if ($v -is [System.Collections.IEnumerable] -and $v -isnot [string]) { @($v) } else { @($v) }
                 }
             }
@@ -2676,6 +2693,9 @@ try {
             if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
                 throw [System.InvalidOperationException]::new("No collection specified to drop.")
             }
+            if ($this.IsCollectionGroup -or $null -ne $this.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Cannot drop collection from a composite query (union/collectionGroup). Collection groups are read-only.")
+            }
             $this._ExecuteDirectSql("DROP TABLE IF EXISTS [$($this.CurrentCollection)];")
             $this.CurrentCollection = ""
             $this._ResetQueryState()
@@ -2785,6 +2805,9 @@ try {
         Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName populate -Value {
             param([string]$foreignField, [object]$optionsOrCollection = $null, [string]$asProperty = "")
             $this._EnsureOpen()
+            if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
+            }
             if ([string]::IsNullOrWhiteSpace($foreignField)) {
                 throw [System.ArgumentException]::new("Foreign field cannot be null or empty in populate.")
             }
@@ -2799,9 +2822,21 @@ try {
             }
             $cleanFField = $foreignField.Trim()
             if ($cleanFField.StartsWith("$.")) { $cleanFField = $cleanFField.Substring(2) }
+            if ($cleanFField -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                throw [System.ArgumentException]::new("Foreign field '$foreignField' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
+            }
             $cleanFCol = $foreignCol.Trim()
+            if ([string]::IsNullOrWhiteSpace($cleanFCol)) {
+                throw [System.ArgumentException]::new("Foreign collection cannot be null or empty in populate.")
+            }
+            if ($cleanFCol -notmatch '^[a-zA-Z0-9_]+$') {
+                throw [System.ArgumentException]::new("Foreign collection name '$cleanFCol' is invalid. Only alphanumeric characters and underscores are allowed.")
+            }
             $cleanAs = if (-not [string]::IsNullOrWhiteSpace($asProp)) { $asProp.Trim() } else { $cleanFField }
             if ($cleanAs.StartsWith("$.")) { $cleanAs = $cleanAs.Substring(2) }
+            if ($cleanAs -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                throw [System.ArgumentException]::new("Target property name '$cleanAs' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
+            }
             if ($null -eq $this.PopulateClauses) { $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new() }
             $this.PopulateClauses.Add(@{
                 foreignField      = $cleanFField
