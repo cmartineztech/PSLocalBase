@@ -2,6 +2,7 @@
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
+[![Security Audit: 94/100](https://img.shields.io/badge/Security%20Audit-94%2F100%20(Production%20Ready)-brightgreen.svg)](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -33,6 +34,7 @@
   - [Resource Cleanup & Disposal](#resource-cleanup--disposal)
   - [Production Best Practices & Crash Resilience](#production-best-practices--crash-resilience)
 - [Test Suite & Quality Verification](#test-suite--quality-verification)
+  - [Independent Security & Quality Audit (Claude Opus 5.5)](#independent-security--quality-audit-claude-opus-55)
 - [Architecture & Performance](#architecture--performance)
 - [Full Documentation](_DOCS/)
 
@@ -561,6 +563,22 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
 
 For the complete breakdown of all 67 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
+
+### Independent Security & Quality Audit (Claude Opus 5.5)
+
+PSLocalBase was independently audited by **Claude Opus 5.5** (Commit: `c57b52c`, dev branch), receiving a **94/100 (Production Ready - Approved without reservations)** rating:
+
+| Category | Score | Status |
+|---|:---:|:---:|
+| **Security** | **95/100** | ✅ Excellent (0 critical / 0 high vulnerabilities) |
+| **Code Quality** | **93/100** | ✅ Excellent |
+| **Functionality** | **96/100** | ✅ Excellent |
+| **Architecture** | **94/100** | ✅ Excellent |
+| **Documentation** | **92/100** | ✅ Excellent |
+| **Test Coverage** | **91/100** | ✅ Excellent |
+| **Overall Score** | **94/100** | ✅ **Production Ready** |
+
+📖 *Read the full audit report and findings breakdown in [_DOCS/AUDIT-CLAUDE-OPUS-5.5.md](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md).*
 
 ---
 

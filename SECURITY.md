@@ -15,8 +15,20 @@
 - **Local Execution Boundary:** PSLocalBase runs entirely inside the caller's PowerShell process and communicates with Windows' native `C:\Windows\System32\winsqlite3.dll`. It does not expose network ports, sockets, or remote listening endpoints.
 - **Operating System Access Control (ACL):** Physical file access security is governed by the host operating system's NTFS permissions and user Access Control Lists (ACLs).
 
----
 
+## Independent Security & Quality Audit
+
+[![Security Audit: 94/100](https://img.shields.io/badge/Security%20Audit-94%2F100%20(Production%20Ready)-brightgreen.svg)](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md)
+
+PSLocalBase was subjected to a comprehensive security and functionality audit by **Claude Opus 5.5** (Commit: `c57b52c`). 
+
+- **Security Score:** 95/100 (0 Critical, 0 High vulnerabilities identified)
+- **Overall Rating:** 94/100 (Production Ready - Approved without reservations)
+- **Verified Protections:** Parameterized queries with type binding, regex identifier whitelisting, DLL System32 search path enforcement, UTF-16 P/Invoke memory lifecycle, and robust crash resilience.
+
+For the complete technical evaluation, test evidence, and threat model verification, refer to the [Full Claude Opus 5.5 Audit Report](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md).
+
+---
 ## Defensive Security Architecture
 
 ### 1. Zero External Dependencies & System32 Search Path Isolation
