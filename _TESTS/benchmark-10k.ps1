@@ -1,4 +1,4 @@
-# ===========================================================================
+﻿# ===========================================================================
 # PSLocalBase 10,000 Records Benchmark Suite
 # Dual Comparisons:
 #   Part 1: Persistent Disk vs Flat JSON Disk

@@ -1,4 +1,4 @@
-# PSLocalBase Test Suite
+﻿# PSLocalBase Test Suite
 
 Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions.
 
@@ -23,7 +23,7 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 
 ---
 
-## Verified Acceptance Criteria (64/64 Passed)
+## Verified Acceptance Criteria (80/80 Passed)
 
 | Test ID | Test Category | Validation Criteria | Status |
 | :--- | :--- | :--- | :--- |
@@ -94,3 +94,16 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 | **TC-65** | **Secondary Unique Index Abort & Data Loss Prevention** | Precludes silent deletion of unrelated documents on secondary unique conflict, targeted `ON CONFLICT(key)` | **PASSED** |
 | **TC-66** | **DropIndex Field Sanitization & Anti-Injection** | Strict validation of field names in `dropIndex` preventing SQL injection and bracket escaping | **PASSED** |
 | **TC-67** | **View Isolation in Update (Decorator Immunity)** | Raw document retrieval in `update()` preventing view decorators (`select`, `populate`) from corrupting stored state | **PASSED** |
+| **TC-68** | **Collision-Free Index Naming & Dynamic Upgrade** | Hash-isolated index names preventing collisions between dots/underscores and table prefixes, dynamic uniqueness upgrade | **PASSED** |
+| **TC-69** | **Array Mutation Structural JSON Equality** | Recursive structural equality for array elements preserving scalar types (numbers vs strings, booleans) and normalizing object key order | **PASSED** |
+| **TC-70** | **Atomic update() on Non-Existent Document** | Evaluates partialData via _DeepMerge against empty document, resolving array sentinels and descriptors into arrays | **PASSED** |
+| **TC-71** | **Composite Query Scoping & Connection Isolation** | Enforces connection isolation across union queries, RHS document key scoping, and projection on collectionGroup and union | **PASSED** |
+| **TC-72** | **VACUUM INTO Consistent Snapshot for WAL Mode** | Exports complete, committed database snapshot directly from live WAL writer without uncheckpointed data loss | **PASSED** |
+| **TC-73** | **Native Lexical & ISO Timestamp MIN / MAX** | Operates directly on json_extract without casting to REAL, preserving ISO 8601 dates and lexical text ordering | **PASSED** |
+| **TC-74** | **Accidental Collection Drop Defense on Ordered Mutation** | Rejects delete() chained with orderBy() preserving collection tables and indexes | **PASSED** |
+| **TC-75** | **Upsert Identity Auto-Provisioning & GUID Generation** | Extracts explicit document identity (key, id, _key) or generates a unique GUID, preventing arbitrary field key derivation | **PASSED** |
+| **TC-76** | **Array Mutation Precision on Adjacent 64-Bit Integers** | Direct 64-bit integer comparison in _JsonValuesEqual preserving precision for values past 2^53 | **PASSED** |
+| **TC-77** | **Case-Insensitive Collection Schema Index Resolution** | Resolves collection casing via sqlite_master COLLATE NOCASE in dropIndex() | **PASSED** |
+| **TC-78** | **Point-Lookup Scope Preservation in Composite Queries** | Prevents early single-document return in get() when chained with union() or collectionGroup() | **PASSED** |
+| **TC-79** | **Missing Branch Parameter Isolation in Composite Queries** | Isolates query parameter bindings so non-existent collections in union queries do not cause parameter count mismatches | **PASSED** |
+| **TC-80** | **Array Type Enforcement for Array Operators** | Enforces json_type = 'array' for array-contains and array-contains-any, excluding scalar and object matches | **PASSED** |

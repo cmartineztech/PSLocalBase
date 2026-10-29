@@ -1,4 +1,4 @@
-# Security Policy
+﻿# Security Policy
 
 ## Supported Versions
 
@@ -15,8 +15,20 @@
 - **Local Execution Boundary:** PSLocalBase runs entirely inside the caller's PowerShell process and communicates with Windows' native `C:\Windows\System32\winsqlite3.dll`. It does not expose network ports, sockets, or remote listening endpoints.
 - **Operating System Access Control (ACL):** Physical file access security is governed by the host operating system's NTFS permissions and user Access Control Lists (ACLs).
 
----
 
+## Independent Security & Quality Audit
+
+[![Security Audit: 94/100](https://img.shields.io/badge/Security%20Audit-94%2F100%20(Production%20Ready)-brightgreen.svg)](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md)
+
+PSLocalBase was subjected to a comprehensive security and functionality audit by **Claude Opus 5.5** (Commit: `c57b52c`). 
+
+- **Security Score:** 95/100 (0 Critical, 0 High vulnerabilities identified)
+- **Overall Rating:** 94/100 (Production Ready - Approved without reservations)
+- **Verified Protections:** Parameterized queries with type binding, regex identifier whitelisting, DLL System32 search path enforcement, UTF-16 P/Invoke memory lifecycle, and robust crash resilience.
+
+For the complete technical evaluation, test evidence, and threat model verification, refer to the [Full Claude Opus 5.5 Audit Report](_DOCS/AUDIT-CLAUDE-OPUS-5.5.md).
+
+---
 ## Defensive Security Architecture
 
 ### 1. Zero External Dependencies & System32 Search Path Isolation
@@ -25,8 +37,8 @@
 - Enforces assembly-level `[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]` to completely eliminate DLL preloading and search-order hijacking vulnerabilities.
 
 ### 2. Complete Anti-SQL Injection & Strongly-Typed Parameter Defense
-- **Strongly-Typed Parameter Binding:** All document writes (`.set()`, `.add()`, `.update()`), filter queries (`.where()`), and custom SQL operations (`.query()`) bind parameters using native SQLite type affinities:
-  - Integer numbers (`int32`, `int64`, `byte`, `sbyte`, `uint16`, `uint32`, `bool`) are bound with `sqlite3_bind_int64`.
+- **Strongly-Typed Parameter & Literal Binding:** Document writes (`.set()`, `.add()`, `.update()`), custom SQL operations (`.query()`), and string filter queries (`.where()`) bind values using prepared statement parameters (`?`) with native SQLite type affinities:
+  - Integer numbers (`int32`, `int64`, `byte`, `sbyte`, `uint16`, `uint32`, `bool`) are bound with `sqlite3_bind_int64` (in `.where()` clauses, scalar numeric values are injected as validated invariant numeric literals).
   - Floating point numbers (`single`, `double`, `decimal`) are bound with `sqlite3_bind_double`.
   - Nulls are bound with `sqlite3_bind_null`.
   - Strings are bound with exact Unicode byte length via `sqlite3_bind_text16` using `SQLITE_TRANSIENT`.
@@ -56,10 +68,12 @@
 - Document keys passed to `.doc('key')`, `.add(data, 'key')`, `.insert(data)`, and bulk `.set($array)` are explicitly validated against embedded NUL bytes (`\0` / `U+0000`).
 - Because native C APIs treat `\0` as a null-terminator, embedded nulls could cause premature truncation and unauthorized key overwrites/collisions. PSLocalBase rejects any keys containing null characters with `[System.ArgumentException]`.
 
-### 6. Safe Deletion & Schema Drop Protection
-- Accidental collection drops are strictly mitigated: calling `.delete()` when chained with pagination or sorting (`.limit()`, `.skip()`, `.orderBy()`) is rejected with `[System.InvalidOperationException]`.
-- An explicit, dedicated `.drop()` method is provided for dropping collections intentionally.
-- Collection reference variables operate on isolated instances: assigning `$u = $db.collection('users')` and `$o = $db.collection('orders')` produces independent context instances, eliminating shared-state mutation between collection variables.
+### 6. Safe Deletion, Mutation & Identity Protection
+- **Accidental Drop Defense:** Calling `.delete()` when chained with sorting or pagination (`.orderBy()`, `.limit()`, `.skip()`) is strictly rejected with `[System.InvalidOperationException]`, preserving all records and indexes. An explicit, dedicated `.drop()` method must be called to delete a collection.
+- **Identity Auto-Provisioning:** `.upsert()` extracts explicit identity properties (`id`, `key`, `_key`). If none are present, a unique random GUID is generated, preventing arbitrary content properties from colliding or overwriting existing documents.
+- **Array Mutation 64-Bit Precision:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons, avoiding conversion to `double` and preserving full precision for values exceeding 2^53.
+- **Array Type Gating:** `array-contains` and `array-contains-any` enforce `json_type = 'array'`, preventing false positive matches against scalar strings, numbers, or objects in polymorphic schemas, and protecting `.where(...).delete()` from deleting non-array records.
+- **Collection State Isolation:** Collection reference variables operate on isolated instances: assigning `$u = $db.collection('users')` and `$o = $db.collection('orders')` produces independent context instances, eliminating shared-state mutation between collection variables.
 
 ### 7. Debug Output Sanitization & Credential Privacy
 - When `$db.config["debug"] = $true` is enabled, parameter values and document payloads are redacted/summarized by parameter count rather than printed raw to `stdout`, preventing sensitive credentials, API tokens, and PII from leaking into terminal transcripts and CI logs.
