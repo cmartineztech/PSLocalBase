@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -857,16 +857,15 @@ class PSLocalBase : System.IDisposable {
             if ($null -eq $value) {
                 throw [System.ArgumentException]::new("Value for 'array-contains' operator cannot be null.")
             }
-            $collName = if (-not [string]::IsNullOrEmpty($this.CurrentCollection)) { "[$($this.CurrentCollection)]." } else { "" }
             if ($value -is [bool]) {
                 $boolLit = if ($value) { "1" } else { "0" }
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(${collName}doc, '$jsonField') WHERE value = $boolLit)")
+                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit)")
             } elseif ($value -is [byte] -or $value -is [int16] -or $value -is [int32] -or $value -is [int64] -or
                       $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
                 $numLit = [System.Convert]::ToString($value, [System.Globalization.CultureInfo]::InvariantCulture)
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(${collName}doc, '$jsonField') WHERE value = $numLit)")
+                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $numLit)")
             } else {
-                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(${collName}doc, '$jsonField') WHERE value = ?)")
+                $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?)")
                 $this.WhereParameters.Add([string]$value)
             }
             return $this
@@ -887,8 +886,7 @@ class PSLocalBase : System.IDisposable {
                 return $this
             }
             $jsonArray = ConvertTo-Json -InputObject $items -Compress
-            $collName = if (-not [string]::IsNullOrEmpty($this.CurrentCollection)) { "[$($this.CurrentCollection)]." } else { "" }
-            $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(${collName}doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?)))")
+            $this.WhereClauses.Add("EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?)))")
             $this.WhereParameters.Add($jsonArray)
             return $this
         }
