@@ -23,7 +23,11 @@
   - [Initialization](#initialization)
   - [Collections & Documents](#collections--documents)
   - [Writing Data (`set`, `add`, `update`)](#writing-data-set-add-update)
+  - [Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)](#atomic-array-mutations-arrayunion-arrayremove)
+  - [Secondary Expression Indexes (`createIndex`, `dropIndex`)](#secondary-expression-indexes-createindex-dropindex)
   - [Querying & Filtering (`get`, `where`, `orderBy`, `limit`, `query`)](#querying--filtering-get-where-orderby-limit-query)
+  - [Relational Lookups (`populate`)](#relational-lookups-populate)
+  - [Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)](#compound-queries--sharding-union-unionall-collectiongroup)
   - [Deleting Data (`delete`, `deleteDatabase`)](#deleting-data-delete-deletedatabase)
   - [ACID Transactions](#acid-transactions)
   - [Resource Cleanup & Disposal](#resource-cleanup--disposal)
@@ -219,10 +223,66 @@ $db.collection("users").doc("usr-100").update(@{
 
 ---
 
+### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
+
+Modify arrays inside documents atomically and idempotently without having to read-modify-write the full document.
+
+#### `[PSLocalBase]::ArrayUnion([object[]]$values)`
+Adds elements to an array only if they are not already present (set union).
+```powershell
+# Add tags/roles without duplicates using static method
+$db.collection("users").doc("usr-100").update(@{
+    roles = [PSLocalBase]::ArrayUnion("Editor", "Admin")
+})
+
+# Or using descriptor hashtable syntax
+$db.collection("users").doc("usr-100").update(@{
+    roles = @{ '$arrayUnion' = @("Editor", "Admin") }
+})
+```
+
+#### `[PSLocalBase]::ArrayRemove([object[]]$values)`
+Removes all occurrences of specified elements from an array.
+```powershell
+# Remove roles using static method
+$db.collection("users").doc("usr-100").update(@{
+    roles = [PSLocalBase]::ArrayRemove("Guest", "Editor")
+})
+
+# Or using descriptor hashtable syntax
+$db.collection("users").doc("usr-100").update(@{
+    roles = @{ '$arrayRemove' = @("Guest") }
+})
+```
+
+---
+
+### Secondary Expression Indexes (`createIndex`, `dropIndex`)
+
+Speed up high-volume JSON lookups or enforce data integrity (like unique emails or usernames) using SQLite JSON1 expression indexes.
+
+#### `createIndex([string]$field, [hashtable]$options)`
+Creates a B-Tree index on a JSON field. Supports `unique = $true` and `order = "asc"|"desc"`.
+```powershell
+# Create unique index on email
+$db.collection("users").createIndex("email", @{ unique = $true })
+
+# Create descending index on timestamp
+$db.collection("orders").createIndex("createdAt", @{ order = "desc" })
+```
+
+#### `dropIndex([string]$field)`
+Drops the secondary index associated with the specified JSON field.
+```powershell
+$db.collection("users").dropIndex("email")
+```
+
+---
+
 ### Querying & Filtering (`get`, `where`, `orderBy`, `limit`)
 
 #### `where([string]$field, [string]$operator, [object]$value)`
-Filters documents using SQLite's native `json_extract`. Conditions can be chained together.
+Filters documents using SQLite's native `json_extract` and `json_each`. Conditions can be chained together.
 
 Supported Operators:
 - Equality: `=`, `==`, `-eq`
@@ -230,6 +290,9 @@ Supported Operators:
 - Comparisons: `>`, `<`, `>=`, `<=`, `-gt`, `-lt`, `-ge`, `-le`
 - Pattern Matching: `LIKE`, `-like`, `NOT LIKE`, `-notlike`
 - Membership: `IN`, `-in`
+- Array Membership: `array-contains`, `-contains` (matches if document array contains the scalar value)
+- Array Intersection: `array-contains-any` (matches if document array contains ANY of the given values)
+- Exclusion: `not-in`, `-notin` (matches if field is not in the set, with null safety)
 
 ```powershell
 # Boolean filter
@@ -240,6 +303,15 @@ $expensive = $db.collection("products").where("price", ">=", 100).get()
 
 # IN operator
 $filtered = $db.collection("users").where("role", "IN", @("Admin", "Manager")).get()
+
+# Array contains (checks if array property contains 'powershell')
+$tagMatch = $db.collection("articles").where("tags", "array-contains", "powershell").get()
+
+# Array contains any (checks if tags intersect with any given category)
+$multiTag = $db.collection("articles").where("tags", "array-contains-any", @("devops", "cloud")).get()
+
+# Not-In filter (null safe)
+$nonFruit = $db.collection("products").where("category", "not-in", @("fruit", "dairy")).get()
 
 # Multiple chained filters (AND)
 $result = $db.collection("products") `
@@ -309,6 +381,62 @@ $report | Format-Table -AutoSize
 
 # Parameterized queries with strongly-typed binding and parameter count parity
 $activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM users WHERE json_extract(doc, '$.age') >= ?;", @(30))
+```
+
+---
+
+### Relational Lookups (`populate`)
+
+Embed referenced documents from other collections directly into the retrieved document using SQL `LEFT JOIN` and SQLite JSON nesting, with zero N+1 query penalty and full null-safety.
+
+```powershell
+# Populate 'customerId' reference with document from 'users' collection into property 'customer'
+$order = $db.collection("orders").doc("ord-001").populate("customerId", "users", "customer").get()
+Write-Host "Order amount: $($order.amount) | Customer: $($order.customer.name)"
+
+# Populate during collection queries with orderBy/limit
+$orders = $db.collection("orders") `
+    .populate("customerId", @{ from = "users"; as = "customer" }) `
+    .orderBy("amount", "desc") `
+    .limit(10) `
+    .get()
+```
+
+---
+
+### Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)
+
+Combine query results across different collections or query sharded collections matching a pattern.
+
+#### `.union($otherQuery)` and `.unionAll($otherQuery)`
+Merges results of two queries directly in SQL. `union` deduplicates identical records; `unionAll` keeps all records for maximum throughput.
+```powershell
+$qNorth = $db.collection("users_north").where("active", "==", $true)
+$qSouth = $db.collection("users_south").where("active", "==", $true)
+
+# Deduplicated union of both regions
+$allUsers = $qNorth.union($qSouth).get()
+
+# Fast union preserving duplicates
+$allUsersWithDups = $qNorth.unionAll($qSouth).get()
+
+# Total count across union
+$totalActive = $qNorth.union($qSouth).count()
+```
+
+#### `.collectionGroup([string]$pattern)`
+Queries across multiple collections matching a wildcard pattern (e.g. date-sharded collections or category tables). Each returned document automatically includes a `._collection` property indicating its origin table.
+```powershell
+# Search all monthly log collections for critical errors
+$errors = $db.collectionGroup("logs_2026_*") `
+    .where("level", "==", "ERROR") `
+    .orderBy("timestamp", "desc") `
+    .limit(25) `
+    .get()
+
+foreach ($err in $errors) {
+    Write-Host "[$($err._collection)] $($err.timestamp): $($err.message)"
+}
 ```
 
 ---

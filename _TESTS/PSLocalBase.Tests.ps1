@@ -1582,6 +1582,307 @@ Assert-Test "TC-45: Collection-level deleteDatabase() Rejection" {
         Remove-Item $tempDb* -Force -ErrorAction SilentlyContinue
     }
 }
+
+# ---------------------------------------------------------------------------
+# TC-46: Expression Indexing & Unique Constraints
+# ---------------------------------------------------------------------------
+Assert-Test "TC-46: Expression Indexing & Unique Constraints" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("users")
+        [void]$col.add(@{ email = "alice@example.com"; name = "Alice" })
+
+        # Create unique expression index on $.email
+        [void]$col.createIndex("email", @{ unique = $true })
+
+        # Verify index exists in sqlite_master
+        $idxRows = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_users_email';")
+        if ($idxRows.Count -ne 1) { throw "Expected idx_users_email in sqlite_master." }
+
+        # Attempt to insert duplicate email; must throw unique constraint exception
+        $duplicateFailed = $false
+        try {
+            [void]$col.add(@{ email = "alice@example.com"; name = "Alice Duplicate" })
+        } catch {
+            $duplicateFailed = $true
+        }
+        if (-not $duplicateFailed) {
+            throw "Inserting duplicate unique index value should have thrown an exception."
+        }
+
+        # Drop index
+        [void]$col.dropIndex("email")
+        $idxDropped = $db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_users_email';")
+        if ($idxDropped.Count -ne 0) { throw "idx_users_email was not dropped." }
+
+        # Insertion should now succeed without unique index
+        [void]$col.add(@{ email = "alice@example.com"; name = "Alice 2" })
+        $count = $col.where("email", "==", "alice@example.com").count()
+        if ($count -ne 2) { throw "Expected 2 records with alice@example.com after index drop, got $count." }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-47: Array Operator 'array-contains'
+# ---------------------------------------------------------------------------
+Assert-Test "TC-47: Array Operator 'array-contains'" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("articles")
+        [void]$col.add(@{ title = "Article 1"; tags = @("powershell", "sqlite", "nosql") })
+        [void]$col.add(@{ title = "Article 2"; tags = @("powershell", "devops") })
+        [void]$col.add(@{ title = "Article 3"; tags = @("python", "ai") })
+        [void]$col.add(@{ title = "Article 4"; scores = @(10, 20, 30) })
+
+        # array-contains string
+        $sqliteArticles = $col.where("tags", "array-contains", "sqlite").get()
+        if ($sqliteArticles.Count -ne 1 -or $sqliteArticles[0].title -ne "Article 1") {
+            throw "Expected 1 article containing 'sqlite'."
+        }
+
+        # -contains alias
+        $psArticles = $col.where("tags", "-contains", "powershell").get()
+        if ($psArticles.Count -ne 2) {
+            throw "Expected 2 articles containing 'powershell', got $($psArticles.Count)."
+        }
+
+        # array-contains number
+        $scoreArticles = $col.where("scores", "array-contains", 20).get()
+        if ($scoreArticles.Count -ne 1 -or $scoreArticles[0].title -ne "Article 4") {
+            throw "Expected Article 4 to match numeric array-contains 20."
+        }
+
+        # non-existent
+        $empty = $col.where("tags", "array-contains", "rust").get()
+        if ($empty.Count -ne 0) {
+            throw "Expected 0 results for non-existent tag."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-48: Array Operator 'array-contains-any'
+# ---------------------------------------------------------------------------
+Assert-Test "TC-48: Array Operator 'array-contains-any'" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("posts")
+        [void]$col.add(@{ id = 1; tags = @("tech", "windows") })
+        [void]$col.add(@{ id = 2; tags = @("linux", "bash") })
+        [void]$col.add(@{ id = 3; tags = @("cooking", "recipes") })
+
+        # Match either windows or linux
+        $res = $col.where("tags", "array-contains-any", @("windows", "linux")).get()
+        if ($res.Count -ne 2) {
+            throw "Expected 2 posts matching windows or linux, got $($res.Count)."
+        }
+
+        # Match single element passed as scalar
+        $resScalar = $col.where("tags", "array-contains-any", "cooking").get()
+        if ($resScalar.Count -ne 1 -or $resScalar[0].id -ne 3) {
+            throw "Expected post 3 for scalar cooking match."
+        }
+
+        # Match none
+        $none = $col.where("tags", "array-contains-any", @("gaming", "sports")).get()
+        if ($none.Count -ne 0) {
+            throw "Expected 0 posts matching gaming/sports."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-49: 'not-in' Operator & Null Safety
+# ---------------------------------------------------------------------------
+Assert-Test "TC-49: 'not-in' Operator & Null Safety" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("products")
+        [void]$col.add(@{ name = "Apple"; category = "fruit" })
+        [void]$col.add(@{ name = "Carrot"; category = "vegetable" })
+        [void]$col.add(@{ name = "Cheese"; category = "dairy" })
+        [void]$col.add(@{ name = "Mystery Item" }) # category is null/missing
+
+        # not-in array
+        $res = $col.where("category", "not-in", @("fruit", "dairy")).get()
+        if ($res.Count -ne 1 -or $res[0].name -ne "Carrot") {
+            throw "Expected only 'Carrot' for not-in (fruit, dairy). Got count=$($res.Count)."
+        }
+
+        # -notin alias with scalar
+        $resScalar = $col.where("category", "-notin", "fruit").get()
+        if ($resScalar.Count -ne 2) {
+            throw "Expected 2 items for -notin fruit (Carrot, Cheese), got $($resScalar.Count)."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-50: Atomic Array Mutations (ArrayUnion & ArrayRemove)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-50: Atomic Array Mutations (ArrayUnion & ArrayRemove)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("users")
+        $col.doc("u1").set(@{ name = "Bob"; roles = @("User", "Editor") })
+
+        # ArrayUnion: add existing ('Editor') and new ('Admin')
+        $col.doc("u1").update(@{ roles = [PSLocalBase]::ArrayUnion("Editor", "Admin") })
+        $u1 = $col.doc("u1").get()
+        if ($u1.roles.Count -ne 3 -or -not ($u1.roles -contains "Admin")) {
+            throw "ArrayUnion failed to add Admin without duplicating Editor: $(ConvertTo-Json $u1.roles -Compress)"
+        }
+
+        # ArrayRemove: remove 'Editor'
+        $col.doc("u1").update(@{ roles = [PSLocalBase]::ArrayRemove("Editor") })
+        $u1AfterRemove = $col.doc("u1").get()
+        if ($u1AfterRemove.roles.Count -ne 2 -or ($u1AfterRemove.roles -contains "Editor")) {
+            throw "ArrayRemove failed to remove Editor: $(ConvertTo-Json $u1AfterRemove.roles -Compress)"
+        }
+
+        # Hashtable descriptor syntax @{ '$arrayUnion' = @(...) }
+        $col.doc("u1").update(@{ roles = @{ '$arrayUnion' = @("Auditor", "SuperUser") } })
+        $u1Descriptor = $col.doc("u1").get()
+        if ($u1Descriptor.roles.Count -ne 4 -or -not ($u1Descriptor.roles -contains "Auditor")) {
+            throw "Hashtable '$arrayUnion' failed: $(ConvertTo-Json $u1Descriptor.roles -Compress)"
+        }
+
+        # Hashtable descriptor syntax @{ '$arrayRemove' = @(...) }
+        $col.doc("u1").update(@{ roles = @{ '$arrayRemove' = @("Auditor", "User") } })
+        $u1Final = $col.doc("u1").get()
+        if ($u1Final.roles.Count -ne 2 -or ($u1Final.roles -contains "Auditor") -or ($u1Final.roles -contains "User")) {
+            throw "Hashtable '$arrayRemove' failed: $(ConvertTo-Json $u1Final.roles -Compress)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-51: Relational .populate() Joins
+# ---------------------------------------------------------------------------
+Assert-Test "TC-51: Relational .populate() Joins" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $users = $db.collection("users")
+        $orders = $db.collection("orders")
+
+        $users.doc("usr_101").set(@{ name = "Sarah Connor"; tier = "VIP" })
+        $users.doc("usr_102").set(@{ name = "John Connor"; tier = "Standard" })
+
+        $orders.doc("ord_001").set(@{ customerId = "usr_101"; amount = 250.00 })
+        $orders.doc("ord_002").set(@{ customerId = "usr_102"; amount = 45.50 })
+        $orders.doc("ord_003").set(@{ customerId = "usr_missing"; amount = 10.00 })
+
+        # Point lookup populate
+        $popSingle = $orders.doc("ord_001").populate("customerId", "users", "customer").get()
+        if ($null -eq $popSingle.customer -or $popSingle.customer.name -ne "Sarah Connor") {
+            throw "Point lookup populate failed: $(ConvertTo-Json $popSingle -Compress)"
+        }
+
+        # Collection query populate with options hashtable
+        $allPop = $orders.populate("customerId", @{ from = "users"; as = "customer" }).orderBy("amount", "desc").get()
+        if ($allPop.Count -ne 3) {
+            throw "Expected 3 populated orders, got $($allPop.Count)."
+        }
+        if ($allPop[0].customer.name -ne "Sarah Connor") {
+            throw "First order customer should be Sarah Connor."
+        }
+        if ($null -ne $allPop[2].customer) {
+            throw "Missing foreign key should resolve customer to null, got: $($allPop[2].customer)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-52: Compound Queries (.union() & .unionAll())
+# ---------------------------------------------------------------------------
+Assert-Test "TC-52: Compound Queries (.union() & .unionAll())" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $cNorth = $db.collection("users_north")
+        $cSouth = $db.collection("users_south")
+
+        $cNorth.doc("1").set(@{ name = "Alice"; region = "North" })
+        $cNorth.doc("2").set(@{ name = "Bob"; region = "Shared" })
+
+        $cSouth.doc("2").set(@{ name = "Bob"; region = "Shared" })
+        $cSouth.doc("3").set(@{ name = "Charlie"; region = "South" })
+
+        # UNION (deduplicates identical key+doc)
+        $qNorth = $cNorth
+        $qSouth = $cSouth
+        $unionRes = $qNorth.union($qSouth).get()
+        if ($unionRes.Count -ne 3) {
+            throw "Expected 3 distinct records from union, got $($unionRes.Count)."
+        }
+
+        # UNION ALL (preserves duplicates)
+        $unionAllRes = $cNorth.unionAll($cSouth).get()
+        if ($unionAllRes.Count -ne 4) {
+            throw "Expected 4 records from unionAll, got $($unionAllRes.Count)."
+        }
+
+        # union count()
+        $uCount = $cNorth.union($cSouth).count()
+        if ($uCount -ne 3) {
+            throw "Expected count() of union to be 3, got $uCount."
+        }
+
+        $uAllCount = $cNorth.unionAll($cSouth).count()
+        if ($uAllCount -ne 4) {
+            throw "Expected count() of unionAll to be 4, got $uAllCount."
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-53: Sharded Querying via collectionGroup()
+# ---------------------------------------------------------------------------
+Assert-Test "TC-53: Sharded Querying via collectionGroup()" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        [void]$db.collection("audit_2026_01").add(@{ level = "WARN"; msg = "Disk warning" })
+        [void]$db.collection("audit_2026_01").add(@{ level = "ERROR"; msg = "Network down" })
+        [void]$db.collection("audit_2026_02").add(@{ level = "ERROR"; msg = "Database unreachable" })
+        [void]$db.collection("audit_2026_02").add(@{ level = "INFO"; msg = "Service started" })
+        [void]$db.collection("unrelated_table").add(@{ level = "ERROR"; msg = "Ignored" })
+
+        $cg = $db.collectionGroup("audit_*")
+
+        # Total count across matching collections
+        $totalCount = $cg.count()
+        if ($totalCount -ne 4) {
+            throw "Expected 4 total records across audit_* tables, got $totalCount."
+        }
+
+        # Filtered query
+        $errors = $cg.where("level", "==", "ERROR").get()
+        if ($errors.Count -ne 2) {
+            throw "Expected 2 ERROR records across group, got $($errors.Count)."
+        }
+
+        # Verify _collection metadata tag
+        $collectionsFound = $errors | ForEach-Object { $_._collection }
+        if (-not ($collectionsFound -contains "audit_2026_01") -or -not ($collectionsFound -contains "audit_2026_02")) {
+            throw "Missing _collection origin property in results: $($collectionsFound -join ', ')"
+        }
+    } finally {
+        $db.close()
+    }
+}
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

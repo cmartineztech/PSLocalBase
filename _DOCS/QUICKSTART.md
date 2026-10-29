@@ -1,4 +1,4 @@
-# PSLocalBase — Quick Start Guide
+﻿# PSLocalBase — Quick Start Guide
 
 Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, copy-pasteable examples to get you up and running with embedded NoSQL document persistence in PowerShell in under two minutes.
 
@@ -17,19 +17,24 @@ Welcome to the **PSLocalBase** Quick Start Guide! This document provides clear, 
   - [Insert with Auto-Generated GUID (`add`)](#insert-with-auto-generated-guid-add)
   - [Bulk Insert Entire Collection](#bulk-insert-entire-collection)
   - [Partial Update / Deep Merge (`update`)](#partial-update--deep-merge-update)
+  - [Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)](#atomic-array-mutations-arrayunion-arrayremove)
+  - [Secondary Expression Indexes (`createIndex`, `dropIndex`)](#secondary-expression-indexes-createindex-dropindex)
   - [Deleting Documents & Dropping Collections (`delete`, `drop`)](#deleting-documents--dropping-collections-delete-drop)
 - [4. Querying & Filtering](#4-querying--filtering)
   - [Point Lookups](#point-lookups)
   - [Collection-Wide Retrieval](#collection-wide-retrieval)
   - [Filtering with `where()`](#filtering-with-where)
+  - [Array Membership & Intersection (`array-contains`, `array-contains-any`)](#array-membership--intersection-array-contains-array-contains-any)
   - [Array Index Filtering](#array-index-filtering)
   - [Counting Records (`count`)](#counting-records-count)
   - [Sorting & Pagination (`orderBy`, `skip`, `limit`)](#sorting--pagination-orderby-skip-limit)
   - [Exposing Primary Keys (`keys = $true`)](#exposing-primary-keys-keys--true)
-- [5. Cross-Collection Queries (`query`)](#5-cross-collection-queries-query)
-- [6. Atomic ACID Transactions](#6-atomic-acid-transactions)
-- [7. Production Best Practice: `try / finally`](#7-production-best-practice-try--finally)
-- [8. PowerShell Pipeline Integration](#8-powershell-pipeline-integration)
+- [5. Relational Lookups with `.populate()`](#5-relational-lookups-with-populate)
+- [6. Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)](#6-compound-queries--sharding-union-unionall-collectiongroup)
+- [7. Raw Cross-Collection Queries (`query`)](#7-raw-cross-collection-queries-query)
+- [8. Atomic ACID Transactions](#8-atomic-acid-transactions)
+- [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
+- [10. PowerShell Pipeline Integration](#10-powershell-pipeline-integration)
 
 ---
 
@@ -158,6 +163,37 @@ $db.collection("users").doc("usr-100").update(@{
 })
 ```
 
+### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
+Update array properties atomically and idempotently without downloading or replacing the full document.
+
+```powershell
+# Add elements if not present (set union)
+$db.collection("users").doc("usr-100").update(@{
+    skills = [PSLocalBase]::ArrayUnion("Rust", "Go")
+})
+
+# Remove elements from array
+$db.collection("users").doc("usr-100").update(@{
+    skills = [PSLocalBase]::ArrayRemove("PHP")
+})
+
+# Also supports descriptor syntax:
+$db.collection("users").doc("usr-100").update(@{
+    skills = @{ '$arrayUnion' = @("TypeScript") }
+})
+```
+
+### Secondary Expression Indexes (`createIndex`, `dropIndex`)
+Create B-Tree expression indexes directly on JSON fields for indexed lookups and unique constraint enforcement.
+
+```powershell
+# Enforce unique email addresses across the collection
+$db.collection("users").createIndex("email", @{ unique = $true })
+
+# Drop the index when no longer needed
+$db.collection("users").dropIndex("email")
+```
+
 ### Deleting Documents & Dropping Collections (`delete`, `drop`)
 * **Delete a single document:**
   ```powershell
@@ -192,7 +228,7 @@ $allUsers = $db.collection("users").get()
 ```
 
 ### Filtering with `where()`
-Supported operators: `=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`.
+Supported operators: `=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `not-in`, `array-contains`, `array-contains-any`.
 
 ```powershell
 # 1. Filter by Boolean
@@ -207,7 +243,17 @@ $keyboards = $db.collection("products").where("name", "LIKE", "%Keyboard%").get(
 # 4. Filter with IN operator
 $staff = $db.collection("users").where("department", "IN", @("Engineering", "DevOps")).get()
 
-# 5. Multiple Chained Filters (AND logic)
+# 5. Array Membership & Intersection
+# Document array contains scalar
+$powershellDevs = $db.collection("users").where("skills", "array-contains", "PowerShell").get()
+
+# Document array contains ANY of the values
+$cloudDevs = $db.collection("users").where("skills", "array-contains-any", @("AWS", "Azure", "GCP")).get()
+
+# 6. Null-safe NOT IN operator
+$activeItems = $db.collection("products").where("status", "not-in", @("archived", "discontinued")).get()
+
+# 7. Multiple Chained Filters (AND logic)
 $filtered = $db.collection("products") `
     .where("stock", ">", 50) `
     .where("price", "<", 100) `
@@ -250,7 +296,58 @@ foreach ($item in $itemsWithKeys) {
 
 ---
 
-## 5. Cross-Collection Queries (`query`)
+## 5. Relational Lookups with `.populate()`
+
+Embed referenced documents from related collections directly into your documents with zero N+1 query overhead:
+
+```powershell
+# Point lookup: populate 'userId' referencing 'users' collection into property 'user'
+$order = $db.collection("orders").doc("ord-001").populate("userId", "users", "user").get()
+Write-Host "Order: $($order.item) | Customer Name: $($order.user.name)"
+
+# Collection query with populate:
+$orders = $db.collection("orders") `
+    .populate("userId", @{ from = "users"; as = "user" }) `
+    .orderBy("total", "desc") `
+    .get()
+```
+
+---
+
+## 6. Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)
+
+### Compound Queries (`union`, `unionAll`)
+Combine results across collections directly inside SQLite:
+```powershell
+$qLocal = $db.collection("users_local")
+$qRemote = $db.collection("users_remote")
+
+# Deduplicated UNION
+$allDistinct = $qLocal.union($qRemote).get()
+
+# Fast UNION ALL (preserves duplicates)
+$allRecords = $qLocal.unionAll($qRemote).get()
+
+# Union count()
+$total = $qLocal.union($qRemote).count()
+```
+
+### Sharded Querying (`collectionGroup`)
+Query all collections matching a wildcard pattern (e.g. date-sharded tables):
+```powershell
+# Query all tables matching 'logs_*'
+$logs = $db.collectionGroup("logs_2026_*") `
+    .where("level", "==", "ERROR") `
+    .orderBy("timestamp", "desc") `
+    .get()
+
+# Each result has ._collection indicating which collection it came from
+$logs | ForEach-Object { Write-Host "[$($_._collection)] $($_.message)" }
+```
+
+---
+
+## 7. Raw Cross-Collection Queries (`query`)
 
 Perform relational `JOIN`s, aggregations, or group-by operations across independent collections using raw SQLite SQL. Parameter binding is strongly typed to prevent SQL injection:
 
