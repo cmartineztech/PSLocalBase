@@ -1,4 +1,15 @@
-# Analisis de seguridad y funcionalidad
+﻿# Analisis de seguridad y funcionalidad
+
+> [!NOTE]
+> **DOCUMENTO HISTÓRICO / HISTORICAL AUDIT DOCUMENT**
+>
+> Este documento representa una auditoría preliminar realizada sobre la revisión base commit `a5de2d8` (2026-10-28).
+>
+> **Estado de los hallazgos:** Todos los hallazgos F01–F07 detallados en este informe han sido **completamente resueltos** en revisiones posteriores del motor PSLocalBase. Dicha resolución ha sido verificada exhaustivamente por la suite de pruebas automatizadas **TC-74 a TC-80** (`_TESTS/PSLocalBase.Audit.Tests.ps1`) y suites independientes de reevaluación (`_TESTS/PSLocalBase.Reevaluation.Tests.ps1`) tanto en Windows PowerShell 5.1 como en PowerShell 7.x.
+>
+> Para consultar el estado actual y vigente de auditoría y seguridad del proyecto, diríjase a:
+> - [**Auditoría de Seguridad y Calidad - Claude Opus 5.5**](AUDIT-CLAUDE-OPUS-5.5.md) (`_DOCS/AUDIT-CLAUDE-OPUS-5.5.md`)
+> - [**Informe de Revisión y Verificación 2026-10-29**](REVIEW-2026-10-29.md) (`_DOCS/REVIEW-2026-10-29.md`)
 
 Fecha: 2026-10-28 (America/New_York). Rama: `dev`.
 Revision base: `a5de2d8` (`fix: resolve Codex P2 issues #6, #7, #8, #9, #10, #11`).

@@ -1,4 +1,4 @@
-# Independent evidence for the review of commit c57b52c.
+﻿# Independent evidence for the review of commit c57b52c.
 # Does not modify the engine or the existing test suites. In-memory databases only.
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'PSLocalBase.psd1') -Force

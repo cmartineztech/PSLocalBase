@@ -1,4 +1,4 @@
-# PSLocalBase Documentation & Reference Guide
+﻿# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -120,9 +120,19 @@ PSLocalBase requires **zero external dependencies**, no NuGet packages, and no b
 Import-Module .\PSLocalBase.psd1 -Force
 ```
 
-Compatible with:
-* **Windows PowerShell 5.1** (Desktop Edition / .NET Framework 4.x)
-* **PowerShell 7.x+** (Core Edition / .NET 6+) on Windows 10, Windows 11, Windows Server 2019+, and WinPE x64.
+### System Requirements & Compatibility
+
+#### Verified in Automated CI
+* **Operating Systems:** Windows 10 / 11 x64, Windows Server 2019 / 2022
+* **PowerShell Editions:** PowerShell 7.x+ (Core / .NET 6+) and Windows PowerShell 5.1 (Desktop / .NET Framework 4.x)
+* **Automated CI Validation:** Complete test suite execution across both PowerShell editions on GitHub Actions runners on every commit.
+
+#### Supported by Architecture (Windows System Component `winsqlite3.dll`)
+* **Operating Systems:** Windows 10 (Build 1809+), Windows 11 (all editions), Windows Server (2019, 2022, 2025), Windows PE (WinPE x64 with `WinPE-NetFX` and native `winsqlite3.dll`).
+* **Processor Architectures:**
+  * **x64:** Native 64-bit execution against `System32\winsqlite3.dll`.
+  * **ARM64:** Native ARM64 execution utilizing the native OS bitness and ARM64 `winsqlite3.dll` provided directly by Windows on ARM devices.
+* **Zero External Dependencies:** Native OS component patched directly via Windows Update.
 
 ---
 
