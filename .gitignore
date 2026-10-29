@@ -23,3 +23,6 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Benchmark output artifacts
+*.html

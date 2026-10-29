@@ -1,4 +1,4 @@
-﻿# PSLocalBase Documentation & Reference Guide
+# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -661,6 +661,5 @@ try {
 
 * [Technical Architecture Specification](SPECIFICATION.md)
 * [Performance Benchmarks (10k Records)](BENCHMARKS.md)
-* [Interactive Benchmark Dashboard](benchmark-results.html)
 * [Security Policy & Threat Model](../SECURITY.md)
 * [Main Project README](../README.md)
