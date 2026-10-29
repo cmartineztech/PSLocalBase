@@ -292,7 +292,7 @@ class PSLocalBase : System.IDisposable {
         return $this.createIndex($field, @{})
     }
 
-    [PSLocalBase] createIndex([string]$field, [hashtable]$options) {
+    [PSLocalBase] createIndex([string]$field, [object]$options) {
         $this._EnsureOpen()
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified to create index. Call .collection('name').createIndex('field')")
@@ -310,8 +310,14 @@ class PSLocalBase : System.IDisposable {
 
         $cleanField = $fieldToCheck.Replace(".", "_")
         $indexName = "idx_$($this.CurrentCollection)_$cleanField"
-        $uniqueStr = if ($null -ne $options -and $options["unique"] -eq $true) { "UNIQUE" } else { "" }
-        $orderStr = if ($null -ne $options -and [string]$options["order"] -match '^(?i)desc$') { "DESC" } else { "ASC" }
+        $uniqueStr = ""
+        $orderStr = "ASC"
+        if ($options -is [bool]) {
+            if ($options) { $uniqueStr = "UNIQUE" }
+        } elseif ($options -is [System.Collections.IDictionary]) {
+            if ($options["unique"] -eq $true) { $uniqueStr = "UNIQUE" }
+            if ([string]$options["order"] -match '^(?i)desc$') { $orderStr = "DESC" }
+        }
 
         $indexSql = "CREATE $uniqueStr INDEX IF NOT EXISTS [$indexName] ON [$($this.CurrentCollection)] ((json_extract(doc, '`$.$fieldToCheck')) $orderStr);"
         $this._ExecuteDirectSql($indexSql)
@@ -329,6 +335,9 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
+        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+            throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
+        }
         $cleanField = $fieldToCheck.Replace(".", "_")
         $indexName = "idx_$($this.CurrentCollection)_$cleanField"
 
@@ -625,10 +634,10 @@ class PSLocalBase : System.IDisposable {
             }
             try {
                 $json = $this._SerializeJson($data)
-                $sql = "INSERT OR REPLACE INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?);"
+                $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
                 $this._ExecuteBoundSql($sql, @($this.CurrentKey, $json))
             } finally {
-                $this.CurrentKey = ""
+                $this._ResetQueryState()
             }
             return
         }
@@ -796,8 +805,13 @@ class PSLocalBase : System.IDisposable {
         }
 
         try {
-            # Retrieve existing document
-            $existing = $this.get()
+            # Retrieve existing raw document without any select/populate view transformations
+            $rawRows = $this._ExecuteBoundQuery("SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;", @($targetKey))
+            $existing = if ($rawRows.Count -gt 0 -and $null -ne $rawRows[0][1]) {
+                ConvertFrom-Json -InputObject $rawRows[0][1]
+            } else {
+                $null
+            }
             $this.CurrentKey = $targetKey
             if ($null -eq $existing) {
                 # If document doesn't exist, create it with partialData (upsert behavior)
@@ -816,7 +830,7 @@ class PSLocalBase : System.IDisposable {
             }
             throw
         } finally {
-            $this.CurrentKey = ""
+            $this._ResetQueryState()
         }
     }
 
@@ -2267,6 +2281,9 @@ try {
             }
             $trimmedField = $field.Trim()
             $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
+            if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
+            }
             $cleanField = $fieldToCheck.Replace(".", "_")
             $indexName = "idx_$($this.CurrentCollection)_$cleanField"
             $dropSql = "DROP INDEX IF EXISTS [$indexName];"

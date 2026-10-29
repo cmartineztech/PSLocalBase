@@ -2283,6 +2283,141 @@ Assert-Test "TC-64: Criteria Resolution in Upsert & Fluent Terminal State Isolat
     }
 }
 # ---------------------------------------------------------------------------
+# TC-65: Secondary Unique Index Abort & No Silent Deletion on Conflict (Issue #3)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-65: Secondary Unique Index Abort & Data Loss Prevention" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("users")
+        # Create a unique index on email
+        $null = $col.createIndex("email", @{ unique = $true })
+
+        # Insert first document
+        $col.doc("u1").set(@{ email = "same@example.test"; name = "Alice" })
+        if (-not $col.doc("u1").exists()) {
+            throw "u1 was not created"
+        }
+
+        # Attempt to insert second document with identical email - must fail
+        $conflictCaught = $false
+        try {
+            $col.doc("u2").set(@{ email = "same@example.test"; name = "Bob" })
+        } catch {
+            $conflictCaught = $true
+            if ($_.Exception.Message -notmatch "UNIQUE constraint failed") {
+                throw "Expected UNIQUE constraint failure message, got: $($_.Exception.Message)"
+            }
+        }
+        if (-not $conflictCaught) {
+            throw "Secondary UNIQUE index conflict did not throw an exception!"
+        }
+
+        # u1 must NOT have been silently deleted
+        if (-not $col.doc("u1").exists()) {
+            throw "u1 was silently deleted by secondary UNIQUE conflict!"
+        }
+        $u1 = $col.doc("u1").get()
+        if ($u1.name -ne "Alice") {
+            throw "u1 data was modified! Expected 'Alice', got '$($u1.name)'"
+        }
+        if ($col.count() -ne 1) {
+            throw "Expected collection count 1, got $($col.count())"
+        }
+
+        # Valid same-key replacement must still succeed
+        $col.doc("u1").set(@{ email = "same@example.test"; name = "Alice Updated" })
+        $u1Updated = $col.doc("u1").get()
+        if ($u1Updated.name -ne "Alice Updated") {
+            throw "Same-key replacement failed! Expected 'Alice Updated', got '$($u1Updated.name)'"
+        }
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-66: Strict DropIndex Field Sanitization & Anti-Injection (Issue #4)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-66: DropIndex Field Sanitization & SQL Injection Defense" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $col = $db.collection("customers")
+        $col.doc("c1").set(@{ email = "c1@test.com"; status = "active" })
+        [void]$col.createIndex("email")
+
+        # Invalid bracket injection must be rejected before reaching SQLite
+        $caught = $false
+        try {
+            $col.dropIndex("invalid]field")
+        } catch [System.ArgumentException] {
+            $caught = $true
+        }
+        if (-not $caught) {
+            throw "dropIndex failed to reject invalid bracket character in field name"
+        }
+
+        # Malicious statement termination attempt must be rejected
+        $caughtPayload = $false
+        try {
+            $col.dropIndex("email]; DROP TABLE customers; --")
+        } catch [System.ArgumentException] {
+            $caughtPayload = $true
+        }
+        if (-not $caughtPayload) {
+            throw "dropIndex failed to reject SQL injection payload"
+        }
+
+        # Customer table must remain completely intact
+        if (-not $col.doc("c1").exists()) {
+            throw "Customer collection was corrupted or dropped by injection attempt!"
+        }
+
+        # Valid dropIndex on existing index must succeed cleanly
+        [void]$col.dropIndex("email")
+    } finally {
+        $db.close()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# TC-67: View Isolation in Update (Select/Populate Decorator Immunity) (Issue #5)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-67: View Isolation in Update (Decorator Immunity)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $users = $db.collection("users")
+        $users.doc("u1").set(@{ name = "Ana"; secret = "keep_me"; n = 42 })
+
+        # 1. Update chained with select() must NOT wipe unselected fields
+        $users.doc("u1").select("name").update(@{ name = "Ana Updated" })
+        $u1 = $users.doc("u1").get()
+        if ($u1.name -ne "Ana Updated") {
+            throw "name was not updated! Got: $($u1.name)"
+        }
+        if ($u1.secret -ne "keep_me") {
+            throw "secret was wiped by select() update! Got: $($u1.secret)"
+        }
+        if ($u1.n -ne 42) {
+            throw "n was wiped by select() update! Got: $($u1.n)"
+        }
+
+        # 2. Update chained with populate() must NOT overwrite foreign key with joined object
+        $orders = $db.collection("orders")
+        $orders.doc("o1").set(@{ userId = "u1"; amount = 100 })
+        $orders.doc("o1").populate("userId", "users", "user").update(@{ amount = 250 })
+
+        $o1 = $orders.doc("o1").get()
+        if ($o1.amount -ne 250) {
+            throw "amount was not updated! Got: $($o1.amount)"
+        }
+        if ($o1.userId -ne "u1" -or $o1.userId -isnot [string]) {
+            throw "userId was overwritten with joined object! Got type: $($o1.userId.GetType().FullName)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan
