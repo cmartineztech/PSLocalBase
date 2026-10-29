@@ -9,7 +9,7 @@
 >
 > Under the hood, it operates as a native NoSQL Document Store built on top of Windows' pre-installed SQLite engine (`winsqlite3.dll`) using its built-in JSON functions. It incurs zero overhead by running in-memory P/Invoke directly in C, returns native PowerShell objects (`[PSCustomObject]`) with seamless dot-notation access, and provides full support for arrays and nested document structures.<br>
 >
-> 📖 **Full Documentation:** For step-by-step walkthroughs, full code examples, and advanced usage, see the [Full Documentation (_DOCS/README.md)](_DOCS/README.md).
+> 📖 **Full Documentation:** For step-by-step walkthroughs, full code examples, and advanced usage, see the [Full Documentation (_DOCS/)](_DOCS/).
 
 ---
 
@@ -34,7 +34,7 @@
   - [Production Best Practices & Crash Resilience](#production-best-practices--crash-resilience)
 - [Test Suite & Quality Verification](#test-suite--quality-verification)
 - [Architecture & Performance](#architecture--performance)
-- [Full Documentation](_DOCS/README.md)
+- [Full Documentation](_DOCS/)
 
 - [Technical Specification](_DOCS/SPECIFICATION.md)
 - [Security Policy](SECURITY.md)
@@ -111,7 +111,7 @@ $admins | Format-Table name, role, active
 $db.close()
 ```
 
-> 💡 For comprehensive step-by-step guides, pagination, bulk operations, and deep merge updates, see the [Full Documentation (`_DOCS/README.md`)](_DOCS/README.md).
+> 💡 For comprehensive step-by-step guides, pagination, bulk operations, and deep merge updates, see the [Full Documentation (`_DOCS/`)](_DOCS/).
 
 ---
 
@@ -222,7 +222,7 @@ $db.collection("users").doc("usr-100").update(@{
 })
 ```
 
-> 💡 **Looking for `upsert()` or storage schema validation?** See the [Full Documentation (`_DOCS/README.md`)](_DOCS/README.md#3-collections--document-lifecycle) for single-statement atomic upserts (`.upsert()`) and schema integrity checks (`.validate()`).
+> 💡 **Looking for `upsert()` or storage schema validation?** See the [Full Documentation (`_DOCS/`)](_DOCS/#3-collections--document-lifecycle) for single-statement atomic upserts (`.upsert()`) and schema integrity checks (`.validate()`).
 
 ---
 
@@ -386,7 +386,7 @@ $report | Format-Table -AutoSize
 $activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM users WHERE json_extract(doc, '$.age') >= ?;", @(30))
 ```
 
-> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type queries (`whereLength()`, `whereType()`), see the [Full Documentation (`_DOCS/README.md`)](_DOCS/README.md#4-querying--filtering).
+> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type queries (`whereLength()`, `whereType()`), see the [Full Documentation (`_DOCS/`)](_DOCS/#4-querying--filtering).
 
 ---
 
@@ -544,7 +544,7 @@ try {
 
 * **Why SQLite WAL Prohibits Direct SMB Access:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB.
 * **Recommended Pattern (Local Snapshot):** Copy the `.db` snapshot to `$env:TEMP` before reading (`Copy-Item -Destination $env:TEMP`). This eliminates file locks on the network share and queries at full local NVMe speed.
-* **Direct Read (Non-WAL):** For environments requiring direct reads without copying, the database must use rollback journals (`journal_mode = DELETE`) with `PRAGMA query_only = ON;` and `PRAGMA busy_timeout = 5000;`. See [Section 11 in Full Documentation](_DOCS/README.md#11-reading-over-smb--network-shares).
+* **Direct Read (Non-WAL):** For environments requiring direct reads without copying, the database must use rollback journals (`journal_mode = DELETE`) with `PRAGMA query_only = ON;` and `PRAGMA busy_timeout = 5000;`. See [Section 11 in Full Documentation](_DOCS/#11-reading-over-smb--network-shares).
 ---
 
 ## Test Suite & Quality Verification
