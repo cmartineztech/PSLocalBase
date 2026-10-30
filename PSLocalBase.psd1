@@ -3,7 +3,7 @@
     RootModule           = 'PSLocalBase.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '1.0.0'
+    ModuleVersion        = '2.0.0'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -47,7 +47,7 @@
             Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
-            ReleaseNotes = 'Initial production release of PSLocalBase embedded NoSQL engine for PowerShell.'
+            ReleaseNotes = '2.0.0: data-safety, query-semantics and connection-lifecycle hardening with breaking changes. See CHANGELOG.md.'
         }
     }
 }

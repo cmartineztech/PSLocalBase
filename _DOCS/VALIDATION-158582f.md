@@ -1,5 +1,8 @@
 # Revisión independiente de PSLocalBase — 158582f
 
+> [!NOTE]
+> **Informe histórico.** Describe el estado del commit `158582f` (versión 1.0.x). Las cifras de suites y verificaciones ya no corresponden al runner actual (16 suites en 2.0.0), y varios comportamientos cambiaron en 2.0.0. Para el estado actual, consulta [CHANGELOG.md](../CHANGELOG.md) y [_TESTS/README.md](../_TESTS/README.md).
+
 Fecha: 29 de octubre de 2026, America/New_York.
 Rama: dev. Commit: `158582f44a45e18a2dc9ce0318372e1adb7f5f92`.
 SHA256 del módulo al inicio y al cierre: `7FD4B356F44870A8C2BFD7705D9D4DA9135C34C20ECF788EA9FF009B6605CFAE`.
