@@ -1,4 +1,4 @@
-# PSLocalBase Test Suite
+﻿# PSLocalBase Test Suite
 
 Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions.
 
@@ -21,21 +21,22 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (10 Suites / 174 Automated Checks)
+### Complete Multi-Suite Runner Overview (11 Suites / 173 Enumerated Checks + NativeStress)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 10 focused test suites:
-1. `PSLocalBase.Tests.ps1` – Core acceptance criteria & functional tests (83 test cases).
-2. `PSLocalBase.Audit.Tests.ps1` – Corner cases, boundary values, and corruption defenses (17 tests).
-3. `PSLocalBase.Reevaluation.Tests.ps1` – Query builder state isolation and transaction rollbacks (12 tests).
-4. `PSLocalBase.NativeStress.Tests.ps1` – P/Invoke statement cleanup and high-concurrency lock contention (5 tests).
-5. `PSLocalBase.Independent-c57b52c.Tests.ps1` – Dotted/underscore field independence and numeric privacy (7 tests).
-6. `PSLocalBase.Revalidation-3ecc2c1.Tests.ps1` – JSON path casing, legacy hash verification, and aggregation scoping (11 tests).
-7. `PSLocalBase.Review-83ed742.Tests.ps1` – Index expression migration and roundtrip mutations (7 tests).
-8. `PSLocalBase.Followup-a526708.Tests.ps1` – Cross-edition numeric roundtrip and collectionGroup drop rejection (21 tests).
-9. `PSLocalBase.Boundary-86483c7.Tests.ps1` – Floating-point decimal quantization boundaries (3 tests).
-10. `PSLocalBase.Review-3c890fd.Tests.ps1` – Read terminal filter preservation, RHS union reuse, and synchronous options (8 tests).
+The automated test runner (`_TESTS/run-tests.ps1`) executes 11 focused test suites:
+1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (83 test cases).
+2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
+3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
+4. `PSLocalBase.NativeStress.Tests.ps1` - P/Invoke statement cleanup and high-concurrency lock contention (stress cycles and observations).
+5. `PSLocalBase.Independent-c57b52c.Tests.ps1` - Dotted/underscore field independence and numeric privacy (7 checks).
+6. `PSLocalBase.Revalidation-3ecc2c1.Tests.ps1` - JSON path casing, legacy hash verification, and aggregation scoping (11 checks).
+7. `PSLocalBase.Review-83ed742.Tests.ps1` - Index expression migration and roundtrip mutations (7 checks).
+8. `PSLocalBase.Followup-a526708.Tests.ps1` - Cross-edition numeric roundtrip and collectionGroup drop rejection (21 checks).
+9. `PSLocalBase.Boundary-86483c7.Tests.ps1` - Floating-point decimal quantization boundaries (3 checks).
+10. `PSLocalBase.Review-3c890fd.Tests.ps1` - Read terminal filter preservation, RHS union reuse, and synchronous options (8 checks).
+11. `PSLocalBase.Review-158582f.Tests.ps1` - Deletion query state preservation, RHS independent union snapshot, PowerShell -like wildcard matching, and RHS union query plan preservation (9 checks).
 
-*(Note: The interactive WPF GUI playground verification script `Playground/verify-playground.ps1` executes 10 GUI/WPF checks separately).*
+*(Note: The 173 enumerated checks represent distinct functional verification scenarios and regression groups across the 10 enumerated suites, not raw line/branch code coverage percentages. The interactive WPF GUI playground verification script `Playground/verify-playground.ps1` executes 10 GUI/WPF checks separately).*
 
 ---
 

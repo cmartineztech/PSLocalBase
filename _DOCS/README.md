@@ -1,4 +1,4 @@
-# PSLocalBase Documentation & Reference Guide
+﻿# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -294,7 +294,7 @@ $db.collection("users").doc("usr-100").update(@{
 ```
 
 > [!TIP]
-> **Numeric Precision & Subnormals:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons and preserve subnormal floating-point values (`|Double| < 1e-28`), preventing quantization loss and collisions between `Double` and `Decimal` types.
+> **Numeric Precision & Subnormals:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons and preserve floating-point values below Decimal resolution (`|Double| < 1e-28`), preventing quantization loss and collisions between `Double` and `Decimal` types.
 
 ### Secondary Expression Indexes (`createIndex`, `dropIndex`)
 Create native B-Tree indexes on document JSON fields for sub-millisecond querying over millions of records:

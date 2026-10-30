@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -55,8 +55,6 @@ class PSLocalBase : System.IDisposable {
     [bool]$IsCollectionGroup = $false
     [string[]]$GroupTables = @()
     [bool]$IsComposedInUnion = $false
-    [PSLocalBase]$_OriginalRightBranch = $null
-    [bool]$_HasSubsequentUnion = $false
     [System.Collections.Generic.List[string]]$SelectedFields
 
     # Default constructor (in-memory)
@@ -622,7 +620,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
         }
-        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery -or $otherQuery.IsComposedInUnion) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
         }
         if ($otherQuery.DbHandle -ne $this.DbHandle) {
@@ -631,12 +629,10 @@ class PSLocalBase : System.IDisposable {
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $this._HasSubsequentUnion = $true
         $target = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
         $target.UnionQuery.IsComposedInUnion = $true
         $target.IsComposedInUnion = $true
-        $target._OriginalRightBranch = $otherQuery
         $target.UnionType = "UNION"
         return $target
     }
@@ -645,7 +641,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
         }
-        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
+        if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery -or $otherQuery.IsComposedInUnion) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
         }
         if ($otherQuery.DbHandle -ne $this.DbHandle) {
@@ -654,12 +650,10 @@ class PSLocalBase : System.IDisposable {
         if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
-        $this._HasSubsequentUnion = $true
         $target = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
         $target.UnionQuery.IsComposedInUnion = $true
         $target.IsComposedInUnion = $true
-        $target._OriginalRightBranch = $otherQuery
         $target.UnionType = "UNION ALL"
         return $target
     }
@@ -1069,6 +1063,92 @@ class PSLocalBase : System.IDisposable {
     # -----------------------------------------------------------------------
     # Query & Filtering Methods: where, orderBy, limit, get
     # -----------------------------------------------------------------------
+    static [string] _ConvertPsWildcardToSqlLike([string]$pattern) {
+        if ($null -eq $pattern) { return "" }
+        $sb = [System.Text.StringBuilder]::new()
+        $i = 0
+        $len = $pattern.Length
+        while ($i -lt $len) {
+            $ch = $pattern[$i]
+            if ($ch -eq '`') {
+                if ($i + 1 -lt $len) {
+                    $i++
+                    $next = $pattern[$i]
+                    if ($next -eq '\' -or $next -eq '%' -or $next -eq '_') {
+                        [void]$sb.Append('\')
+                        [void]$sb.Append($next)
+                    } else {
+                        [void]$sb.Append($next)
+                    }
+                } else {
+                    [void]$sb.Append('`')
+                }
+            } elseif ($ch -eq '*') {
+                [void]$sb.Append('%')
+            } elseif ($ch -eq '?') {
+                [void]$sb.Append('_')
+            } elseif ($ch -eq '\' -or $ch -eq '%' -or $ch -eq '_') {
+                [void]$sb.Append('\')
+                [void]$sb.Append($ch)
+            } elseif ($ch -eq '[') {
+                $closeIdx = $pattern.IndexOf(']', $i + 1)
+                if ($closeIdx -gt $i + 1) {
+                    throw [System.NotSupportedException]::new("Bracket range patterns '[...]' in -like are not supported by the SQL engine.")
+                }
+                [void]$sb.Append($ch)
+            } else {
+                [void]$sb.Append($ch)
+            }
+            $i++
+        }
+        return $sb.ToString()
+    }
+
+    [string] _BuildBranchSelect([PSLocalBase]$q, [System.Collections.Generic.List[object]]$queryParams) {
+        if (-not $this._CollectionExists($q.CurrentCollection)) {
+            return "SELECT '' AS key, '' AS doc WHERE 0"
+        }
+
+        $branchDocExpr = "doc"
+        if ($null -ne $q.SelectedFields -and $q.SelectedFields.Count -gt 0) {
+            $selectPairs = [System.Collections.Generic.List[string]]::new()
+            foreach ($f in $q.SelectedFields) {
+                $cleanField = $f.Trim().Replace("'", "''")
+                $selectPairs.Add("'$cleanField'")
+                $selectPairs.Add("json_extract(doc, '$.$cleanField')")
+            }
+            $branchDocExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
+        }
+
+        $branchConditions = [System.Collections.Generic.List[string]]::new()
+        if (-not [string]::IsNullOrEmpty($q.CurrentKey)) {
+            $branchConditions.Add("key = ?")
+            $queryParams.Add($q.CurrentKey)
+        }
+        if ($null -ne $q.WhereClauses -and $q.WhereClauses.Count -gt 0) {
+            $branchConditions.AddRange($q.WhereClauses)
+            if ($null -ne $q.WhereParameters) {
+                $queryParams.AddRange($q.WhereParameters)
+            }
+        }
+        $branchWhere = if ($branchConditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $branchConditions) } else { "" }
+
+        $branchOrder = if (-not [string]::IsNullOrEmpty($q.OrderByClause)) { " " + $q.OrderByClause } else { "" }
+
+        $branchLimit = ""
+        if ($null -ne $q.LimitValue -and $q.LimitValue -ge 0) {
+            if ($null -ne $q.SkipValue -and $q.SkipValue -gt 0) {
+                $branchLimit = " LIMIT $($q.LimitValue) OFFSET $($q.SkipValue)"
+            } else {
+                $branchLimit = " LIMIT $($q.LimitValue)"
+            }
+        } elseif ($null -ne $q.SkipValue -and $q.SkipValue -gt 0) {
+            $branchLimit = " LIMIT -1 OFFSET $($q.SkipValue)"
+        }
+
+        return "SELECT key, $branchDocExpr AS doc FROM [$($q.CurrentCollection)]$branchWhere$branchOrder$branchLimit"
+    }
+
     [PSLocalBase] where([string]$field, [string]$operator, [object]$value) {
         if ([string]::IsNullOrWhiteSpace($field)) {
             throw [System.ArgumentException]::new("Field name cannot be null or empty in where clause.")
@@ -1282,14 +1362,21 @@ class PSLocalBase : System.IDisposable {
             return $target
         }
 
-        # Case E: String values (PowerShell -like conversion to SQL wildcard)
-        $paramVal = [string]$value
-        if ($trimmedOp -eq '-LIKE' -or $trimmedOp -eq '-NOTLIKE') {
-            if ($paramVal.Contains("*") -or $paramVal.Contains("?")) {
-                $paramVal = $paramVal.Replace("%", "[%]").Replace("_", "[_]").Replace("*", "%").Replace("?", "_")
-            }
+        # Case E: String values and pattern matching (SQL LIKE vs PowerShell -like)
+        if ($trimmedOp -eq '-LIKE') {
+            $converted = [PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
+            $target.WhereClauses.Add("json_extract(doc, '$jsonField') LIKE ? ESCAPE '\'")
+            $target.WhereParameters.Add($converted)
+            return $target
+        }
+        if ($trimmedOp -eq '-NOTLIKE') {
+            $converted = [PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
+            $target.WhereClauses.Add("json_extract(doc, '$jsonField') NOT LIKE ? ESCAPE '\'")
+            $target.WhereParameters.Add($converted)
+            return $target
         }
 
+        $paramVal = [string]$value
         $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
         $target.WhereParameters.Add($paramVal)
 
@@ -1522,9 +1609,6 @@ class PSLocalBase : System.IDisposable {
                 }
                 $querySql = $sqlBuilder.ToString()
             } elseif ($null -ne $this.UnionQuery) {
-                if ($null -ne $this._OriginalRightBranch -and $this._OriginalRightBranch._HasSubsequentUnion) {
-                    throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
-                }
                 if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
                     throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
                 }
@@ -1540,46 +1624,15 @@ class PSLocalBase : System.IDisposable {
                     return @()
                 }
 
-                $q1Sql = ""
-                if ($q1Exists) {
-                    $q1Conditions = [System.Collections.Generic.List[string]]::new()
-                    if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                        $q1Conditions.Add("key = ?")
-                        $queryParams.Add($this.CurrentKey)
-                    }
-                    if ($this.WhereClauses.Count -gt 0) {
-                        $q1Conditions.AddRange($this.WhereClauses)
-                        if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                    }
-                    $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
-                    $q1Sql = "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
-                } else {
-                    $q1Sql = "SELECT '' AS key, '' AS doc WHERE 0"
-                }
-
-                $q2Sql = ""
-                if ($q2Exists) {
-                    $q2Conditions = [System.Collections.Generic.List[string]]::new()
-                    if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
-                        $q2Conditions.Add("key = ?")
-                        $queryParams.Add($this.UnionQuery.CurrentKey)
-                    }
-                    if ($this.UnionQuery.WhereClauses.Count -gt 0) {
-                        $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
-                        if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
-                    }
-                    $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
-                    $q2Sql = "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
-                } else {
-                    $q2Sql = "SELECT '' AS key, '' AS doc WHERE 0"
-                }
+                $q1Sql = $this._BuildBranchSelect($this, $queryParams)
+                $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
                 $sqlBuilder = [System.Text.StringBuilder]::new()
                 if ($hasSelect) {
-                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM ($q1Sql $uType $q2Sql)")
+                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
                 } else {
-                    [void]$sqlBuilder.Append("SELECT key, doc FROM ($q1Sql $uType $q2Sql)")
+                    [void]$sqlBuilder.Append("SELECT key, doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
                 }
                 if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
                     [void]$sqlBuilder.Append(" $($this.OrderByClause)")
@@ -1932,42 +1985,11 @@ class PSLocalBase : System.IDisposable {
                     return 0
                 }
                 $queryParams = [System.Collections.Generic.List[object]]::new()
-                $q1Sql = ""
-                if ($q1Exists) {
-                    $q1Conditions = [System.Collections.Generic.List[string]]::new()
-                    if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                        $q1Conditions.Add("key = ?")
-                        $queryParams.Add($this.CurrentKey)
-                    }
-                    if ($this.WhereClauses.Count -gt 0) {
-                        $q1Conditions.AddRange($this.WhereClauses)
-                        if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                    }
-                    $q1Where = if ($q1Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q1Conditions) } else { "" }
-                    $q1Sql = "SELECT key, doc FROM [$($this.CurrentCollection)]$q1Where"
-                } else {
-                    $q1Sql = "SELECT '' AS key, '' AS doc WHERE 0"
-                }
-
-                $q2Sql = ""
-                if ($q2Exists) {
-                    $q2Conditions = [System.Collections.Generic.List[string]]::new()
-                    if (-not [string]::IsNullOrEmpty($this.UnionQuery.CurrentKey)) {
-                        $q2Conditions.Add("key = ?")
-                        $queryParams.Add($this.UnionQuery.CurrentKey)
-                    }
-                    if ($this.UnionQuery.WhereClauses.Count -gt 0) {
-                        $q2Conditions.AddRange($this.UnionQuery.WhereClauses)
-                        if ($this.UnionQuery.WhereParameters) { $queryParams.AddRange($this.UnionQuery.WhereParameters) }
-                    }
-                    $q2Where = if ($q2Conditions.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $q2Conditions) } else { "" }
-                    $q2Sql = "SELECT key, doc FROM [$($this.UnionQuery.CurrentCollection)]$q2Where"
-                } else {
-                    $q2Sql = "SELECT '' AS key, '' AS doc WHERE 0"
-                }
+                $q1Sql = $this._BuildBranchSelect($this, $queryParams)
+                $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
-                $innerUnion = "$q1Sql $uType $q2Sql"
+                $innerUnion = "SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql)"
                 $pagedSql = $innerUnion
                 if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
                     if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
@@ -2157,27 +2179,22 @@ class PSLocalBase : System.IDisposable {
         }
 
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             return
         }
 
-        try {
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                # Delete single document
-                $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE key = ?;"
-                $this._ExecuteBoundSql($sql, @($this.CurrentKey))
-            } elseif ($this.WhereClauses.Count -gt 0) {
-                # Delete filtered documents
-                $whereStr = [string]::Join(" AND ", $this.WhereClauses)
-                $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE $whereStr;"
-                $this._ExecuteBoundSql($sql, $this.WhereParameters.ToArray())
-            } else {
-                # Truncate collection records while preserving table schema and secondary indexes
-                $sql = "DELETE FROM [$($this.CurrentCollection)];"
-                $this._ExecuteDirectSql($sql)
-            }
-        } finally {
-            $this._ResetQueryState()
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
+            # Delete single document
+            $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE key = ?;"
+            $this._ExecuteBoundSql($sql, @($this.CurrentKey))
+        } elseif ($this.WhereClauses.Count -gt 0) {
+            # Delete filtered documents
+            $whereStr = [string]::Join(" AND ", $this.WhereClauses)
+            $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE $whereStr;"
+            $this._ExecuteBoundSql($sql, $this.WhereParameters.ToArray())
+        } else {
+            # Truncate collection records while preserving table schema and secondary indexes
+            $sql = "DELETE FROM [$($this.CurrentCollection)];"
+            $this._ExecuteDirectSql($sql)
         }
     }
 

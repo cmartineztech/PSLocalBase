@@ -1,4 +1,4 @@
-# PSLocalBase
+﻿# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -555,7 +555,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite located in `_TESTS/PSLocalBase.Tests.ps1` covering 83 comprehensive acceptance test cases and 10 specialized suites (174 automated validations) (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite runner located in `_TESTS/run-tests.ps1` covering 83 core acceptance test cases and 11 specialized suites (173 enumerated functional checks plus NativeStress cycles) (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell
@@ -568,9 +568,9 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
 For the complete breakdown of all 83 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
-### Independent Security & Quality Audit (Claude Opus 5.5)
+### Independent Security & Quality Audit (Historical Benchmark)
 
-PSLocalBase was independently audited by **Claude Opus 5.5** (Commit: `c57b52c`, dev branch), receiving a **94/100 (Production Ready - Approved without reservations)** rating:
+PSLocalBase was independently audited by **Claude Opus 5.5** at historical commit `c57b52c` on the `dev` branch, receiving a **94/100 (Production Ready - Approved without reservations)** rating at that revision. Current releases are continuously verified against the full regression runner.
 
 | Category | Score | Status |
 |---|:---:|:---:|

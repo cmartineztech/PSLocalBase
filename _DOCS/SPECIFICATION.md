@@ -1,4 +1,4 @@
-# Technical Specification: PSLocalBase
+﻿# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -156,7 +156,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 ---
 
-## 5. Class Architecture: `PSLocalBase` & `PSLocalBaseCollection`
+## 5. Class Architecture: `PSLocalBase`
 
 ### 5.1. Internal State Properties
 * `[IntPtr]$DbHandle`: Memory pointer to the open SQLite connection.
@@ -196,12 +196,12 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 #### Writing & Mutations
 * **`[void] set([object]$data, [hashtable]$options)`**
-  * On a targeted document: performs an atomic `INSERT OR REPLACE` using parameterized `?` bindings.
+  * On a targeted document: performs an atomic `INSERT INTO ... ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` using parameterized `?` bindings.
   * On a collection: atomically drops existing data and repopulates all records inside an ACID transaction.
 * **`[string] add([object]$data, [string]$customKey = "")`**
   * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes `.set()`, and returns the key.
 * **`[void] update([object]$partialData)`**
-  * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Supports atomic `ArrayUnion` and `ArrayRemove` with structural equality and subnormal float preservation ($|x| < 10^{-28}$). Upserts if document does not exist.
+  * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Supports atomic `ArrayUnion` and `ArrayRemove` with structural equality and tiny floating-point preservation below Decimal scale ($|Double| < 10^{-28}$). Upserts if document does not exist.
 * **`[string] upsert([object]$data, [string]$customKey = "")`**
   * Performs an atomic single-step `INSERT INTO [collection] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` without read-modify-write overhead. Supports auto-generated GUID or explicit custom keys.
 
@@ -346,7 +346,7 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-78** | **Point-Lookup Scope Preservation in Composite Queries** | Prevents early single-document return in get() when chained with union() or collectionGroup() | **PASSED** |
 | **TC-79** | **Missing Branch Parameter Isolation in Composite Queries** | Isolates query parameter bindings so non-existent collections in union queries do not cause parameter count mismatches | **PASSED** |
 | **TC-80** | **Array Type Enforcement for Array Operators** | Enforces json_type = 'array' for array-contains and array-contains-any, excluding scalar and object matches | **PASSED** |
-| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Enforces IEEE underflow threshold (< 1e-28) preventing collision between Double and Decimal in ArrayUnion/ArrayRemove | **PASSED** |
+| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Enforces Decimal scale resolution boundary ($|Double| < 10^{-28}$) preventing collision between Double and Decimal in ArrayUnion/ArrayRemove | **PASSED** |
 | **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
 | **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |
 

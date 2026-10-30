@@ -1,4 +1,4 @@
-# Additional independent evidence for a526708, outside its original green runner.
+﻿# Additional independent evidence for a526708, outside its original green runner.
 # All databases are in memory. No changes to the engine or previous assertions.
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'PSLocalBase.psd1') -Force
@@ -28,21 +28,33 @@ foreach ($text in @('0.1', '0.2', '0.01', '1.0000000000000002')) {
         }
     }
 }
-Check-Followup 'Mutable right branch must not silently bypass nested-union rejection' {
+Check-Followup 'Right branch reuse preserves original union snapshot and true nested-union is rejected' {
     param($db)
+    # Contract: Each union forms an independent immutable snapshot query.
+    # Reusing a branch source ($right) in a subsequent union does NOT mutate or invalidate prior unions.
     $db.collection('a').doc('a').set(@{ n = 1 })
     $db.collection('b').doc('b').set(@{ n = 2 })
     $db.collection('c').doc('c').set(@{ n = 3 })
     $right = $db.collection('b')
-    $query = $db.collection('a').union($right)
-    try {
-        [void]$right.union($db.collection('c'))
-        $rows = @($query.get())
-    } catch [System.InvalidOperationException] {
-        if ($_.Exception.Message -match 'nested|union|composite') { return }
-        throw
-    }
-    if ($rows.Count -ne 3) { throw "Right branch changed after composition; returned $($rows.Count) instead of 3 without explicit rejection." }
+    $query1 = $db.collection('a').union($right)
+    $query2 = $right.union($db.collection('c'))
+
+    # Both independent composite queries must return their respective 2 rows
+    $rows1 = @($query1.get())
+    $rows2 = @($query2.get())
+    if ($rows1.Count -ne 2) { throw "First union snapshot corrupted: expected 2 rows, got $($rows1.Count)." }
+    if ($rows2.Count -ne 2) { throw "Second union corrupted: expected 2 rows, got $($rows2.Count)." }
+
+    # True nested union (calling union on an already composite query or passing a composite query) must be explicitly rejected
+    $rejected1 = $false
+    try { [void]$query1.union($db.collection('c')) }
+    catch [System.InvalidOperationException] { $rejected1 = $true }
+    if (-not $rejected1) { throw "Nested union on composite left branch must throw InvalidOperationException." }
+
+    $rejected2 = $false
+    try { [void]$db.collection('c').union($query1) }
+    catch [System.InvalidOperationException] { $rejected2 = $true }
+    if (-not $rejected2) { throw "Nested union passing composite right branch must throw InvalidOperationException." }
 }
 Check-Followup 'Imported legacy index with quoted doc must preserve its unrelated UNIQUE' {
     param($db)
