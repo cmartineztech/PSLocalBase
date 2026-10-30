@@ -3,6 +3,8 @@
 # P/Invoke bridge targeting Windows native winsqlite3.dll
 # ---------------------------------------------------------------------------
 
+# Runs as ScriptsToProcess in the caller's scope; the script block keeps its variables out of that scope.
+& {
 # Platform pre-flight check: ensure running on Windows
 if ($PSVersionTable.PSEdition -eq 'Core') {
     $isWin = if (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) { $IsWindows } else { [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows) }
@@ -19,7 +21,16 @@ using System.Runtime.InteropServices;
 using System.Management.Automation;
 
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+
+// Owns one sqlite3* connection. The finalizer closes connections whose wrapper was never disposed.
+public sealed class PSLocalBaseConnectionHandle : SafeHandle {
+    public PSLocalBaseConnectionHandle(IntPtr db) : base(IntPtr.Zero, true) { SetHandle(db); }
+    public override bool IsInvalid { get { return handle == IntPtr.Zero; } }
+    protected override bool ReleaseHandle() { return WinSqlite3.CloseV2(handle) == WinSqlite3.SQLITE_OK; }
+}
+
 public class WinSqlite3 {
+    public const int BridgeVersion = 2;
     public const int SQLITE_OK = 0;
     public const int SQLITE_BUSY = 5;
     public const int SQLITE_ROW = 100;
@@ -60,9 +71,34 @@ public class WinSqlite3 {
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_set_auxdata", CallingConvention = CallingConvention.Cdecl)]
     private static extern void SetAuxData(IntPtr context, int argument, IntPtr data, AuxDestructor destructor);
 
+    private const int SQLITE_UTF16 = 4;
+    private const int SQLITE_DIRECTONLY = 0x000080000;
+
     public static int RegisterPsLike(IntPtr db) {
-        // UTF16 native order. Registration belongs to the connection and is closed with it.
-        return CreateFunction(db, "pslocalbase_like", 2, 4, IntPtr.Zero, PsLikeCallback, IntPtr.Zero, IntPtr.Zero);
+        // DIRECTONLY keeps triggers and views stored in an untrusted database file from invoking the callback.
+        return CreateFunction(db, "pslocalbase_like", 2, SQLITE_UTF16 | SQLITE_DIRECTONLY, IntPtr.Zero, PsLikeCallback, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    // Returns the deepest object/array nesting level, ignoring brackets inside strings.
+    public static int JsonNestingDepth(string json) {
+        if (json == null) return 0;
+        int depth = 0, max = 0;
+        bool inString = false;
+        for (int i = 0; i < json.Length; i++) {
+            char c = json[i];
+            if (inString) {
+                if (c == '\\') { i++; }
+                else if (c == '"') { inString = false; }
+            } else if (c == '"') {
+                inString = true;
+            } else if (c == '{' || c == '[') {
+                depth++;
+                if (depth > max) max = depth;
+            } else if (c == '}' || c == ']') {
+                depth--;
+            }
+        }
+        return max;
     }
 
     private static string ReadValue(IntPtr value) {
@@ -97,7 +133,11 @@ public class WinSqlite3 {
     }
 
     private static void ReleasePattern(IntPtr data) {
-        if (data != IntPtr.Zero) GCHandle.FromIntPtr(data).Free();
+        try {
+            if (data != IntPtr.Zero) GCHandle.FromIntPtr(data).Free();
+        } catch (Exception) {
+            // Never let managed exceptions cross the unmanaged callback boundary.
+        }
     }
 
     // Connection lifecycle
@@ -113,6 +153,44 @@ public class WinSqlite3 {
     // Command lifecycle
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_prepare16_v2", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
     public static extern int Prepare(IntPtr db, string sql, int numBytes, out IntPtr stmt, IntPtr pzTail);
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_prepare16_v2", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int PrepareRaw(IntPtr db, IntPtr sql, int numBytes, out IntPtr stmt, out IntPtr pzTail);
+
+    // Prepares the first statement and reports whether any further executable statement follows it.
+    public static int PrepareSingle(IntPtr db, string sql, out IntPtr stmt, out bool hasTrailingStatement) {
+        stmt = IntPtr.Zero;
+        hasTrailingStatement = false;
+        IntPtr buffer = Marshal.StringToHGlobalUni(sql ?? string.Empty);
+        try {
+            IntPtr tail;
+            int rc = PrepareRaw(db, buffer, -1, out stmt, out tail);
+            if (rc != SQLITE_OK || tail == IntPtr.Zero) return rc;
+            string rest = Marshal.PtrToStringUni(tail);
+            if (string.IsNullOrEmpty(rest) || rest.Trim().Length == 0) return rc;
+            IntPtr next;
+            IntPtr nextTail;
+            IntPtr restBuffer = Marshal.StringToHGlobalUni(rest);
+            try {
+                int nextRc = PrepareRaw(db, restBuffer, -1, out next, out nextTail);
+                if (next != IntPtr.Zero) Finalize(next);
+                hasTrailingStatement = (nextRc != SQLITE_OK || next != IntPtr.Zero);
+            } finally {
+                Marshal.FreeHGlobal(restBuffer);
+            }
+            return rc;
+        } finally {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_db_filename", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr NativeDbFilename(IntPtr db, byte[] dbName);
+
+    public static string DbFilename(IntPtr db) {
+        IntPtr ptr = NativeDbFilename(db, System.Text.Encoding.UTF8.GetBytes("main\0"));
+        return GetUtf8String(ptr);
+    }
 
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_step", CallingConvention = CallingConvention.Cdecl)]
     public static extern int Step(IntPtr stmt);
@@ -219,4 +297,5 @@ public class WinSqlite3 {
 }
 '@
     Add-Type -TypeDefinition $csharpCode -ReferencedAssemblies ([System.Management.Automation.PSObject].Assembly.Location)
+}
 }

@@ -120,10 +120,12 @@ Assert-Test "TC-03: Unicode Integrity (Accents, Quotes, Emojis)" {
 }
 
 # ---------------------------------------------------------------------------
-# TC-04: Concurrency (WAL + Busy Handler)
+# TC-04: Cross-connection visibility on one WAL file (sequential; concurrent
+# multi-process writes are covered by PSLocalBase.WalMultiProcess.Tests.ps1)
 # ---------------------------------------------------------------------------
-Assert-Test "TC-04: Concurrency (WAL Mode & Busy Timeout)" {
+Assert-Test "TC-04: Cross-Connection Visibility (WAL Mode, Sequential)" {
     $tempDbPath = Join-Path ([System.IO.Path]::GetTempPath()) "pslocalbase_concurrency_$([Guid]::NewGuid().ToString('N')).db"
+    $db1 = $null; $db2 = $null
     try {
         # Initialize database
         $db1 = [PSLocalBase]::new($tempDbPath)
@@ -132,7 +134,7 @@ Assert-Test "TC-04: Concurrency (WAL Mode & Busy Timeout)" {
         # Open secondary connection to same file
         $db2 = [PSLocalBase]::new($tempDbPath)
 
-        # Simultaneous reads and writes across both connections
+        # Alternating writes and reads across both connections
         $db1.collection("concurrent").doc("key-db1").set(@{ writer = "db1"; counter = 100 })
         $docFromDb2 = $db2.collection("concurrent").doc("key-db1").get()
         if ($null -eq $docFromDb2 -or $docFromDb2.counter -ne 100) {
@@ -144,10 +146,9 @@ Assert-Test "TC-04: Concurrency (WAL Mode & Busy Timeout)" {
         if ($null -eq $docFromDb1 -or $docFromDb1.counter -ne 200) {
             throw "Connection 1 could not read Connection 2's commit"
         }
-
-        $db1.close()
-        $db2.close()
     } finally {
+        if ($db1) { $db1.close() }
+        if ($db2) { $db2.close() }
         if (Test-Path $tempDbPath) { Remove-Item -Path $tempDbPath -Force -ErrorAction SilentlyContinue }
         if (Test-Path "$tempDbPath-wal") { Remove-Item -Path "$tempDbPath-wal" -Force -ErrorAction SilentlyContinue }
         if (Test-Path "$tempDbPath-shm") { Remove-Item -Path "$tempDbPath-shm" -Force -ErrorAction SilentlyContinue }
@@ -945,11 +946,15 @@ Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation
             throw "Write operation failed to auto-create collection table."
         }
 
-        # 6. Explicit .doc() targeting provisions table automatically
+        # 6. .doc() navigation is lazy; the first write through it provisions the table
         [void]$db.collection("auto_on_doc").doc("doc1")
+        if (@($db.listCollections()) -contains "auto_on_doc") {
+            throw "Navigation via .doc() created a ghost table."
+        }
+        $db.collection("auto_on_doc").doc("doc1").set(@{ ok = $true })
         $collsAfterDoc = @($db.listCollections())
         if ($collsAfterDoc.Count -ne 2 -or -not ($collsAfterDoc -contains "auto_on_doc")) {
-            throw "Explicit .doc() failed to auto-create collection table."
+            throw "Write through .doc() failed to auto-create collection table."
         }
     } finally {
         $db.close()
@@ -962,13 +967,13 @@ Assert-Test "TC-27: Explicit Collection Lifecycle (.create() and Lazy Navigation
 Assert-Test "TC-28: Target Document Auto-Provisioning & Criteria Key Resolution" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        # 1. Calling .doc() on uncreated collection provisions table in SQLite
+        # 1. Calling .doc() on an uncreated collection is lazy and creates no table
         if ($db.collectionExists("orders_auto")) {
             throw "Collection orders_auto should not exist prior to .doc()"
         }
         [void]$db.collection("orders_auto").doc("ord-001")
-        if (-not $db.collectionExists("orders_auto")) {
-            throw "Calling .doc('ord-001') failed to auto-provision table 'orders_auto'."
+        if ($db.collectionExists("orders_auto")) {
+            throw "Calling .doc('ord-001') created table 'orders_auto' without a write."
         }
 
         # 2. Reading targeted document that hasn't been set returns $null
@@ -1354,9 +1359,9 @@ Assert-Test "TC-37: Constructor Options Enforcement" {
 }
 
 # ---------------------------------------------------------------------------
-# TC-38: Atomic update() Isolation
+# TC-38: update() Partial Merge (single connection)
 # ---------------------------------------------------------------------------
-Assert-Test "TC-38: Atomic update() Isolation" {
+Assert-Test "TC-38: update() Partial Merge Preserves Unmodified Fields" {
     $db = [PSLocalBase]::new(":memory:")
     try {
         $db.collection("accounts").doc("acc-1").set(@{ balance = 1000; status = "active"; tier = "silver" })
@@ -2644,9 +2649,9 @@ Assert-Test "TC-71: Composite Query Scoping, Projection, Exists and Connection I
 }
 
 # ---------------------------------------------------------------------------
-# TC-72: VACUUM INTO Consistent Snapshot for Concurrent WAL Mode (Issue #10)
+# TC-72: VACUUM INTO Consistent Snapshot from a Live WAL Connection (Issue #10)
 # ---------------------------------------------------------------------------
-Assert-Test "TC-72: VACUUM INTO Consistent Snapshot for Concurrent WAL Mode" {
+Assert-Test "TC-72: VACUUM INTO Consistent Snapshot from a Live WAL Connection" {
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pslocalbase_snap_" + [System.Guid]::NewGuid().ToString("N"))
     $null = New-Item -ItemType Directory -Path $tempDir -Force
     $srcDbPath = Join-Path $tempDir "source.db"
