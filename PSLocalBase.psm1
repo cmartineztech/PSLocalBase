@@ -465,7 +465,10 @@ class PSLocalBase : System.IDisposable {
                 try {
                     $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT sp_idx_upgrade;")
                     $this._ExecuteDirectSql("RELEASE SAVEPOINT sp_idx_upgrade;")
-                } catch { }
+                } catch {
+                    # The original failure is rethrown below; a rollback error must not replace it.
+                    Write-Verbose "Index upgrade rollback failed: $($_.Exception.Message)"
+                }
                 throw
             }
         }
@@ -1084,10 +1087,11 @@ class PSLocalBase : System.IDisposable {
                 $this.commit()
             }
         } catch {
+            # The original failure is rethrown below; a rollback error must not replace it.
             if ($isOuterTx) {
-                try { $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT $spName; RELEASE SAVEPOINT $spName;") } catch { }
+                try { $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT $spName; RELEASE SAVEPOINT $spName;") } catch { Write-Verbose "Savepoint rollback failed: $($_.Exception.Message)" }
             } else {
-                try { $this.rollback() } catch { }
+                try { $this.rollback() } catch { Write-Verbose "Rollback failed: $($_.Exception.Message)" }
             }
             throw
         }
@@ -1221,7 +1225,7 @@ class PSLocalBase : System.IDisposable {
             if ($startedTx) { $this._ExecuteDirectSql("COMMIT;") }
         } catch {
             if ($startedTx) {
-                try { $this._ExecuteDirectSql("ROLLBACK;") } catch { }
+                try { $this._ExecuteDirectSql("ROLLBACK;") } catch { Write-Verbose "Rollback failed: $($_.Exception.Message)" }
             }
             throw
         }
@@ -2653,7 +2657,7 @@ class PSLocalBase : System.IDisposable {
                             $fBackR = [double]::Parse($fDecR.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
                             if ($fBackR -eq $fVal) { return $true }
                         }
-                    } catch {}
+                    } catch { Write-Verbose "Round-trip ('R') comparison not representable as Decimal." }
                     try {
                         $fStrG = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecG = [decimal]::Parse($fStrG, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
@@ -2661,7 +2665,7 @@ class PSLocalBase : System.IDisposable {
                             $fBackG = [double]::Parse($fDecG.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
                             if ($fBackG -eq $fVal) { return $true }
                         }
-                    } catch {}
+                    } catch { Write-Verbose "Round-trip ('G17') comparison not representable as Decimal." }
                     return $false
                 }
             }
@@ -2841,9 +2845,17 @@ function New-LocalBase {
         Creates or connects to a PSLocalBase database instance.
     .PARAMETER Path
         Path to the SQLite database file, or ':memory:' for an in-memory database.
+    .PARAMETER Options
+        Connection options: wal (bool, default true), synchronous (EXTRA|FULL|NORMAL|OFF),
+        busyTimeout (ms, default 5000), cacheSizeMB (default 16), depth (1-100, default 20),
+        maxDocumentBytes (default 16MB), maxReadDepth (default 100), debug (bool, default false).
     .EXAMPLE
         $db = New-LocalBase -Path .\app.db
+    .EXAMPLE
+        $db = New-LocalBase -Path .\app.db -Options @{ busyTimeout = 10000; cacheSizeMB = 32 }
     #>
+    # Opening a connection is not a confirmable state change; database files are created on demand by SQLite.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     [CmdletBinding()]
     [OutputType([PSLocalBase])]
     param(
@@ -2867,7 +2879,8 @@ try {
         [void]$typeAcceleratorsClass::Add('PSLocalBase', [PSLocalBase])
     }
 } catch {
-    # Non-fatal fallback
+    # The [PSLocalBase] shorthand is a convenience; the class remains usable without it.
+    Write-Verbose "PSLocalBase type accelerator not registered: $($_.Exception.Message)"
 }
 
 # ---------------------------------------------------------------------------
@@ -2879,7 +2892,7 @@ Update-TypeData -TypeName PSLocalBase -MemberType ScriptProperty -MemberName InT
     if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
     return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
 } -SecondValue {
-    param($val)
+    # Assignments are ignored: the value always comes from sqlite3_get_autocommit.
 } -Force
 
 # ---------------------------------------------------------------------------
@@ -2891,7 +2904,9 @@ $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
         if ($typeAcceleratorsClass -and $typeAcceleratorsClass::Get.ContainsKey('PSLocalBase')) {
             [void]$typeAcceleratorsClass::Remove('PSLocalBase')
         }
-    } catch { }
+    } catch {
+        Write-Verbose "PSLocalBase type accelerator not removed: $($_.Exception.Message)"
+    }
 }
 
 Export-ModuleMember -Function New-LocalBase
