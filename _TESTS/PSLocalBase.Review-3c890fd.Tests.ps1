@@ -1,4 +1,4 @@
-# Independent review evidence for dev 3c890fd. Does not change the existing runner.
+﻿# Independent review evidence for dev 3c890fd. Does not change the existing runner.
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'PSLocalBase.psd1') -Force
 $script:passed = 0
@@ -89,6 +89,33 @@ Check-Review 'R4 distinct honors composite scope or rejects it explicitly' {
         catch [System.InvalidOperationException] { continue }
         catch [System.NotSupportedException] { continue }
         if ($actual.Count -ne 2 -or $actual -notcontains 1 -or $actual -notcontains 2) { throw "$kind distinct silently omitted branches; actual=$($actual -join ',')" }
+    }
+}
+Check-Review 'R3 synchronous option honors FULL and NORMAL with readback verification' {
+    param($ignored)
+    $tmpDb = [System.IO.Path]::GetTempFileName() + '.db'
+    try {
+        $dbFull = New-LocalBase -Path $tmpDb -Options @{ wal = $true; synchronous = 'FULL' }
+        $syncVal = $dbFull.query('PRAGMA synchronous;')[0].synchronous
+        $dbFull.close()
+        if ($syncVal -ne 2) { throw "Expected synchronous=2 (FULL), got $syncVal" }
+
+        $dbNormal = New-LocalBase -Path $tmpDb -Options @{ wal = $true; synchronous = 'NORMAL' }
+        $syncValNorm = $dbNormal.query('PRAGMA synchronous;')[0].synchronous
+        $dbNormal.close()
+        if ($syncValNorm -ne 1) { throw "Expected synchronous=1 (NORMAL), got $syncValNorm" }
+
+        $rejected = $false
+        try {
+            $null = New-LocalBase -Path $tmpDb -Options @{ synchronous = 'INVALID_MODE' }
+        } catch [System.ArgumentException] {
+            $rejected = $true
+        }
+        if (-not $rejected) { throw 'Expected INVALID_MODE synchronous to throw ArgumentException' }
+    } finally {
+        Remove-Item -Force $tmpDb -ErrorAction SilentlyContinue
+        Remove-Item -Force ($tmpDb + '-wal') -ErrorAction SilentlyContinue
+        Remove-Item -Force ($tmpDb + '-shm') -ErrorAction SilentlyContinue
     }
 }
 Write-Host "Review 3c890fd: passed=$script:passed; failed=$script:failed"

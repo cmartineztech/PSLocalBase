@@ -2983,29 +2983,43 @@ Assert-Test "TC-81: Double/Decimal Boundary Quantization & Array Mutation Isolat
 # ---------------------------------------------------------------------------
 # TC-82: Composite Query Defensive Copy & Snapshot Isolation (Issue #23 / #25)
 # ---------------------------------------------------------------------------
-Assert-Test "TC-82: Composite Query Defensive Copy & Snapshot Isolation (Issue #23 / #25)" {
+Assert-Test "TC-82: Composite Query Defensive Copy & Snapshot Isolation (Issue #23 / #25 / #29)" {
     $db = [PSLocalBase]::new(":memory:")
     try {
-        $null = $db.collection("a").add(@{ val = 10 })
-        $null = $db.collection("b").add(@{ val = 20 })
-        $null = $db.collection("b").add(@{ val = 30 })
+        $null = $db.collection("a").add(@{ val = 10; tag = "A" })
+        $null = $db.collection("b").add(@{ val = 20; tag = "B1" })
+        $null = $db.collection("b").add(@{ val = 30; tag = "B2" })
 
-        $right = $db.collection("b")
-        $query = $db.collection("a").union($right)
-        $null = $right.where("val", ">", 100)
+        $left = $db.collection("a").where("val", "=", 10)
+        $right = $db.collection("b").where("val", ">", 15)
+        $query = $left.union($right)
+
+        # Genuinely mutate the parameter state of both source branches:
+        $left.WhereParameters[0] = 999
+        $right.WhereParameters[0] = 999
+
         $res = @($query.get())
         if ($res.Count -ne 3) {
-            throw "Expected 3 records from union after right branch where mutation, got $($res.Count)."
+            throw "Expected 3 records from union after source parameter mutation, got $($res.Count)."
         }
         $cnt = $query.count()
         if ($cnt -ne 3) {
-            throw "Expected count() of 3 on union after right branch where mutation, got $cnt."
+            throw "Expected count() of 3 on union after source parameter mutation, got $cnt."
         }
-        $queryAll = $db.collection("a").unionAll($right)
-        $null = $right.where("val", ">", 500)
+        $tags = @($res | ForEach-Object { $_.tag }) | Sort-Object
+        if ($tags[0] -ne "A" -or $tags[1] -ne "B1" -or $tags[2] -ne "B2") {
+            throw "Expected tags A, B1, B2 in union snapshot results, got: $($tags -join ', ')"
+        }
+
+        # UnionAll snapshot test
+        $leftAll = $db.collection("a").where("val", "=", 10)
+        $rightAll = $db.collection("b").where("val", ">", 15)
+        $queryAll = $leftAll.unionAll($rightAll)
+        $leftAll.WhereParameters[0] = 888
+        $rightAll.WhereParameters[0] = 888
         $resAll = @($queryAll.get())
         if ($resAll.Count -ne 3) {
-            throw "Expected 3 records from unionAll after right branch where mutation, got $($resAll.Count)."
+            throw "Expected 3 records from unionAll after source parameter mutation, got $($resAll.Count)."
         }
     } finally {
         $db.close()

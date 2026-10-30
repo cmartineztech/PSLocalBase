@@ -181,11 +181,24 @@ class PSLocalBase : System.IDisposable {
             if ($this.FilePath -ne ":memory:") {
                 if ($useWal) {
                     $this._ExecuteDirectSql("PRAGMA journal_mode = WAL;")
-                    $this._ExecuteDirectSql("PRAGMA synchronous = NORMAL;")
                 } else {
                     $this._ExecuteDirectSql("PRAGMA journal_mode = DELETE;")
-                    $this._ExecuteDirectSql("PRAGMA synchronous = FULL;")
                 }
+                $syncVal = if ($this.config.ContainsKey("synchronous")) {
+                    [string]$this.config["synchronous"]
+                } elseif ($useWal) {
+                    "NORMAL"
+                } else {
+                    "FULL"
+                }
+                $syncUpper = $syncVal.Trim().ToUpperInvariant()
+                if ($syncUpper -notmatch '^(EXTRA|FULL|NORMAL|OFF|0|1|2|3)$') {
+                    throw [System.ArgumentException]::new("Invalid synchronous mode '$syncVal'. Supported modes: EXTRA, FULL, NORMAL, OFF, 0, 1, 2, 3.")
+                }
+                $this._ExecuteDirectSql("PRAGMA synchronous = $syncUpper;")
+                $this.config["synchronous"] = $syncUpper
+            } else {
+                $this.config["synchronous"] = if ($this.config.ContainsKey("synchronous")) { [string]$this.config["synchronous"] } else { "NORMAL" }
             }
 
             # Query effective journal mode
@@ -284,15 +297,10 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("No collection specified to validate. Call .collection('name').validate()")
         }
         if (-not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             return $true
         }
-        try {
-            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
-            return ($rows.Count -eq 0)
-        } finally {
-            $this._ResetQueryState()
-        }
+        $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
+        return ($rows.Count -eq 0)
     }
 
     [PSLocalBase] create() {
@@ -1417,7 +1425,6 @@ class PSLocalBase : System.IDisposable {
         }
 
         if (-not $this.IsCollectionGroup -and ($null -eq $this.UnionQuery) -and -not $this._CollectionExists($this.CurrentCollection)) {
-            $this._ResetQueryState()
             if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
                 return $null
             }
@@ -1675,7 +1682,6 @@ class PSLocalBase : System.IDisposable {
         }
         if ($this.IsCollectionGroup) {
             if ($this.GroupTables.Count -eq 0) {
-                $this._ResetQueryState()
                 return $false
             }
             try {
@@ -1878,7 +1884,6 @@ class PSLocalBase : System.IDisposable {
 
         if ($this.IsCollectionGroup) {
             if ($this.GroupTables.Count -eq 0) {
-                $this._ResetQueryState()
                 return 0
             }
             try {
@@ -2976,33 +2981,25 @@ try {
                 throw [System.InvalidOperationException]::new("No collection specified to validate. Call .collection('name').validate()")
             }
             if (-not $this._CollectionExists($this.CurrentCollection)) {
-                $this._ResetQueryState()
                 return $true
             }
-            try {
-                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
-                return ($rows.Count -eq 0)
-            } finally {
-                $this._ResetQueryState()
-            }
+            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
+            return ($rows.Count -eq 0)
         } -Force
     }
 
     if ($null -eq ([PSLocalBase].GetMethod('first', [type[]]@()))) {
         Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName first -Value {
             param([hashtable]$options = @{})
-            try {
-                $this.LimitValue = 1
-                $res = $this.get($options)
-                if ($null -eq $res) { return $null }
-                if ($res -is [System.Array]) {
-                    if ($res.Length -gt 0) { return $res[0] }
-                    return $null
-                }
-                return $res
-            } finally {
-                $this._ResetQueryState()
+            $clone = $this.clone()
+            $clone.LimitValue = 1
+            $res = $clone.get($options)
+            if ($null -eq $res) { return $null }
+            if ($res -is [System.Array]) {
+                if ($res.Length -gt 0) { return $res[0] }
+                return $null
             }
+            return $res
         } -Force
     }
 
@@ -3013,29 +3010,24 @@ try {
                 throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
             }
             if (-not $this._CollectionExists($this.CurrentCollection)) {
-                $this._ResetQueryState()
                 return $false
             }
-            try {
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                    $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
-                    $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-                    return ($rows.Count -gt 0)
-                }
-                $sqlBuilder = [System.Text.StringBuilder]::new()
-                [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
-                $queryParams = [System.Collections.Generic.List[object]]::new()
-                if ($this.WhereClauses.Count -gt 0) {
-                    [void]$sqlBuilder.Append(" WHERE ")
-                    [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                [void]$sqlBuilder.Append(" LIMIT 1;")
-                $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
+                $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
+                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
                 return ($rows.Count -gt 0)
-            } finally {
-                $this._ResetQueryState()
             }
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
+            $queryParams = [System.Collections.Generic.List[object]]::new()
+            if ($this.WhereClauses.Count -gt 0) {
+                [void]$sqlBuilder.Append(" WHERE ")
+                [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
+                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            }
+            [void]$sqlBuilder.Append(" LIMIT 1;")
+            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+            return ($rows.Count -gt 0)
         } -Force
     }
 
@@ -3054,11 +3046,12 @@ try {
             if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
                 throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
             }
+            if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+                throw [System.InvalidOperationException]::new("distinct() is not supported on composite queries (union) or collection groups.")
+            }
             if (-not $this._CollectionExists($this.CurrentCollection)) {
-                $this._ResetQueryState()
                 return @()
             }
-            try {
                 $sqlBuilder = [System.Text.StringBuilder]::new()
                 $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
                 [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
@@ -3079,9 +3072,6 @@ try {
                     }
                 }
                 return [object[]]$distinctList.ToArray()
-            } finally {
-                $this._ResetQueryState()
-            }
         } -Force
     }
 

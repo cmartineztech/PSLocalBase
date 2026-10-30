@@ -48,7 +48,7 @@
 - **Fluent API State Isolation:** Document targets (`CurrentKey`) are cleared across query executions in `try/finally` blocks and reset when chaining filters, preventing accidental cross-query state leakage.
 - **WAL Storage Boundary Validation:** Explicitly rejects UNC paths (`\\server\share`) and mapped network drives (`DriveType.Network`) to prevent SQLite shared-memory (`-shm`) corruption over SMB shares.
 - **Safe Transaction Rollback Isolation:** Handlers wrap rollback calls in guarded blocks to ensure engine-level auto-rollbacks (e.g. `SQLITE_FULL`) do not mask root exceptions.
-- **Non-blocking Concurrency:** Implements Write-Ahead Logging (`WAL`), `synchronous = NORMAL`, and a 5,000 ms busy handler to eliminate locking deadlocks across concurrent scripts.
+- **Concurrency & Lock Contention Mitigation:** Implements Write-Ahead Logging (`WAL`), configurable `synchronous` (`NORMAL` by default), and an automated 5,000 ms busy handler (`busy_timeout`). In WAL mode, readers never block writers and writers never block readers; concurrent write transactions serialize cleanly and sleep/retry during transient write locks, throwing a clear error if the busy timeout is exceeded.
 
 ### 5. NUL Character Defense & Identifier Integrity
 - Document keys passed to `.doc('key')`, `.add(data, 'key')`, `.insert(data)`, and bulk `.set($array)` are explicitly validated against embedded NUL bytes (`\0` / `U+0000`).
@@ -90,9 +90,9 @@
 - **Explicit Branch Forking:** The public `.clone()` and `.fork()` methods allow developers to safely fork query pipelines into multiple branches without shared filter interference.
 - **Idempotent Terminal Reads:** Methods like `.get()`, `.count()`, `.exists()`, `.distinct()`, and aggregations do not wipe the query filters upon completion. Once defined, a query instance can be read multiple times without needing re-definition.
 
-### 13. Numeric Precision & Subnormal Quantization Boundaries (Issue #22)
-- **Double/Decimal Boundary Theorem:** In .NET, `System.Decimal` operates with a maximum precision scale of 28 decimal places. Any floating-point number whose absolute magnitude is strictly less than $10^{-28}$ cannot be represented by a non-zero Decimal.
-- **Quantization Protection in Array Operations:** In `_JsonValuesEqual`, subnormal floating-point values ($|Double| < 10^{-28}$) are guarded so they are never falsely equated with non-zero Decimals. This preserves distinct element integrity in `ArrayUnion` and `ArrayRemove`.
+### 13. Numeric Precision & Decimal Quantization Boundaries (Issue #22)
+- **Double/Decimal Boundary Scale:** In .NET, `System.Decimal` operates with a maximum precision scale of 28 decimal places. Any floating-point number whose absolute magnitude is strictly less than $10^{-28}$ (such as $6 \times 10^{-29}$, a normal Double below Decimal scale) cannot be represented by a non-zero Decimal.
+- **Quantization Protection in Array Operations:** In `_JsonValuesEqual`, floating-point values whose magnitude is smaller than the Decimal resolution ($|Double| < 10^{-28}$) are guarded so they are never falsely equated with non-zero Decimals. This preserves distinct element integrity in `ArrayUnion` and `ArrayRemove`.
 - **Lossless Roundtrip Verification:** Both IEEE 754 `"R"` and `"G17"` double representations are verified via roundtrip parsing (`Double.Parse`), preventing false inequality between serializations.
 
 ### 14. Collection Group Deletion Defense
