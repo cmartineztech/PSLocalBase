@@ -34,6 +34,8 @@ try {
     for ($i = 0; $i -lt 500; $i++) {
         $db.collection('items').doc('one').set(@{ n = 1; value = "payload`0tail" })
         [void]$db.collection('items').doc('one').get()
+        $matches = @($db.collection('items').where('value', '-like', "payload`0*").get())
+        if ($matches.Count -ne 1) { throw "Full-string pattern match failed at iteration $i" }
         try { [void]$db.query('SELECT ?;', @()) } catch [System.InvalidOperationException] { }
         try { [void]$db.query('SELECT invalid_column FROM items;') } catch [System.InvalidOperationException] { }
         try { [void]$db.collection('items').add(@{ n = 1 }, 'duplicate') } catch [System.InvalidOperationException] { }

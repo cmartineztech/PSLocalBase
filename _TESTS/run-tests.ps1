@@ -15,7 +15,9 @@ $tests = @(
     "PSLocalBase.Followup-a526708.Tests.ps1",
     "PSLocalBase.Boundary-86483c7.Tests.ps1",
     "PSLocalBase.Review-3c890fd.Tests.ps1",
-    "PSLocalBase.Review-158582f.Tests.ps1"
+    "PSLocalBase.Review-158582f.Tests.ps1",
+    "PSLocalBase.Review-fb3da3b.Tests.ps1",
+    "PSLocalBase.Issues31-32.Tests.ps1"
 )
 
 foreach ($testFile in $tests) {

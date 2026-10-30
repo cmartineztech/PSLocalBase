@@ -16,6 +16,7 @@ if (-not ('WinSqlite3' -as [type])) {
     $csharpCode = @'
 using System;
 using System.Runtime.InteropServices;
+using System.Management.Automation;
 
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 public class WinSqlite3 {
@@ -30,6 +31,74 @@ public class WinSqlite3 {
     public const int SQLITE_NULL = 5;
 
     public static readonly IntPtr SQLITE_TRANSIENT = new IntPtr(-1);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void ScalarFunction(IntPtr context, int argc, IntPtr argv);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void AuxDestructor(IntPtr data);
+
+    // Static roots keep callbacks alive while any connection/statement uses them.
+    private static readonly ScalarFunction PsLikeCallback = EvaluatePsLike;
+    private static readonly AuxDestructor PatternDestructor = ReleasePattern;
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_create_function16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int CreateFunction(IntPtr db, string name, int argc, int encoding, IntPtr data, ScalarFunction callback, IntPtr step, IntPtr final);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_value_type", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ValueType(IntPtr value);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_value_text16", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr ValueText(IntPtr value);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_value_bytes16", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ValueBytes(IntPtr value);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_result_int", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void ResultInt(IntPtr context, int value);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_result_null", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void ResultNull(IntPtr context);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_result_error16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void ResultError(IntPtr context, string message, int bytes);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_get_auxdata", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr GetAuxData(IntPtr context, int argument);
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_set_auxdata", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void SetAuxData(IntPtr context, int argument, IntPtr data, AuxDestructor destructor);
+
+    public static int RegisterPsLike(IntPtr db) {
+        // UTF16 native order. Registration belongs to the connection and is closed with it.
+        return CreateFunction(db, "pslocalbase_like", 2, 4, IntPtr.Zero, PsLikeCallback, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private static string ReadValue(IntPtr value) {
+        IntPtr text = ValueText(value);
+        return text == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUni(text, ValueBytes(value) / 2);
+    }
+
+    private static void EvaluatePsLike(IntPtr context, int argc, IntPtr argv) {
+        try {
+            IntPtr value = Marshal.ReadIntPtr(argv, 0);
+            IntPtr patternValue = Marshal.ReadIntPtr(argv, IntPtr.Size);
+            // Preserve SQL NULL behavior for both positive and negated predicates.
+            if (ValueType(value) == SQLITE_NULL || ValueType(patternValue) == SQLITE_NULL) {
+                ResultNull(context);
+                return;
+            }
+            WildcardPattern matcher;
+            IntPtr cached = GetAuxData(context, 1);
+            if (cached != IntPtr.Zero) {
+                matcher = (WildcardPattern)GCHandle.FromIntPtr(cached).Target;
+            } else {
+                matcher = new WildcardPattern(ReadValue(patternValue), WildcardOptions.IgnoreCase);
+                GCHandle handle = GCHandle.Alloc(matcher);
+                // SQLite releases this handle when the argument changes or the statement ends.
+                SetAuxData(context, 1, GCHandle.ToIntPtr(handle), PatternDestructor);
+            }
+            ResultInt(context, matcher.IsMatch(ReadValue(value)) ? 1 : 0);
+        } catch (Exception) {
+            // Never let managed exceptions cross the unmanaged callback boundary.
+            ResultError(context, "PSLocalBase -like pattern evaluation failed.", -1);
+        }
+    }
+
+    private static void ReleasePattern(IntPtr data) {
+        if (data != IntPtr.Zero) GCHandle.FromIntPtr(data).Free();
+    }
 
     // Connection lifecycle
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_open16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
@@ -149,5 +218,5 @@ public class WinSqlite3 {
     }
 }
 '@
-    Add-Type -TypeDefinition $csharpCode
+    Add-Type -TypeDefinition $csharpCode -ReferencedAssemblies ([System.Management.Automation.PSObject].Assembly.Location)
 }

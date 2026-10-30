@@ -553,6 +553,8 @@ foreach ($err in $criticalErrors) {
 
 > [!NOTE]
 > **Snapshot Isolation:** Calling `.union()` or `.unionAll()` creates an immutable snapshot of both query branches via `.clone()`. Modifying source branches afterwards does not alter the composite query. Nested unions are prohibited.
+
+Branch modifiers applied before composition remain local to that branch. Filters, ordering, projection and pagination applied after composition operate on the combined result once. `-like`/`-notlike` use the host PowerShell wildcard matcher through a SQLite scalar function with complete UTF-16 values, including NUL; SQL `LIKE` remains SQLite-native. Bracket classes remain unsupported and SQL NULL predicate behavior is preserved. Start a new PowerShell session after upgrading the native bridge.
 >
 > **Sharded Drop Protection:** Calling `.drop()` on `collectionGroup()` is strictly prohibited and throws `[System.InvalidOperationException]` to prevent accidental mass deletion across wildcard-matched tables.
 

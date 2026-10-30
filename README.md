@@ -298,6 +298,8 @@ Supported Operators:
 - Inequality: `!=`, `<>`, `-ne`
 - Comparisons: `>`, `<`, `>=`, `<=`, `-gt`, `-lt`, `-ge`, `-le`
 - Pattern Matching: `LIKE`, `-like`, `NOT LIKE`, `-notlike`
+
+`LIKE`/`NOT LIKE` use SQLite patterns. `-like`/`-notlike` use PowerShell's case-insensitive wildcard matcher inside a registered SQLite function, preserving complete strings including embedded NUL and Unicode. Bracket classes remain explicitly unsupported. SQL NULL values retain SQL predicate behavior. After upgrading the native bridge, start a fresh PowerShell session.
 - Membership: `IN`, `-in`
 - Array Membership: `array-contains`, `-contains` (matches if document array contains the scalar value)
 - Array Intersection: `array-contains-any` (matches if document array contains ANY of the given values)
@@ -421,6 +423,8 @@ Combine query results across different collections or query sharded collections 
 
 #### `.union($otherQuery)` and `.unionAll($otherQuery)`
 Merges results of two queries directly in SQL. `union` deduplicates identical records; `unionAll` keeps all records for maximum throughput.
+
+Modifiers before composition belong to their branch. Modifiers after `union()`/`unionAll()` apply once to the combined result. Both branch plans are captured independently; a branch's existing pagination or projection is not reused as global state.
 ```powershell
 $qNorth = $db.collection("users_north").where("active", "==", $true)
 $qSouth = $db.collection("users_south").where("active", "==", $true)
@@ -555,7 +559,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes a fully automated test suite runner located in `_TESTS/run-tests.ps1` covering 83 core acceptance test cases and 11 specialized suites (173 enumerated functional checks plus NativeStress cycles) (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
+PSLocalBase includes a fully automated test suite runner located in `_TESTS/run-tests.ps1` with 13 suites, including 83 core acceptance test cases (186 enumerated functional checks in total plus NativeStress cycles) (100% PASS on both Windows PowerShell 5.1 and PowerShell 7+).
 
 ### Running the Tests
 ```powershell

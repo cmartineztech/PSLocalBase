@@ -21,9 +21,9 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (11 Suites / 173 Enumerated Checks + NativeStress)
+### Complete Multi-Suite Runner Overview (13 Suites / 186 Enumerated Checks + NativeStress)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 11 focused test suites:
+The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suites:
 1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (83 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
@@ -35,8 +35,10 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 11 focused test suit
 9. `PSLocalBase.Boundary-86483c7.Tests.ps1` - Floating-point decimal quantization boundaries (3 checks).
 10. `PSLocalBase.Review-3c890fd.Tests.ps1` - Read terminal filter preservation, RHS union reuse, and synchronous options (8 checks).
 11. `PSLocalBase.Review-158582f.Tests.ps1` - Deletion query state preservation, RHS independent union snapshot, PowerShell -like wildcard matching, and RHS union query plan preservation (9 checks).
+12. `PSLocalBase.Review-fb3da3b.Tests.ps1` - Global composite pagination/projection and complete-string pattern deletion (6 checks).
+13. `PSLocalBase.Issues31-32.Tests.ps1` - Independent branch/global plans, projected JSON types, NUL/Unicode wildcard oracles, callback lifetime and SQL LIKE compatibility (7 checks).
 
-*(Note: The 173 enumerated checks represent distinct functional verification scenarios and regression groups across the 10 enumerated suites, not raw line/branch code coverage percentages. The interactive WPF GUI playground verification script `Playground/verify-playground.ps1` executes 10 GUI/WPF checks separately).*
+*(Note: The 186 enumerated checks represent distinct functional verification scenarios and regression groups across the 12 enumerated suites, not raw line/branch code coverage percentages. NativeStress also exercises complete-string pattern callbacks in its 500 statement-cleanup cycles. The interactive WPF GUI playground verification script `Playground/verify-playground.ps1` executes GUI/WPF checks separately).*
 
 ---
 

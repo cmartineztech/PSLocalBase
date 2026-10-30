@@ -230,6 +230,8 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Returns a cloned query instance configured with relational `LEFT JOIN` resolution.
 * **`[PSLocalBase] union([PSLocalBase]$otherQuery)` / `unionAll([PSLocalBase]$otherQuery)`**
   * Returns a new composite query instance capturing defensive clones of both branches. Mutations to either source branch after calling `union()` do not affect the composite query. Rejects nested unions and cross-connection queries.
+  * `UnionLeftQuery` and `UnionQuery` capture branch-local plans. The outer query starts with empty modifiers; subsequent filters/projection/order/pagination affect the combined result once. Projected branches preserve JSON boolean, array and object types.
+  * `-like` and `-notlike` invoke a connection-local SQLite scalar function backed by the host `WildcardPattern` matcher. Arguments use explicit UTF-16 lengths, including embedded NUL. Statement auxiliary data owns the cached pattern; finalization releases its GCHandle. SQL LIKE and SQL NULL behavior are unchanged; bracket classes remain rejected.
 * **`[int] count()`**
   * Returns the count of matching documents executed directly in SQL (`SELECT COUNT(*)`) with zero row deserialization in memory. Non-destructive: preserves query filter clauses for reuse.
 * **`[bool] exists()`**

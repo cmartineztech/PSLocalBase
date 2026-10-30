@@ -51,6 +51,7 @@ class PSLocalBase : System.IDisposable {
     [PSLocalBase]$ParentDb = $null
     [System.Collections.Generic.List[hashtable]]$PopulateClauses
     [PSLocalBase]$UnionQuery = $null
+    [PSLocalBase]$UnionLeftQuery = $null
     [string]$UnionType = ""
     [bool]$IsCollectionGroup = $false
     [string[]]$GroupTables = @()
@@ -85,6 +86,7 @@ class PSLocalBase : System.IDisposable {
         $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new()
         $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
         $this.UnionQuery = $null
+        $this.UnionLeftQuery = $null
         $this.UnionType = ""
         $this.IsCollectionGroup = $false
         $this.GroupTables = @()
@@ -101,6 +103,7 @@ class PSLocalBase : System.IDisposable {
         $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new()
         $this.SelectedFields = [System.Collections.Generic.List[string]]::new()
         $this.UnionQuery = $null
+        $this.UnionLeftQuery = $null
         $this.UnionType = ""
         $this.IsCollectionGroup = $false
         $this.GroupTables = @()
@@ -171,6 +174,13 @@ class PSLocalBase : System.IDisposable {
         $this.DbHandle = $handle
 
         try {
+            if ($null -eq [WinSqlite3].GetMethod('RegisterPsLike')) {
+                throw [System.InvalidOperationException]::new("Restart PowerShell to load the updated PSLocalBase native bridge.")
+            }
+            $likeRc = [WinSqlite3]::RegisterPsLike($this.DbHandle)
+            if ($likeRc -ne [WinSqlite3]::SQLITE_OK) {
+                throw [System.InvalidOperationException]::new("Failed to register PSLocalBase pattern matching (Code: $likeRc).")
+            }
             $busyMs = if ($this.config.ContainsKey("busyTimeout")) { [int]$this.config["busyTimeout"] } else { 5000 }
             [void][WinSqlite3]::BusyTimeout($this.DbHandle, $busyMs)
             $this._ExecuteDirectSql("PRAGMA busy_timeout = $busyMs;")
@@ -254,6 +264,7 @@ class PSLocalBase : System.IDisposable {
         if ($null -ne $this.PopulateClauses) { $this.PopulateClauses.Clear() }
         if ($null -ne $this.SelectedFields) { $this.SelectedFields.Clear() }
         $this.UnionQuery = $null
+        $this.UnionLeftQuery = $null
         $this.UnionType = ""
         $this.OrderByClause = ""
         $this.LimitValue = $null
@@ -597,7 +608,8 @@ class PSLocalBase : System.IDisposable {
         $copy.OrderByClause = $this.OrderByClause
         $copy.LimitValue = $this.LimitValue
         $copy.SkipValue = $this.SkipValue
-        $copy.UnionQuery = $this.UnionQuery
+        if ($null -ne $this.UnionQuery) { $copy.UnionQuery = $this.UnionQuery.clone() }
+        if ($null -ne $this.UnionLeftQuery) { $copy.UnionLeftQuery = $this.UnionLeftQuery.clone() }
         $copy.UnionType = $this.UnionType
         $copy.IsCollectionGroup = $this.IsCollectionGroup
         $copy.IsComposedInUnion = $this.IsComposedInUnion
@@ -630,6 +642,8 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
         $target = $this.clone()
+        $target._ResetQueryState()
+        $target.UnionLeftQuery = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
         $target.UnionQuery.IsComposedInUnion = $true
         $target.IsComposedInUnion = $true
@@ -651,6 +665,8 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
         }
         $target = $this.clone()
+        $target._ResetQueryState()
+        $target.UnionLeftQuery = $this.clone()
         $target.UnionQuery = $otherQuery.clone()
         $target.UnionQuery.IsComposedInUnion = $true
         $target.IsComposedInUnion = $true
@@ -1114,8 +1130,7 @@ class PSLocalBase : System.IDisposable {
             $selectPairs = [System.Collections.Generic.List[string]]::new()
             foreach ($f in $q.SelectedFields) {
                 $cleanField = $f.Trim().Replace("'", "''")
-                $selectPairs.Add("'$cleanField'")
-                $selectPairs.Add("json_extract(doc, '$.$cleanField')")
+                $selectPairs.Add("'$cleanField', CASE WHEN json_type(doc, '$.$cleanField') IN ('array', 'object') THEN json(json_extract(doc, '$.$cleanField')) WHEN json_type(doc, '$.$cleanField') = 'true' THEN json('true') WHEN json_type(doc, '$.$cleanField') = 'false' THEN json('false') ELSE json_extract(doc, '$.$cleanField') END")
             }
             $branchDocExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
         }
@@ -1346,6 +1361,16 @@ class PSLocalBase : System.IDisposable {
             }
         }
 
+        # PowerShell patterns always use complete strings, including typed pattern arguments.
+        if ($trimmedOp -eq '-LIKE' -or $trimmedOp -eq '-NOTLIKE') {
+            [void][PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
+            $matchResult = if ($trimmedOp -eq '-LIKE') { 1 } else { 0 }
+            $patternValue = if ($value -is [bool]) { [int]$value } else { $value }
+            $target.WhereClauses.Add("pslocalbase_like(json_extract(doc, '$jsonField'), ?) = $matchResult")
+            $target.WhereParameters.Add($patternValue)
+            return $target
+        }
+
         # Case C: Strongly-typed Boolean
         if ($value -is [bool]) {
             $boolLit = if ($value) { "1" } else { "0" }
@@ -1362,20 +1387,7 @@ class PSLocalBase : System.IDisposable {
             return $target
         }
 
-        # Case E: String values and pattern matching (SQL LIKE vs PowerShell -like)
-        if ($trimmedOp -eq '-LIKE') {
-            $converted = [PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
-            $target.WhereClauses.Add("json_extract(doc, '$jsonField') LIKE ? ESCAPE '\'")
-            $target.WhereParameters.Add($converted)
-            return $target
-        }
-        if ($trimmedOp -eq '-NOTLIKE') {
-            $converted = [PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
-            $target.WhereClauses.Add("json_extract(doc, '$jsonField') NOT LIKE ? ESCAPE '\'")
-            $target.WhereParameters.Add($converted)
-            return $target
-        }
-
+        # Case E: String values and native SQL LIKE patterns
         $paramVal = [string]$value
         $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
         $target.WhereParameters.Add($paramVal)
@@ -1624,7 +1636,7 @@ class PSLocalBase : System.IDisposable {
                     return @()
                 }
 
-                $q1Sql = $this._BuildBranchSelect($this, $queryParams)
+                $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
                 $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
@@ -1633,6 +1645,13 @@ class PSLocalBase : System.IDisposable {
                     [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
                 } else {
                     [void]$sqlBuilder.Append("SELECT key, doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
+                }
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                    [void]$sqlBuilder.Append(" WHERE key = ?")
+                    $queryParams.Add($this.CurrentKey)
+                } elseif ($this.WhereClauses.Count -gt 0) {
+                    [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $this.WhereClauses))
+                    $queryParams.AddRange($this.WhereParameters)
                 }
                 if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
                     [void]$sqlBuilder.Append(" $($this.OrderByClause)")
@@ -1985,20 +2004,28 @@ class PSLocalBase : System.IDisposable {
                     return 0
                 }
                 $queryParams = [System.Collections.Generic.List[object]]::new()
-                $q1Sql = $this._BuildBranchSelect($this, $queryParams)
+                $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
                 $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
 
                 $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
                 $innerUnion = "SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql)"
-                $pagedSql = $innerUnion
+                $pagedSql = "SELECT key, doc FROM ($innerUnion)"
+                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                    $pagedSql += " WHERE key = ?"
+                    $queryParams.Add($this.CurrentKey)
+                } elseif ($this.WhereClauses.Count -gt 0) {
+                    $pagedSql += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+                    $queryParams.AddRange($this.WhereParameters)
+                }
+                if (-not [string]::IsNullOrEmpty($this.OrderByClause)) { $pagedSql += " " + $this.OrderByClause }
                 if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
                     if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        $pagedSql = "$innerUnion LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
+                        $pagedSql += " LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
                     } else {
-                        $pagedSql = "$innerUnion LIMIT $($this.LimitValue)"
+                        $pagedSql += " LIMIT $($this.LimitValue)"
                     }
                 } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    $pagedSql = "$innerUnion LIMIT -1 OFFSET $($this.SkipValue)"
+                    $pagedSql += " LIMIT -1 OFFSET $($this.SkipValue)"
                 }
                 $sql = "SELECT COUNT(*) FROM ($pagedSql);"
                 $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
@@ -2933,7 +2960,11 @@ try {
                 throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
             $target = $this.clone()
+            $target._ResetQueryState()
+            $target.UnionLeftQuery = $this.clone()
             $target.UnionQuery = $otherQuery.clone()
+            $target.UnionQuery.IsComposedInUnion = $true
+            $target.IsComposedInUnion = $true
             $target.UnionType = "UNION"
             return $target
         } -Force
@@ -2955,7 +2986,11 @@ try {
                 throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
             $target = $this.clone()
+            $target._ResetQueryState()
+            $target.UnionLeftQuery = $this.clone()
             $target.UnionQuery = $otherQuery.clone()
+            $target.UnionQuery.IsComposedInUnion = $true
+            $target.IsComposedInUnion = $true
             $target.UnionType = "UNION ALL"
             return $target
         } -Force
