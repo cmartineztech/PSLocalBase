@@ -1,5 +1,7 @@
 # PSLocalBase
 
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PSLocalBase.svg?style=flat&logo=powershell&label=PowerShell%20Gallery)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0)
+[![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/PSLocalBase.svg?label=Downloads)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0)
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
@@ -91,8 +93,10 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 ## Quick Start
 
 ```powershell
-# 1. Import the module
-Import-Module .\PSLocalBase.psd1 -Force
+# 1. Install & import from PowerShell Gallery (or from source):
+Install-Module -Name PSLocalBase -Scope CurrentUser
+Import-Module PSLocalBase
+# Or from cloned source: Import-Module .\PSLocalBase.psd1 -Force
 
 # 2. Initialize database (disk file or in-memory) with optional configuration:
 $db = [PSLocalBase]::new(".\my_database.db", @{

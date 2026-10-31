@@ -1,4 +1,4 @@
-﻿# PSLocalBase Quick Start
+# PSLocalBase Quick Start
 
 A five-minute introduction. Every method used here is described in detail, with all options and edge cases, in the [Full Documentation](README.md).
 
@@ -9,7 +9,11 @@ PSLocalBase runs on Windows only, in Windows PowerShell 5.1 or PowerShell 7+, an
 ## 1. Import and open a database
 
 ```powershell
-Import-Module .\PSLocalBase.psd1
+# Install from PowerShell Gallery:
+Install-Module -Name PSLocalBase -Scope CurrentUser
+Import-Module PSLocalBase
+
+# Or import from source: Import-Module .\PSLocalBase.psd1
 
 # File on disk (parent folders are created automatically); ':memory:' for a throwaway database
 $db = New-LocalBase -Path ".\app.db"

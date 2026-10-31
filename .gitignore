@@ -28,3 +28,7 @@ $RECYCLE.BIN/
 *.html
 
 _TESTS/temp_bench_*/
+
+# Release and publish scripts
+Publish-PSLocalBase.ps1
+*.nupkg

@@ -63,7 +63,12 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 Get up and running with embedded NoSQL persistence in PowerShell in under two minutes:
 
 ```powershell
-Import-Module .\PSLocalBase.psd1 -Force
+# Install from PowerShell Gallery (Recommended):
+Install-Module -Name PSLocalBase -Scope CurrentUser
+Import-Module PSLocalBase
+
+# Or import from cloned source:
+# Import-Module .\PSLocalBase.psd1 -Force
 
 # 1. Initialize embedded database (creates file & parent folder if not present)
 $db = [PSLocalBase]::new(".\mydata.db", @{
@@ -122,7 +127,12 @@ PSLocalBase requires **zero external dependencies**, no NuGet packages, and no b
 
 ```powershell
 # Import the module manifest
-Import-Module .\PSLocalBase.psd1 -Force
+# Install from PowerShell Gallery (Recommended):
+Install-Module -Name PSLocalBase -Scope CurrentUser
+Import-Module PSLocalBase
+
+# Or import from cloned source:
+# Import-Module .\PSLocalBase.psd1 -Force
 ```
 
 ### System Requirements & Compatibility
