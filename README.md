@@ -17,6 +17,9 @@
 
 ## Table of Contents
 
+- [Installation & Getting Started](#installation--getting-started)
+  - [Option A: Install from PowerShell Gallery](#option-a-install-from-powershell-gallery-recommended)
+  - [Option B: Run from Source Code](#option-b-run-from-source-code-development--local-clone)
 - [Zero Dependencies Guarantee](#zero-dependencies-guarantee)
 - [System Requirements & Compatibility](#system-requirements--compatibility)
 - [Interactive GUI Playground (WPF)](#interactive-gui-playground-wpf)
@@ -87,6 +90,51 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
 - **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 19-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
 - **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
+
+---
+
+## Installation & Getting Started
+
+### Option A: Install from PowerShell Gallery (Recommended)
+
+PSLocalBase is published as an official module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0). Install and import it in PowerShell 7+ or Windows PowerShell 5.1:
+
+```powershell
+# Install for current user (no admin rights required):
+Install-Module -Name PSLocalBase -Scope CurrentUser
+
+# Or install for all users (requires Administrator privileges):
+Install-Module -Name PSLocalBase -Scope AllUsers
+
+# Import the module:
+Import-Module PSLocalBase
+```
+
+To update to future versions:
+```powershell
+Update-Module -Name PSLocalBase
+```
+
+---
+
+### Option B: Run from Source Code (Development / Local Clone)
+
+If you are developing, customizing the engine, running tests, or launching the visual Playground from the repository:
+
+```powershell
+# 1. Clone the repository:
+git clone https://github.com/cmartineztech/PSLocalBase.git
+cd PSLocalBase
+
+# 2. Import directly from the local manifest:
+Import-Module .\PSLocalBase.psd1 -Force
+
+# 3. (Optional) Run the complete 19-suite test runner:
+.\_TESTS\run-tests.ps1
+
+# 4. (Optional) Launch the visual GUI Playground:
+pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+```
 
 ---
 

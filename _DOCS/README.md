@@ -67,7 +67,8 @@ Get up and running with embedded NoSQL persistence in PowerShell in under two mi
 Install-Module -Name PSLocalBase -Scope CurrentUser
 Import-Module PSLocalBase
 
-# Or import from cloned source:
+# Option B: Run from Source Code (Local Repository Clone):
+# git clone https://github.com/cmartineztech/PSLocalBase.git; cd PSLocalBase
 # Import-Module .\PSLocalBase.psd1 -Force
 
 # 1. Initialize embedded database (creates file & parent folder if not present)
@@ -126,12 +127,13 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 PSLocalBase requires **zero external dependencies**, no NuGet packages, and no binary downloads. It uses Windows' native, pre-installed SQLite engine (`winsqlite3.dll`).
 
 ```powershell
-# Import the module manifest
+# Option A: Install from PowerShell Gallery (Recommended)
 # Install from PowerShell Gallery (Recommended):
 Install-Module -Name PSLocalBase -Scope CurrentUser
 Import-Module PSLocalBase
 
-# Or import from cloned source:
+# Option B: Run from Source Code (Local Repository Clone):
+# git clone https://github.com/cmartineztech/PSLocalBase.git; cd PSLocalBase
 # Import-Module .\PSLocalBase.psd1 -Force
 ```
 

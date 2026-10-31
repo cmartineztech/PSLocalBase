@@ -13,7 +13,9 @@ PSLocalBase runs on Windows only, in Windows PowerShell 5.1 or PowerShell 7+, an
 Install-Module -Name PSLocalBase -Scope CurrentUser
 Import-Module PSLocalBase
 
-# Or import from source: Import-Module .\PSLocalBase.psd1
+# Or run from cloned source:
+# git clone https://github.com/cmartineztech/PSLocalBase.git; cd PSLocalBase
+# Import-Module .\PSLocalBase.psd1 -Force
 
 # File on disk (parent folders are created automatically); ':memory:' for a throwaway database
 $db = New-LocalBase -Path ".\app.db"
