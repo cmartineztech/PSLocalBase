@@ -81,11 +81,13 @@ if (-not $DryRun -and [string]::IsNullOrWhiteSpace($resolvedKey)) {
 
 # 4. Prepare Staging Directory (Excluding Playground, _TESTS, _DOCS, .git)
 $stagingId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
-$stagingDir = Join-Path ([System.IO.Path]::GetTempPath()) "PSLocalBase_Publish_$stagingId"
+# Note: PowerShellGet requires the leaf folder name to match the module name exactly ('PSLocalBase')
+$stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) "PSLocalBase_Staging_$stagingId"
+$stagingDir = Join-Path $stagingRoot "PSLocalBase"
 
 try {
-    if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $stagingDir | Out-Null
+    if (Test-Path $stagingRoot) { Remove-Item $stagingRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
     Write-Host "Staging production files..." -ForegroundColor Gray
     $filesToPackage = @(
@@ -156,7 +158,7 @@ try {
         Write-Host "Install with: Install-Module -Name PSLocalBase" -ForegroundColor White
     }
 } finally {
-    if (Test-Path $stagingDir) {
-        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $stagingRoot) {
+        Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
