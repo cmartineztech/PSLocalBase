@@ -38,6 +38,9 @@ The code cards and the `>` prompt execute whatever PowerShell you enter, with yo
 
 ## Quick Launch
 
+> [!TIP]
+> **Zero Configuration:** The Playground automatically imports `PSLocalBase` from the local repository directory or, if downloaded standalone, from your globally installed module (`Install-Module PSLocalBase`).
+
 From PowerShell 7+ or Windows PowerShell 5.1:
 
 ```powershell

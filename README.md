@@ -58,6 +58,9 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 
 Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid inspection, interactive code tutorial cards, and an integrated execution console. The console runs any PowerShell you type with your own permissions; it is a local developer tool, not a sandbox. See the [Playground Documentation](Playground/README.md).
 
+> [!NOTE]
+> **Repository Companion Tool:** The Playground GUI is maintained in this GitHub repository as a visual development tool. The PowerShell Gallery package (`Install-Module PSLocalBase`) distributes the pure, lightweight database engine without GUI overhead. When `PSLocalBase` is installed on your machine, `Playground.ps1` runs directly out of the box.
+
 
 ---
 

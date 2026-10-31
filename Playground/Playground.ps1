@@ -65,9 +65,14 @@ function Start-PlaygroundApp {
         $modulePsd1 = Join-Path $PSScriptRoot "PSLocalBase.psd1"
     }
     if (-not (Test-Path $modulePsd1)) {
-        throw "Could not find PSLocalBase.psd1 in $parentDir or $PSScriptRoot"
+        try {
+            Import-Module PSLocalBase -Force -ErrorAction Stop
+            $modulePsd1 = $null
+        } catch {
+            throw "Could not find PSLocalBase.psd1 locally or as an installed module. Run 'Install-Module PSLocalBase' or run from the cloned repository."
+        }
     }
-    Import-Module $modulePsd1 -Force
+    if ($modulePsd1) { Import-Module $modulePsd1 -Force }
 
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
