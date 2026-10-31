@@ -1,4 +1,4 @@
-﻿# PSLocalBase Documentation & Reference Guide
+# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -83,6 +83,7 @@ $db.collection("users").doc("usr-100").set(@{
 
 # 3. Read back single document as native [PSCustomObject]
 $user = $db.collection("users").doc("usr-100").get()
+
 Write-Host "User: $($user.name) | Role: $($user.role) | Active: $($user.active)"
 
 # 4. Query collection with filtering, ordering, and pipeline formatting
@@ -132,7 +133,7 @@ Import-Module .\PSLocalBase.psd1 -Force
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 * **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows; importing on Linux or macOS throws `PlatformNotSupportedException`.
-* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 16-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
+* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 19-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
 * **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -369,8 +370,10 @@ $db.collection("temporary_data").drop()
 ## 4. Querying & Filtering
 
 ### Point Lookups
+Retrieves a single document by key as a native `[PSCustomObject]`, or `$null` if not found. Point lookups honor `limit()` and `skip()` clauses (for example, `.limit(0)` or `.skip(1)` returns `$null`).
 ```powershell
 $user = $db.collection("users").doc("usr-100").get()
+
 ```
 
 ### Collection-Wide Retrieval

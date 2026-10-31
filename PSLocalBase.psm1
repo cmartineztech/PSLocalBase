@@ -219,7 +219,7 @@ class PSLocalBase : System.IDisposable {
 
         try {
             $bridgeVersion = [WinSqlite3].GetField('BridgeVersion')
-            if ($null -eq $bridgeVersion -or [int]$bridgeVersion.GetValue($null) -lt 2) {
+            if ($null -eq $bridgeVersion -or [int]$bridgeVersion.GetValue($null) -lt 4) {
                 throw [System.InvalidOperationException]::new("Restart PowerShell to load the updated PSLocalBase native bridge.")
             }
             $this.ConnectionOwner = ('PSLocalBaseConnectionHandle' -as [type])::new($handle)
@@ -1730,6 +1730,7 @@ class PSLocalBase : System.IDisposable {
             } else {
                 "SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
             }
+            $sql = $sql.TrimEnd(';') + $this._PagingSql() + ';'
             $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
             if ($rows.Count -eq 0) {
                 return $null

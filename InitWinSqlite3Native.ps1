@@ -30,7 +30,7 @@ public sealed class PSLocalBaseConnectionHandle : SafeHandle {
 }
 
 public class WinSqlite3 {
-    public const int BridgeVersion = 2;
+    public const int BridgeVersion = 4;
     public const int SQLITE_OK = 0;
     public const int SQLITE_BUSY = 5;
     public const int SQLITE_ROW = 100;
@@ -79,7 +79,9 @@ public class WinSqlite3 {
         return CreateFunction(db, "pslocalbase_like", 2, SQLITE_UTF16 | SQLITE_DIRECTONLY, IntPtr.Zero, PsLikeCallback, IntPtr.Zero, IntPtr.Zero);
     }
 
-    // Returns the deepest object/array nesting level, ignoring brackets inside strings.
+    // Returns the deepest object/array nesting level, ignoring brackets inside double-quoted strings.
+    // Input that this scanner cannot measure reliably (JSON5 quotes or comments, unbalanced
+    // brackets, an unterminated string) reports int.MaxValue so callers reject it.
     public static int JsonNestingDepth(string json) {
         if (json == null) return 0;
         int depth = 0, max = 0;
@@ -96,10 +98,31 @@ public class WinSqlite3 {
                 if (depth > max) max = depth;
             } else if (c == '}' || c == ']') {
                 depth--;
+                if (depth < 0) return int.MaxValue;
+            } else if (c == '\'' || c == '/') {
+                return int.MaxValue;
             }
         }
+        if (inString || depth != 0) return int.MaxValue;
         return max;
     }
+
+    // Variadic sqlite3_db_config with one int argument and an optional int* result.
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_db_config", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeDbConfig(IntPtr db, int op, int value, IntPtr result);
+
+    public const int SQLITE_DBCONFIG_ENABLE_TRIGGER = 1003;
+    public const int SQLITE_DBCONFIG_DEFENSIVE = 1010;
+    public const int SQLITE_DBCONFIG_ENABLE_VIEW = 1015;
+
+    public static int DbConfig(IntPtr db, int op, int value) {
+        return NativeDbConfig(db, op, value, IntPtr.Zero);
+    }
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_limit", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int Limit(IntPtr db, int id, int newValue);
+
+    public const int SQLITE_LIMIT_LENGTH = 0;
 
     private static string ReadValue(IntPtr value) {
         IntPtr text = ValueText(value);
@@ -157,28 +180,53 @@ public class WinSqlite3 {
     [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_prepare16_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int PrepareRaw(IntPtr db, IntPtr sql, int numBytes, out IntPtr stmt, out IntPtr pzTail);
 
-    // Prepares the first statement and reports whether any further executable statement follows it.
+    // Pure SQL text recognition, including internal CREATE TRIGGER semicolons.
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_complete16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int Complete(string sql);
+
+    private static int SkipSqlTrivia(string sql, int offset) {
+        while (offset < sql.Length) {
+            char c = sql[offset];
+            if (c == ' ' || (c >= '\t' && c <= '\r') || c == '\uFEFF' || c == ';') {
+                offset++;
+            } else if (c == '-' && offset + 1 < sql.Length && sql[offset + 1] == '-') {
+                offset += 2;
+                while (offset < sql.Length && sql[offset] != '\n') offset++;
+            } else if (c == '/' && offset + 1 < sql.Length && sql[offset + 1] == '*') {
+                int end = sql.IndexOf("*/", offset + 2, StringComparison.Ordinal);
+                offset = end < 0 ? sql.Length : end + 2;
+            } else {
+                break;
+            }
+        }
+        return offset;
+    }
+
+    // Reject compound SQL before preparing even the first statement: PRAGMA
+    // can change connection state during preparation, before sqlite3_step.
     public static int PrepareSingle(IntPtr db, string sql, out IntPtr stmt, out bool hasTrailingStatement) {
         stmt = IntPtr.Zero;
         hasTrailingStatement = false;
-        IntPtr buffer = Marshal.StringToHGlobalUni(sql ?? string.Empty);
+        // SQLite stops reading at NUL, which would silently drop the rest of the text.
+        if (sql != null && sql.IndexOf('\0') >= 0) {
+            hasTrailingStatement = true;
+            return SQLITE_OK;
+        }
+        sql = sql ?? string.Empty;
+        int start = SkipSqlTrivia(sql, 0);
+        for (int i = start; i < sql.Length; i++) {
+            if (sql[i] != ';') continue;
+            int complete = Complete(sql.Substring(start, i - start + 1));
+            if (complete != 0 && complete != 1) return complete;
+            if (complete == 0) continue;
+            hasTrailingStatement = SkipSqlTrivia(sql, i + 1) < sql.Length;
+            if (hasTrailingStatement) return SQLITE_OK;
+            break;
+        }
+        IntPtr buffer = Marshal.StringToHGlobalUni(sql);
         try {
             IntPtr tail;
-            int rc = PrepareRaw(db, buffer, -1, out stmt, out tail);
-            if (rc != SQLITE_OK || tail == IntPtr.Zero) return rc;
-            string rest = Marshal.PtrToStringUni(tail);
-            if (string.IsNullOrEmpty(rest) || rest.Trim().Length == 0) return rc;
-            IntPtr next;
-            IntPtr nextTail;
-            IntPtr restBuffer = Marshal.StringToHGlobalUni(rest);
-            try {
-                int nextRc = PrepareRaw(db, restBuffer, -1, out next, out nextTail);
-                if (next != IntPtr.Zero) Finalize(next);
-                hasTrailingStatement = (nextRc != SQLITE_OK || next != IntPtr.Zero);
-            } finally {
-                Marshal.FreeHGlobal(restBuffer);
-            }
-            return rc;
+            return PrepareRaw(db, buffer, -1, out stmt, out tail);
         } finally {
             Marshal.FreeHGlobal(buffer);
         }

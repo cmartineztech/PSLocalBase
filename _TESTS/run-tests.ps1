@@ -21,7 +21,10 @@ $tests = @(
     "PSLocalBase.Issues31-32.Tests.ps1",
     "PSLocalBase.Hardening-v2.Tests.ps1",
     "PSLocalBase.Property.Tests.ps1",
-    "PSLocalBase.WalMultiProcess.Tests.ps1"
+    "PSLocalBase.WalMultiProcess.Tests.ps1",
+    "PSLocalBase.Review-v2-de8801d.Tests.ps1",
+    "PSLocalBase.PointBridge.Tests.ps1",
+    "PSLocalBase.PrepareIsolation.Tests.ps1"
 )
 
 $hostExe = (Get-Process -Id $PID).Path

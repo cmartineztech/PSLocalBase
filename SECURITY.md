@@ -43,7 +43,7 @@
   - Table names read back from `sqlite_master` (for `getCollections()` and `collectionGroup()`) are filtered with the same collection-name pattern and passed to `pragma_table_info(?)` as a bound parameter.
 - **Payload Safety & NUL Preservation:** Arbitrary user strings (including SQL syntax like `' OR '1'='1` or `'; DROP TABLE; --`) are treated strictly as literal data. Embedded NUL bytes (`\0`) within string payloads are preserved losslessly using exact byte bounds (`ColumnBytes16 / 2`).
 - **Lazy Schema Provisioning:** Referencing `.collection("name")` or `.doc("key")`, and every read, operates lazily and does not provision SQLite tables. Only writes (`.set()`, `.add()`, `.upsert()`, `.update()`, `.replaceAll()`) or `.create()` create tables, preventing unintended table pollution and resource exhaustion from arbitrary or mistyped collection names.
-- **Single-Statement `query()`:** `query()` prepares exactly one statement and rejects the call if any further executable statement follows. It is a trusted-code escape hatch: never concatenate untrusted input into its SQL (including `ATTACH` or `VACUUM INTO` paths); pass values through the parameter array.
+- **Single-Statement `query()` & Pre-Preparation Rejection:** `query()` validates statement completeness using `sqlite3_complete16` and rejects compound SQL before calling `sqlite3_prepare16_v2`. This prevents multi-statement queries from altering connection PRAGMAs (such as `ignore_check_constraints=ON` or `trusted_schema=ON`) during SQLite's preparation phase. Quoted semicolons inside strings, comments, and multi-statement trigger bodies remain fully supported. `query()` is a trusted-code interface: never concatenate untrusted input into its SQL; always pass values through the parameter array.
 
 ### 3. Source Code & Complex Payload Integrity
 - Field values containing complex scripts, code snippets (PowerShell, Python, SQL), nested quotes, backslashes, dollar signs, and multiline strings are stored and retrieved byte-for-byte identical without interpretation or corruption.
@@ -52,7 +52,7 @@
 - **Native Unicode Marshaling:** Dynamic P/Invoke layer uses UTF-16 Unicode variants (`sqlite3_open16`, `sqlite3_prepare16_v2`, `sqlite3_bind_text16`, `sqlite3_column_text16`, `sqlite3_errmsg16`) matching Windows' and .NET's native string format to prevent encoding desynchronization or buffer overflows.
 - **Leak Prevention:** All prepared SQLite statement pointers are scoped inside `try { ... } finally { [WinSqlite3]::Finalize($stmt) }` blocks to guarantee immediate destruction of unmanaged structures.
 - **Connection Ownership:** Each root connection is owned by a `SafeHandle` (`PSLocalBaseConnectionHandle`). `close()`/`Dispose()` release it deterministically; if an instance is abandoned without being closed, the finalizer calls `sqlite3_close_v2`. The NativeStress suite verifies that 20 undisposed instances return SQLite memory to its baseline after garbage collection.
-- **Fluent API State Isolation:** Document targets (`CurrentKey`) are cleared across query executions in `try/finally` blocks and reset when chaining filters, preventing accidental cross-query state leakage.
+- **Fluent API State Isolation:** Query branches are independent copies. Writes preserve their document target and query scope, including after errors.
 - **WAL Storage Boundary Validation:** Explicitly rejects UNC paths (`\\server\share`) and mapped network drives (`DriveType.Network`) to prevent SQLite shared-memory (`-shm`) corruption over SMB shares.
 - **Safe Transaction Rollback Isolation:** Handlers wrap rollback calls in guarded blocks to ensure engine-level auto-rollbacks (e.g. `SQLITE_FULL`) do not mask root exceptions.
 - **Concurrency & Lock Contention Mitigation:** Implements Write-Ahead Logging (`WAL`), configurable `synchronous` (`NORMAL` by default), and an automated 5,000 ms busy handler (`busy_timeout`). In WAL mode, readers never block writers and writers never block readers. Explicit transactions, bulk replacement and `update()` start with `BEGIN IMMEDIATE`, so concurrent writers wait for the busy timeout instead of failing on a lock upgrade; a clear error is thrown if the timeout is exceeded. The multi-process WAL suite verifies this with a Windows PowerShell 5.1 and a PowerShell 7 process writing to one file concurrently.
@@ -123,7 +123,7 @@
 
 ### 17. Session Hygiene
 - The native bridge script runs inside a script block, so importing the module leaves no helper variables (such as `$csharpCode`) in the caller's session.
-- The bridge exposes `BridgeVersion`; if an older bridge is already loaded in the session, opening a connection fails with a request to restart PowerShell instead of running against mismatched native code.
+- The bridge exposes `BridgeVersion`; version 4 or newer is required. If an older bridge is already loaded in the session, opening a connection fails with a request to restart PowerShell instead of running against mismatched native code. The failed initialization closes its connection.
 
 ---
 

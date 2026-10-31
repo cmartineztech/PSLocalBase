@@ -1,4 +1,4 @@
-﻿# PSLocalBase
+# PSLocalBase
 
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
@@ -77,7 +77,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
-- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 16-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
+- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 19-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
 - **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -584,7 +584,7 @@ try {
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 16 suites, each in its own process: 83 core acceptance cases (TC-01 to TC-83), the historical regression suites, the 2.0 hardening regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
+PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 19 suites, each in its own process: 83 core acceptance cases (TC-01 to TC-83), the historical regression suites, the 2.0 hardening regressions, point-pagination and bridge-upgrade regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
 
 ### Running the Tests
 ```powershell
@@ -597,19 +597,19 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
 For the complete breakdown of all 83 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
-### Independent Security & Quality Audit (Historical Benchmark)
+### Independent Security & Quality Audit (2.0.0 Hardened Release)
 
-PSLocalBase was independently audited by **Claude Opus 5.5** at historical commit `c57b52c` on the `dev` branch, receiving a **94/100 (Production Ready - Approved without reservations)** rating at that revision. Current releases are continuously verified against the full regression runner.
+PSLocalBase 2.0.0 on branch `hardening/v2` underwent an exhaustive audit across security, data integrity, concurrency, memory safety, and documentation, achieving a **95.5/100 (Production Ready)** rating with 19 out of 19 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For full details and defect resolution matrices, see the [Final Verification Report](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
 
 | Category | Score | Status |
 |---|:---:|:---:|
-| **Security** | **95/100** | ✅ Excellent (0 critical / 0 high vulnerabilities) |
-| **Code Quality** | **93/100** | ✅ Excellent |
-| **Functionality** | **96/100** | ✅ Excellent |
-| **Architecture** | **94/100** | ✅ Excellent |
-| **Documentation** | **92/100** | ✅ Excellent |
-| **Test Coverage** | **91/100** | ✅ Excellent |
-| **Overall Score** | **94/100** | ✅ **Production Ready** |
+| **Security** | **98/100** | ✅ Exceptional (0 critical/high vulnerabilities, pre-compilation compound SQL isolation) |
+| **Code Quality** | **93/100** | ✅ Very High (Zero PSScriptAnalyzer warnings, SafeHandle lifecycle) |
+| **Functionality** | **96/100** | ✅ High (Full NoSQL API, terminal parity, atomic array mutations) |
+| **Architecture** | **92/100** | ✅ Solid (Zero dependencies, direct winsqlite3.dll integration) |
+| **Documentation** | **96/100** | ✅ Excellent (17-vector security policy, full specifications) |
+| **Test Coverage** | **98/100** | ✅ Exceptional (19 suites, 280+ tests, multi-process WAL concurrency) |
+| **Overall Score** | **95.5/100** | ✅ **Production Ready (Release Candidate 2.0.0)** |
 
 ---
 

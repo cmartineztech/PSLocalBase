@@ -6,7 +6,12 @@ All notable changes to PSLocalBase are documented here. The project follows [Sem
 
 A hardening release driven by an independent security, code, functionality and documentation audit of 1.0.x. It fixes defects that could delete or alter data without an error, and it changes several behaviors on purpose. Read **Breaking changes** before upgrading.
 
-After upgrading, start a new PowerShell session: the native bridge (`BridgeVersion` 2) cannot replace an older one already loaded, and opening a connection in such a session fails with a request to restart.
+After upgrading, start a new PowerShell session: the native bridge (`BridgeVersion` 4) cannot replace an older one already loaded, and opening a connection in such a session fails with a request to restart.
+
+### Added
+
+- **Interactive Playground GUI (`Playground.ps1`)**: Modern Windows desktop GUI explorer with auto-detection of Windows OS dark/light theme (`AppsUseLightTheme`), manual `-Theme Light|Dark` and `-DarkMode` parameters, in-app theme toggle, native DWM dark title bar styling, direct documentation shortcut, and clean collection management (`.drop()`). Validated across both editions with automated headless runner `Playground/verify-playground.ps1`.
+- **Explicit `.drop()` method**: Fully supported collection drop lifecycle that safely purges the table and schema metadata while preserving the fluent collection instance.
 
 ### Breaking changes
 
@@ -31,6 +36,11 @@ After upgrading, start a new PowerShell session: the native bridge (`BridgeVersi
 
 ### Fixed
 
+- Compound SQL is rejected before preparing any statement, preventing preparation-time PRAGMA changes after rejection. Quoted semicolons, comments and multi-statement trigger bodies remain supported.
+
+- Point `get()` now applies the same pagination as `count()`/`exists()`; an empty point lookup returns `$null`, including `limit(0)` and nonzero `skip()`.
+- Connections require native bridge version 4 or newer. Sessions with an older bridge must restart; rejected initialization releases its connection.
+
 - A single filter value of `0` (for example `where('n', '=', 0)`) dropped its bound parameter and failed with "Parameter count mismatch" in `get()`, aggregates, `distinct()` and `collectionGroup()` queries. Found by the new property test.
 - Children of a closed root could reach a reused native handle after `Init()` reopened the root (use-after-free). Children now also check a handle generation.
 - Undisposed instances kept native connections open for the life of the process; a `SafeHandle` finalizer now releases them.
@@ -52,7 +62,7 @@ After upgrading, start a new PowerShell session: the native bridge (`BridgeVersi
 
 ### Tests and CI
 
-- New suites: `Hardening-v2` (17 regression checks that fail on 1.0.x), `Property` (seeded randomized comparison against a PowerShell model) and `WalMultiProcess` (Windows PowerShell 5.1 and PowerShell 7 writing to one WAL file concurrently).
+- New suites: `Hardening-v2` (17 regression checks that fail on 1.0.x), `Property` (seeded randomized comparison against a PowerShell model), `WalMultiProcess` (Windows PowerShell 5.1 and PowerShell 7 writing to one WAL file concurrently), `Review-v2-de8801d`, `PointBridge` (39 checks) and `PrepareIsolation` (17 checks). The full runner executes 19 suites.
 - The runner starts every suite in its own process, continues after failures and prints a summary.
 - NativeStress N03 is now an assertion: undisposed instances must return native memory to baseline.
 - TC-04, TC-38 and TC-72 were renamed to describe what they actually verify; TC-27 and TC-28 assert the new lazy `.doc()` behavior.

@@ -1,4 +1,4 @@
-﻿# Technical Specification: PSLocalBase
+# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -30,10 +30,10 @@
 A static C# class is dynamically compiled using `Add-Type` utilizing Unicode UTF-16 (`CharSet.Unicode` and `*16` variants) to guarantee lossless round-trip handling of special characters, diacritics, and multi-byte emojis without memory corruption. `InitWinSqlite3Native.ps1` compiles it as `ScriptsToProcess` because PowerShell classes need the type at parse time; the script body runs inside a script block so it leaves no variables in the caller's session.
 
 The excerpt below shows the core binding surface. The full bridge in `InitWinSqlite3Native.ps1` additionally provides:
-* `BridgeVersion` (currently `2`). `Init()` refuses to open a connection when an older bridge is already loaded in the session and asks for a PowerShell restart.
+* `BridgeVersion` (currently `4`). `Init()` refuses to open a connection when an older bridge is already loaded in the session and asks for a PowerShell restart.
 * `PSLocalBaseConnectionHandle`, a `SafeHandle` that owns each root connection and calls `sqlite3_close_v2` from its finalizer if the instance is never disposed.
 * `RegisterPsLike`, which registers the `pslocalbase_like` scalar function with `SQLITE_DIRECTONLY`, so triggers and views cannot call it.
-* `PrepareSingle`, which prepares the first statement of a `query()` call and reports whether another executable statement follows.
+* `PrepareSingle`, which validates single-statement completeness via `sqlite3_complete16` to reject compound SQL before preparation, preventing preparation-time PRAGMA side effects.
 * `DbFilename` (`sqlite3_db_filename`) and `JsonNestingDepth`, used by `deleteDatabase()` and by bounded deserialization.
 
 ```csharp
@@ -163,7 +163,7 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 * **Pushdown JSON Extraction (`json_extract`):** Powers `.where()` and `.orderBy()` clauses to evaluate properties in native C without deserializing unneeded rows into PowerShell memory.
 * **Deep Path Notation:** Translates dot-separated properties (e.g. `user.address.city`) into valid JSONPath expressions (`$.user.address.city`).
 * **Type Affinity Handling:** Maps PowerShell booleans (`$true`/`$false`) to SQLite JSON integer representation (`1`/`0`), supports SQL `IN` array operators, `LIKE` wildcards, and `NULL` / `NOT NULL` checks.
-* **Point Lookups:** Lookups by key (`.doc('id')`) target the primary key index directly: `SELECT doc FROM [table] WHERE key = ?;`.
+* **Point Lookups:** Lookups by key (`.doc('id')`) target the primary key index directly: `SELECT key, doc FROM [table] WHERE key = ?;`. Point lookups also concatenate `_PagingSql()`, ensuring `limit()` and `skip()` pagination consistency.
 
 ---
 
@@ -260,7 +260,7 @@ Writes never modify the query instance they are called on.
 * **`[double] sum([string]$field)` / `[double] avg([string]$field)` / `[object] min([string]$field)` / `[object] max([string]$field)`**
   * Executes aggregate functions inside SQLite. `sum`/`avg` use only values whose `json_type` is `integer` or `real`. `min`/`max` compare those numbers and return `[long]`/`[double]`; when there are none they compare `text` values and return a string; otherwise `$null`. Non-destructive.
 * **`[object] get([hashtable]$options)`**
-  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`). Non-destructive: leaves query state intact.
+  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`). Non-destructive: leaves query state intact. Point lookups on `.doc()` honor `limit()` and `skip()`, returning `$null` when excluded by pagination.
   * If `$options.keys = $true`, returns objects structured as `@{ key = $k; data = $v }`.
 * **`[bool] validate()`**
   * Returns `$true` when no document in the collection is NULL or fails `json_valid(doc)` (and when the collection does not exist), `$false` otherwise.
@@ -285,7 +285,7 @@ Writes never modify the query instance they are called on.
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1) (83 of 83 passing on both PowerShell 5.1 and PowerShell 7+). The full runner adds 15 more suites, including the 2.0 hardening regressions, a seeded property test and a multi-process WAL test; see [_TESTS/README.md](../_TESTS/README.md).
+The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1) (83 of 83 passing on both PowerShell 5.1 and PowerShell 7+). The full runner executes 19 suites in total (see [_TESTS/README.md](../_TESTS/README.md)).
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
@@ -299,7 +299,7 @@ The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1
 | **TC-08** | **Where Operators** | Filters booleans, numbers, strings, nulls, and `IN` lists | **PASSED** |
 | **TC-09** | **Order & Limit** | Correctly sorts numeric and string fields ascending and descending with `limit` | **PASSED** |
 | **TC-10** | **Get with Keys** | Supports `.get(@{ keys = $true })` returning structured `{ key, data }` items | **PASSED** |
-| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` to atomically replace an entire collection | **PASSED** |
+| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` / `.replaceAll(...)` to atomically replace an entire unfiltered collection | **PASSED** |
 | **TC-12** | **Cascade Deletions** | Correctly deletes single docs, filtered docs, collections, and database files | **PASSED** |
 | **TC-13** | **ACID Transactions** | Verifies rollback restores state and commit persists state | **PASSED** |
 | **TC-14** | **Cross-Collection Queries**| Supports custom SQL queries, JOINs and aggregations across collections via `.query()` | **PASSED** |
@@ -311,7 +311,7 @@ The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1
 | **TC-20** | **Configurable Depth** | Deep serialization (> 10 levels) without stringification or truncation | **PASSED** |
 | **TC-21** | **Native Memory Safety** | `sqlite3_free` memory reclamation on failed queries and platform gating | **PASSED** |
 | **TC-22** | **Query Step Validation** | Checks return codes on `sqlite3_step` and surfaces `SQLITE_BUSY` or iteration errors | **PASSED** |
-| **TC-23** | **Fluent State Isolation** | Resets `CurrentKey` across `.set()`, `.get()`, and `.update()` in `try/finally` | **PASSED** |
+| **TC-23** | **Fluent State Isolation** | Verifies independent query branches and preservation of document targets | **PASSED** |
 | **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
 | **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
 | **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |

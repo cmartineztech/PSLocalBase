@@ -1,4 +1,4 @@
-﻿# PSLocalBase Test Suite
+# PSLocalBase Test Suite
 
 Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, multi-process WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions. PSLocalBase is Windows-only; "PowerShell 7+" below means PowerShell 7 on Windows.
 
@@ -23,9 +23,9 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (16 Suites)
+### Complete Multi-Suite Runner Overview (19 Suites)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 16 suites:
+The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including `PSLocalBase.Review-v2-de8801d.Tests.ps1` (5 checks) and `PSLocalBase.PointBridge.Tests.ps1` (36 point-lookup cases and 3 isolated bridge scenarios). Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
 1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (83 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
@@ -42,6 +42,10 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 16 suites:
 14. `PSLocalBase.Hardening-v2.Tests.ps1` - 2.0 regressions: filtered bulk replace, query immutability across writes, collectionGroup unions, NULL membership, typed aggregates, ISO dates, immediate transactions, zero-valued filters, stale handles, untrusted schemas, bounded deserialization, single-statement `query()`, `deleteDatabase()` path, strict options, session hygiene (17 checks; all fail on 1.0.x).
 15. `PSLocalBase.Property.Tests.ps1` - Seeded randomized comparison of `where()` operators, pagination and `union`/`unionAll` against an independent PowerShell model (3 checks, 160 randomized rounds).
 16. `PSLocalBase.WalMultiProcess.Tests.ps1` - A Windows PowerShell 5.1 process and a PowerShell 7 process write `add()`, array unions and transactional read-modify-write increments to one WAL file at the same time; verifies no lost writes, no lock errors, and `integrity_check = ok` (1 check).
+
+17. `PSLocalBase.Review-v2-de8801d.Tests.ps1` - Point pagination and existing composite controls (5 checks).
+18. `PSLocalBase.PointBridge.Tests.ps1` - Point pagination parity and isolated native bridge upgrade scenarios (39 checks).
+19. `PSLocalBase.PrepareIsolation.Tests.ps1` - Compound SQL rejection before preparation, PRAGMA state preservation, CHECK enforcement, valid SQL/triggers and resource cleanup.
 
 *(Note: Check counts are distinct functional scenarios and regression groups, not line or branch coverage percentages. NativeStress also exercises complete-string pattern callbacks in its 500 statement-cleanup cycles. The WPF Playground verification script `Playground/verify-playground.ps1` executes GUI checks separately.)*
 
@@ -73,7 +77,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 16 suites:
 | **TC-20** | **Configurable Depth** | Deep serialization (> 10 levels) without stringification or truncation | **PASSED** |
 | **TC-21** | **Native Memory Safety** | `sqlite3_free` memory reclamation on failed queries and platform gating | **PASSED** |
 | **TC-22** | **Query Step Validation** | Checks return codes on `sqlite3_step` and surfaces `SQLITE_BUSY` or iteration errors | **PASSED** |
-| **TC-23** | **Fluent State Isolation** | Resets `CurrentKey` across `.set()`, `.get()`, and `.update()` in `try/finally` | **PASSED** |
+| **TC-23** | **Fluent State Isolation** | Verifies independent query branches and preservation of document targets | **PASSED** |
 | **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
 | **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
 | **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |
