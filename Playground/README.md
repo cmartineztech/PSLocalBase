@@ -20,11 +20,15 @@ PSLocalBase Playground includes an integrated, zero-dependency dual-theme engine
 
 ### Dark Mode (Enterprise High-Contrast)
 
-Default dark aesthetic built with deep slate canvas (`#121418`), rich surface cards (`#1C1F26`), crisp borders (`#2C313A`), and vibrant cobalt accents (`#3B82F6`).
+Default dark aesthetic built with deep slate canvas (`#121418`), rich surface cards (`#1C1F26`), crisp borders (`#2C313A`), and vibrant cobalt accents (`#3B82F6`):
+
+![PSLocalBase Playground Dark Mode](screenshots/dark-mode.png)
 
 ### Light Mode (Clean Daylight Workspace)
 
-Daylight theme optimized for high-readability environments with cool blue-gray canvas (`#F0F4FA`), pure white cards (`#FFFFFF`), subtle borders (`#D0DAE6`), and classic royal blue accents (`#2F6FED`).
+Daylight theme optimized for high-readability environments with cool blue-gray canvas (`#F0F4FA`), pure white cards (`#FFFFFF`), subtle borders (`#D0DAE6`), and classic royal blue accents (`#2F6FED`):
+
+![PSLocalBase Playground Light Mode](screenshots/light-mode.png)
 
 ## Security Model
 

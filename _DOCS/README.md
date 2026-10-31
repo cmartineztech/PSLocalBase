@@ -100,6 +100,9 @@ $db.close()
 
 Prefer a visual tool to explore documents, test queries, and generate PowerShell code with one click? Launch the built-in **WPF Playground**:
 
+![PSLocalBase Playground](../Playground/screenshots/dark-mode.png)
+
+
 ```powershell
 pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 # or
