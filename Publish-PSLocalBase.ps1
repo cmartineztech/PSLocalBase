@@ -42,6 +42,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Ensure TLS 1.2 is enabled for PowerShell Gallery (required for Windows PowerShell 5.1)
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+} catch { }
+
 # 1. Resolve root repository path
 $repoRoot = $PSScriptRoot
 if (-not $repoRoot) { $repoRoot = (Get-Location).Path }
@@ -152,7 +157,7 @@ try {
         Write-Host "  .\Publish-PSLocalBase.ps1 -NuGetApiKey 'TU_API_KEY'" -ForegroundColor White
     } else {
         Write-Host "`nPublishing PSLocalBase v$version to PowerShell Gallery (PSGallery)..." -ForegroundColor Cyan
-        Publish-Module -Path $stagingDir -NuGetApiKey $resolvedKey -Repository PSGallery -Verbose
+        Publish-Module -Path $stagingDir -NuGetApiKey $resolvedKey -Repository PSGallery -Verbose -ErrorAction Stop
         Write-Host "`n[SUCCESS] PSLocalBase v$version was published successfully to PowerShell Gallery!" -ForegroundColor Green
         Write-Host "View your published module at: https://www.powershellgallery.com/packages/PSLocalBase/$version" -ForegroundColor Cyan
         Write-Host "Install with: Install-Module -Name PSLocalBase" -ForegroundColor White
