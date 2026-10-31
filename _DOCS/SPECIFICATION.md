@@ -1,4 +1,4 @@
-﻿# Technical Specification: PSLocalBase
+# Technical Specification: PSLocalBase
 
 ## 1. Executive Summary & Scope
 
@@ -20,13 +20,21 @@
 * **Supported PowerShell Editions:**
   * Windows PowerShell 5.1 (Desktop Edition / .NET Framework 4.x).
   * PowerShell 7.x+ (Core Edition / .NET 6+).
-* **Processor Architectures:** x64 and ARM64 (resolving `winsqlite3.dll` with matching native bitness).
+* **Processor Architectures:** x64 is verified in CI and local suites. ARM64 is supported by design (the native `winsqlite3.dll` of matching bitness is resolved from System32) but is not verified in CI.
+* **Not supported:** Linux and macOS. Importing on a non-Windows PowerShell 7 host throws `PlatformNotSupportedException`.
 
 ---
 
 ## 3. P/Invoke Interoperability Layer (`WinSqlite3`)
 
-A static C# class is dynamically compiled using `Add-Type` utilizing Unicode UTF-16 (`CharSet.Unicode` and `*16` variants) to guarantee lossless round-trip handling of special characters, diacritics, and multi-byte emojis without memory corruption:
+A static C# class is dynamically compiled using `Add-Type` utilizing Unicode UTF-16 (`CharSet.Unicode` and `*16` variants) to guarantee lossless round-trip handling of special characters, diacritics, and multi-byte emojis without memory corruption. `InitWinSqlite3Native.ps1` compiles it as `ScriptsToProcess` because PowerShell classes need the type at parse time; the script body runs inside a script block so it leaves no variables in the caller's session.
+
+The excerpt below shows the core binding surface. The full bridge in `InitWinSqlite3Native.ps1` additionally provides:
+* `BridgeVersion` (currently `4`). `Init()` refuses to open a connection when an older bridge is already loaded in the session and asks for a PowerShell restart.
+* `PSLocalBaseConnectionHandle`, a `SafeHandle` that owns each root connection and calls `sqlite3_close_v2` from its finalizer if the instance is never disposed.
+* `RegisterPsLike`, which registers the `pslocalbase_like` scalar function with `SQLITE_DIRECTONLY`, so triggers and views cannot call it.
+* `PrepareSingle`, which validates single-statement completeness via `sqlite3_complete16` to reject compound SQL before preparation, preventing preparation-time PRAGMA side effects.
+* `DbFilename` (`sqlite3_db_filename`) and `JsonNestingDepth`, used by `deleteDatabase()` and by bounded deserialization.
 
 ```csharp
 using System;
@@ -123,12 +131,14 @@ public class WinSqlite3 {
 * **Database Format:** Standard SQLite `.db` file on disk or `:memory:` for ephemeral in-RAM instances.
 * **Mandatory Runtime PRAGMAs:**
   ```sql
+  PRAGMA trusted_schema = OFF;
   PRAGMA journal_mode = WAL;
   PRAGMA synchronous = NORMAL;
   PRAGMA busy_timeout = 5000;
   PRAGMA temp_store = MEMORY;
   PRAGMA cache_size = -16000;
   ```
+  - **trusted_schema = OFF:** Triggers, views, CHECK constraints and index expressions stored in a database file may only call functions SQLite marks as innocuous, which limits what an untrusted `.db` file can execute.
   - **WAL (Write-Ahead Logging):** Eliminates reader/writer concurrency lock contention. Note: WAL requires shared-memory (`-shm`) locking; therefore, UNC network paths (`\\server\share`) and mapped network drives are strictly rejected to prevent silent data corruption over SMB.
   - **synchronous = NORMAL:** Configurable via constructor $options.synchronous (EXTRA, FULL, NORMAL, OFF), defaulting to NORMAL. Maximizes throughput while retaining crash resilience against process crashes. (Note: in WAL mode, fsync to physical platter/flash occurs primarily during checkpoints, providing complete crash-safety from application termination while optimizing disk I/O).
   - **busy_timeout = 5000:** Automatically sleeps and retries up to 5,000 ms on write collisions.
@@ -145,32 +155,34 @@ CREATE TABLE IF NOT EXISTS [collection_name] (
 );
 ```
 * `key`: Unique document identifier (custom string or 32-character GUID).
-* `doc`: Compacted JSON string representation of the serialized document.
+* `doc`: Compacted JSON string representation of the serialized document. `DateTime`/`DateTimeOffset` values are written as ISO-8601 UTC text; empty or case-insensitively duplicated property names are rejected before writing.
+* Tables are created by the first write (`set`, `add`, `upsert`, `update`, `replaceAll`) or by `create()`. Navigation (`collection()`, `doc()`) and reads never create tables.
 
 ### 4.3. SQLite JSON1 Engine Integration
 All NoSQL query filtering and ordering is pushed down directly into SQLite's native JSON1 engine:
 * **Pushdown JSON Extraction (`json_extract`):** Powers `.where()` and `.orderBy()` clauses to evaluate properties in native C without deserializing unneeded rows into PowerShell memory.
 * **Deep Path Notation:** Translates dot-separated properties (e.g. `user.address.city`) into valid JSONPath expressions (`$.user.address.city`).
 * **Type Affinity Handling:** Maps PowerShell booleans (`$true`/`$false`) to SQLite JSON integer representation (`1`/`0`), supports SQL `IN` array operators, `LIKE` wildcards, and `NULL` / `NOT NULL` checks.
-* **Point Lookups:** Lookups by key (`.doc('id')`) target the primary key index directly: `SELECT doc FROM [table] WHERE key = ?;`.
+* **Point Lookups:** Lookups by key (`.doc('id')`) target the primary key index directly: `SELECT key, doc FROM [table] WHERE key = ?;`. Point lookups also concatenate `_PagingSql()`, ensuring `limit()` and `skip()` pagination consistency.
 
 ---
 
 ## 5. Class Architecture: `PSLocalBase`
 
 ### 5.1. Internal State Properties
-* `[IntPtr]$DbHandle`: Memory pointer to the open SQLite connection.
-* `[string]$FilePath`: Normalized absolute path to the database file (or `:memory:`).
-* `[string]$CurrentCollection`: Currently active collection name.
-* `[string]$CurrentKey`: Currently targeted document key.
-* `[System.Collections.ArrayList]$WhereClauses`: Accumulated SQL where filter conditions.
-* `[System.Collections.ArrayList]$WhereParameters`: Accumulated parameter values for binding.
-* `[string]$OrderByClause`: Active SQL sorting statement.
-* `[object]$LimitValue`: Maximum document count constraint.
-* `[object]$SkipValue`: Offset record count constraint.
-* `[hashtable]$config`: Configuration settings (`@{ debug = $false; depth = 20 }`).
-* `[bool]$IsChildInstance`: Identifies collection instances attached to a parent database.
-* `[bool]$IsComposedInUnion`: Tracks composite query membership to reject invalid nesting.
+Public surface: `[hashtable]$config`, `[string]$JournalMode` and the `InTransaction` script property (computed from `sqlite3_get_autocommit`). Everything else is `hidden`: it does not appear in `Get-Member` or default formatting and is not part of the supported API.
+* `hidden [IntPtr]$DbHandle`: Memory pointer to the open SQLite connection.
+* `hidden [SafeHandle]$ConnectionOwner`: Owner of the root connection; releases it on `close()` or finalization.
+* `hidden [long]$HandleGeneration`: Incremented when the root opens or closes. Child instances copy it and are rejected when it no longer matches, so a stale child can never use a reused native address.
+* `hidden [string]$FilePath`: Normalized absolute path to the database file (or `:memory:`). Informational only; `deleteDatabase()` asks SQLite for the real path.
+* `hidden [string]$CurrentCollection`: Currently active collection name, re-validated against `\A[a-zA-Z0-9_]+\z` on every operation.
+* `hidden [string]$CurrentKey`: Currently targeted document key.
+* `hidden [List[string]]$WhereClauses` / `hidden [List[object]]$WhereParameters`: Accumulated SQL conditions and bound values.
+* `hidden [string]$OrderByClause`: Active SQL sorting statement.
+* `hidden [Nullable[int]]$LimitValue` / `hidden [Nullable[int]]$SkipValue`: Pagination constraints.
+* `[hashtable]$config`: Configuration (`wal`, `synchronous`, `busyTimeout`, `cacheSizeMB`, `depth`, `maxDocumentBytes`, `maxReadDepth`, `debug`), normalized and validated in the constructor.
+* `hidden [bool]$IsChildInstance` / `hidden [PSLocalBase]$ParentDb`: Collection instances attached to the root database.
+* `hidden [bool]$IsComposedInUnion`: Tracks composite query membership to reject invalid nesting.
 
 ---
 
@@ -178,26 +190,31 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 
 #### Lifecycle & Navigation
 * **`PSLocalBase([string]$filePath, [hashtable]$options)` / `PSLocalBase([string]$filePath)` / `PSLocalBase()`**
-  * Initializes connection, verifies directories, sets busy handlers, checks network storage boundaries, and runs startup PRAGMAs. Accepts configuration options (`cacheSizeMB`, `wal`, `depth`).
+  * Initializes connection, verifies directories, sets busy handlers, checks network storage boundaries, and runs startup PRAGMAs. Accepts the configuration options listed in 5.1; booleans are parsed strictly and `depth` must be 1-100. An instance cannot be reopened after `close()`.
+* **`New-LocalBase [-Path <string>] [-Options <hashtable>]`**
+  * Exported cmdlet equivalent to `[PSLocalBase]::new($Path, $Options)`; `-Path` defaults to `:memory:`.
 * **`[void] close()` & `[void] Dispose()`**
-  * Finalizes pending statements, invokes `sqlite3_close` (with `sqlite3_close_v2` fallback), and sets `$DbHandle = [IntPtr]::Zero`.
+  * Releases the root connection through its `SafeHandle` (`sqlite3_close_v2`), sets `$DbHandle = [IntPtr]::Zero`, and advances `HandleGeneration` so existing child instances throw `Database connection is closed.`.
 * **`[string[]] listCollections()` / `[string[]] getCollections()`**
   * Returns an array of all active collection names found in the database.
 * **`[bool] collectionExists([string]$name)`**
   * Checks whether a collection table currently exists in SQLite `sqlite_master`.
 * **`[PSLocalBase] collection([string]$name)`**
-  * Validates alphanumeric regex `^[a-zA-Z0-9_]+$`, sets active collection, and returns a fresh collection instance. Navigation is lazy: does not create empty/ghost tables in SQLite.
+  * Validates `\A[a-zA-Z0-9_]+\z` (a trailing newline is rejected), sets active collection, and returns a fresh collection instance. Navigation is lazy: does not create empty/ghost tables in SQLite.
 * **`[PSLocalBase] collectionGroup([string]$pattern)`**
-  * Creates a sharded query across multiple tables matching `$pattern`. Rejects `.drop()` to prevent accidental data loss.
+  * Creates a sharded query across the tables matching `$pattern`, resolved each time the query runs. Rejects `.drop()`, writes, and `union()`/`unionAll()`.
 * **`[PSLocalBase] create()` / `[PSLocalBase] createCollection([string]$name)`**
   * Explicitly provisions the collection table in SQLite immediately.
 * **`[PSLocalBase] doc([object]$keyOrCriteria)`**
-  * Resolves key from string, number, hashtable, or criteria object, and automatically provisions the collection table in SQLite if it does not already exist.
+  * Resolves the key from a string or number, or from the `key`, `id` or `_key` property of a hashtable or object (other criteria throw `ArgumentException`). Creates no table.
 
 #### Writing & Mutations
+Writes never modify the query instance they are called on.
 * **`[void] set([object]$data, [hashtable]$options)`**
   * On a targeted document: performs an atomic `INSERT INTO ... ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` using parameterized `?` bindings.
-  * On a collection: atomically drops existing data and repopulates all records inside an ACID transaction.
+  * On a collection with an array: alias of `replaceAll()`.
+* **`[void] replaceAll([object]$items)` / `replaceAll([object]$items, [hashtable]$options)`**
+  * Atomically deletes every document and inserts `$items` inside a transaction (or a savepoint within an outer transaction). Rejected with `InvalidOperationException` when the query has `where()`, `orderBy()`, `limit()`, `skip()` or a `doc()` target.
 * **`[string] add([object]$data, [string]$customKey = "")`**
   * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes `.set()`, and returns the key.
 * **`[void] update([object]$partialData)`**
@@ -210,14 +227,14 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Performs an isolated deep clone of the active query pipeline (where clauses, bound parameters, order by, limit, skip, projections, and populates). Enables branching queries safely without cross-query mutation.
 * **`[PSLocalBase] where([string]$field, [string]$operator, [object]$value)`**
   * Returns an isolated child query instance (`clone()`) with the added condition, preserving the caller unmodified.
-  * Sanitizes field path via whitelist regex `^[a-zA-Z0-9_.\[\]]+$` supporting dot navigation and array indexing (`tags[0]`, `roles[1].title`).
-  * Sanitizes operators (`=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `not-in`, `array-contains`, `array-contains-any`, `length`, `length>`, `length>=`, `length<`, `length<=`, `length!=`, `type`, `json-type`).
-  * Enforces parameterized query binding (`?`) for string values and dynamic placeholders for `IN`.
+  * Sanitizes the (trimmed) field path via `\A[a-zA-Z0-9_]+(\[\d+\])*(\.[a-zA-Z0-9_]+(\[\d+\])*)*\z`, supporting dot navigation and array indexing (`tags[0]`, `roles[1].title`).
+  * Accepts the operators `=`, `==`, `-eq`, `!=`, `<>`, `-ne`, `>`, `-gt`, `<`, `-lt`, `>=`, `-ge`, `<=`, `-le`, `LIKE`, `NOT LIKE`, `-like`, `-notlike`, `IN`, `-in`, `not-in`/`not in`/`not_in`/`-notin`, `array-contains`/`-contains`, `array-contains-any`, `length`/`array-length`/`size` (and `length>`, `length>=`, `length<`, `length<=`, `length!=` with `size` aliases), `type`/`json-type`. Anything else throws `ArgumentException`.
+  * Binds every value as a parameter (`?`); `DateTime`/`DateTimeOffset` values are converted to ISO-8601 UTC text first. `IN` with a `$null` member adds `IS NULL`; `not-in` requires the field to be present and not null.
   * Extracts JSON fields using SQLite's native `json_extract(doc, '$.field')`.
 * **`[PSLocalBase] whereLength([string]$field, [string]$op, [int]$expected)` / `whereLength([string]$field, [int]$count)`**
-  * Returns a cloned query instance filtering documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`.
+  * Returns a cloned query instance filtering documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`. Operators: `=`, `==`, `-eq`, `!=`, `-ne`, `>`, `-gt`, `>=`, `-ge`, `<`, `-lt`, `<=`, `-le`; others throw.
 * **`[PSLocalBase] whereType([string]$field, [string]$expectedType)`**
-  * Returns a cloned query instance filtering documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `number`) via SQLite's `json_type(doc, '$.field')`.
+  * Returns a cloned query instance filtering documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `true`, `false`, plus the groups `number` and `boolean`) via SQLite's `json_type(doc, '$.field')`.
 * **`[PSLocalBase] select([string[]]$fields)`**
   * Returns a cloned query instance projecting only requested fields directly in SQLite using `json_object('field', json_extract(doc, '$.field'))`, drastically reducing PowerShell deserialization overhead and memory allocation.
 * **`[PSLocalBase] orderBy([string]$field, [string]$direction = "asc")`**
@@ -226,29 +243,33 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
   * Returns a cloned query instance with constrained result set size.
 * **`[PSLocalBase] skip([int]$offset)`**
   * Returns a cloned query instance skipping `$offset` records for offset-based query pagination (`OFFSET`).
-* **`[PSLocalBase] populate([string]$localField, [string]$targetCollection, [string]$foreignKey, [string]$asProperty)`**
-  * Returns a cloned query instance configured with relational `LEFT JOIN` resolution.
+* **`[PSLocalBase] populate([string]$foreignField)` / `populate([string]$foreignField, [string]$foreignCollection)` / `populate([string]$foreignField, [string]$foreignCollection, [string]$asProperty)` / `populate([string]$foreignField, [hashtable]$options)`**
+  * Returns a cloned query instance that `LEFT JOIN`s `$foreignCollection` on `key = json_extract(doc, '$.<foreignField>')` and embeds the matched document as `$asProperty` (default: the field name). `$options` accepts `from` and `as`. A missing foreign collection resolves every reference to `$null`.
 * **`[PSLocalBase] union([PSLocalBase]$otherQuery)` / `unionAll([PSLocalBase]$otherQuery)`**
-  * Returns a new composite query instance capturing defensive clones of both branches. Mutations to either source branch after calling `union()` do not affect the composite query. Rejects nested unions and cross-connection queries.
+  * Returns a new composite query instance capturing defensive clones of both branches. Mutations to either source branch after calling `union()` do not affect the composite query. Rejects nested unions, cross-connection queries and `collectionGroup()` on either side.
   * `UnionLeftQuery` and `UnionQuery` capture branch-local plans. The outer query starts with empty modifiers; subsequent filters/projection/order/pagination affect the combined result once. Projected branches preserve JSON boolean, array and object types.
   * `-like` and `-notlike` invoke a connection-local SQLite scalar function backed by the host `WildcardPattern` matcher. Arguments use explicit UTF-16 lengths, including embedded NUL. Statement auxiliary data owns the cached pattern; finalization releases its GCHandle. SQL LIKE and SQL NULL behavior are unchanged; bracket classes remain rejected.
 * **`[int] count()`**
   * Returns the count of matching documents executed directly in SQL (`SELECT COUNT(*)`) with zero row deserialization in memory. Non-destructive: preserves query filter clauses for reuse.
 * **`[bool] exists()`**
-  * High-performance boolean check executing `SELECT 1 ... LIMIT 1` directly in SQL ($O(1)$ on indexed lookups) without loading or deserializing documents. Non-destructive.
+  * High-performance boolean check executing `SELECT 1 ... LIMIT 1` directly in SQL ($O(1)$ on indexed lookups) without loading or deserializing documents. With `skip()`/`limit()` it returns `count() -gt 0`. Non-destructive.
 * **`[object] first([hashtable]$options)`**
-  * Retrieves the first matching document with a hardcoded `LIMIT 1` cursor on a cloned instance, returning `[PSCustomObject]` or `$null`. Does not mutate caller limits.
+  * Retrieves the first matching document with a `LIMIT 1` cursor on a cloned instance, returning `[PSCustomObject]` or `$null` (always `$null` after `limit(0)`). Does not mutate caller limits.
 * **`[object[]] distinct([string]$field)`**
-  * Extracts unique scalar values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`. Non-destructive: preserves query filter clauses for reuse. Explicitly rejected on composite queries (`union`/`unionAll`) and collection groups.
+  * Extracts unique values directly from SQLite via `SELECT DISTINCT json_extract(doc, '$.field')`, returned with their SQLite types (`[long]`, `[double]`, `[string]`). Non-destructive. Explicitly rejected on composite queries (`union`/`unionAll`) and collection groups.
 * **`[double] sum([string]$field)` / `[double] avg([string]$field)` / `[object] min([string]$field)` / `[object] max([string]$field)`**
-  * Executes aggregate functions directly inside SQLite C engine on numeric JSON fields without transferring or deserializing rows in PowerShell (`min`/`max` return `[object]` to cleanly represent `$null` when no matching records exist). Non-destructive.
+  * Executes aggregate functions inside SQLite. `sum`/`avg` use only values whose `json_type` is `integer` or `real`. `min`/`max` compare those numbers and return `[long]`/`[double]`; when there are none they compare `text` values and return a string; otherwise `$null`. Non-destructive.
 * **`[object] get([hashtable]$options)`**
-  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`). Non-destructive: leaves query state intact.
+  * Executes the query with bound parameters and returns single `[PSCustomObject]` (for `.doc()`) or strongly-typed array `[PSCustomObject[]]` (for `.collection()`). Non-destructive: leaves query state intact. Point lookups on `.doc()` honor `limit()` and `skip()`, returning `$null` when excluded by pagination.
   * If `$options.keys = $true`, returns objects structured as `@{ key = $k; data = $v }`.
 * **`[bool] validate()`**
-  * Validates collection-wide JSON document integrity against SQLite's native `json_valid(doc)` constraint.
+  * Returns `$true` when no document in the collection is NULL or fails `json_valid(doc)` (and when the collection does not exist), `$false` otherwise.
 * **`[PSCustomObject[]] query([string]$sql, [object[]]$parameters)`**
-  * Executes arbitrary custom SQL (including cross-collection `JOIN`s and aggregations) with strongly-typed parameter binding (`int64`, `double`, `string`, `null`) and parameter count parity enforcement.
+  * Executes exactly one custom SQL statement (including cross-collection `JOIN`s and aggregations) with strongly-typed parameter binding (`int64`, `double`, `string`, `null`, ISO-8601 dates) and parameter count parity enforcement. A further executable statement after the first throws.
+* **`[PSLocalBase] createIndex([string]$field)` / `createIndex([string]$field, [object]$options)`**
+  * Creates `CREATE [UNIQUE] INDEX idx_<collection>__<field>_<hash> ON [col] ((json_extract(doc, '$.<field>')) ASC|DESC)`. `$options` is `[bool]` (unique) or a hashtable with `unique` and `order`. Changing uniqueness replaces the index inside a savepoint.
+* **`[PSLocalBase] dropIndex([string]$field)`**
+  * Drops the index(es) whose definition extracts exactly `$.<field>`; the argument is a field path, not an index name.
 
 #### Deletion & Transactions
 * **`[void] delete()`**
@@ -256,29 +277,29 @@ All NoSQL query filtering and ordering is pushed down directly into SQLite's nat
 * **`[void] drop()`**
   * Explicitly drops the collection table from SQLite (`DROP TABLE IF EXISTS [col]`). Rejected on `collectionGroup()`.
 * **`[void] deleteDatabase()`**
-  * Closes root connection and physically removes `.db`, `.db-wal`, and `.db-shm` files. Must be called on root instance (rejected on child collections).
-* **`[void] beginTransaction()`**, **`[void] commit()`**, **`[void] rollback()`**
-  * Manages native ACID transactions with ground-truth tracking via `sqlite3_get_autocommit`.
+  * Reads the real path with `sqlite3_db_filename`, closes the root connection, and removes the database file and its `-wal`, `-shm` and `-journal` files. Must be called on root instance (rejected on child collections).
+* **`[void] beginTransaction()` / `beginTransaction([string]$mode)`**, **`[void] commit()`**, **`[void] rollback()`**
+  * `beginTransaction()` issues `BEGIN IMMEDIATE`; `$mode` selects `immediate`, `deferred` or `exclusive`. A failed `COMMIT` leaves `InTransaction` reflecting the still-open transaction. State is tracked via `sqlite3_get_autocommit`.
 
 ---
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1)) passing 83 out of 83 tests on both PowerShell 5.1 and PowerShell 7+:
+The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1) (83 of 83 passing on both PowerShell 5.1 and PowerShell 7+). The full runner executes 19 suites in total (see [_TESTS/README.md](../_TESTS/README.md)).
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |
 | **TC-01** | **Zero Dependencies** | Imports cleanly without NuGet, external assemblies, or network access | **PASSED** |
 | **TC-02** | **PSCustomObject Typing** | All queries return `[PSCustomObject]` with deep dot-notation navigation | **PASSED** |
 | **TC-03** | **Unicode Integrity** | Diacritics, nested quotes, and multi-byte emojis (🚀🔥🌙) stored and retrieved losslessly | **PASSED** |
-| **TC-04** | **Concurrency** | Concurrent multi-process reads and writes operate without `SQLITE_BUSY` contention | **PASSED** |
+| **TC-04** | **Cross-Connection Visibility** | Two connections to one WAL file see each other's commits (sequential; multi-process concurrency is verified by `PSLocalBase.WalMultiProcess.Tests.ps1`) | **PASSED** |
 | **TC-05** | **Pointer Release** | Calling `.close()` unbinds file handles so `Remove-Item` succeeds immediately | **PASSED** |
 | **TC-06** | **Auto & Custom Keys** | Generates GUIDs or accepts custom keys via `.add()` | **PASSED** |
 | **TC-07** | **Deep Merge Update** | `.update()` recursively updates nested objects without clobbering existing keys | **PASSED** |
 | **TC-08** | **Where Operators** | Filters booleans, numbers, strings, nulls, and `IN` lists | **PASSED** |
 | **TC-09** | **Order & Limit** | Correctly sorts numeric and string fields ascending and descending with `limit` | **PASSED** |
 | **TC-10** | **Get with Keys** | Supports `.get(@{ keys = $true })` returning structured `{ key, data }` items | **PASSED** |
-| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` to atomically replace an entire collection | **PASSED** |
+| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` / `.replaceAll(...)` to atomically replace an entire unfiltered collection | **PASSED** |
 | **TC-12** | **Cascade Deletions** | Correctly deletes single docs, filtered docs, collections, and database files | **PASSED** |
 | **TC-13** | **ACID Transactions** | Verifies rollback restores state and commit persists state | **PASSED** |
 | **TC-14** | **Cross-Collection Queries**| Supports custom SQL queries, JOINs and aggregations across collections via `.query()` | **PASSED** |
@@ -290,12 +311,12 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-20** | **Configurable Depth** | Deep serialization (> 10 levels) without stringification or truncation | **PASSED** |
 | **TC-21** | **Native Memory Safety** | `sqlite3_free` memory reclamation on failed queries and platform gating | **PASSED** |
 | **TC-22** | **Query Step Validation** | Checks return codes on `sqlite3_step` and surfaces `SQLITE_BUSY` or iteration errors | **PASSED** |
-| **TC-23** | **Fluent State Isolation** | Resets `CurrentKey` across `.set()`, `.get()`, and `.update()` in `try/finally` | **PASSED** |
+| **TC-23** | **Fluent State Isolation** | Verifies independent query branches and preservation of document targets | **PASSED** |
 | **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
 | **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
 | **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |
 | **TC-27** | **Explicit Collection Lifecycle** | Lazy collection navigation without ghost tables; explicit `.create()`, `.createCollection()`, and `.collectionExists()` | **PASSED** |
-| **TC-28** | **Target Document Auto-Provisioning** | Calling `.doc()` auto-provisions collection table; criteria key resolution via hashtable & PSCustomObject | **PASSED** |
+| **TC-28** | **Lazy Document Targeting** | Calling `.doc()` creates no table until a write; criteria key resolution via hashtable & PSCustomObject | **PASSED** |
 | **TC-29** | **Collection Schema Lifecycle** | Schema introspection via `collectionExists()`, explicit `createCollection()`, drop & immediate re-creation | **PASSED** |
 | **TC-30** | **Multiple Collection Isolation** | Data and index isolation across multiple collections; bulk overwrite and relational integrity | **PASSED** |
 | **TC-31** | **Isolated Collection State** | Independent `$users` and `$orders` instances without shared state or cross-talk | **PASSED** |
@@ -305,7 +326,7 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-35** | **SAVEPOINT Bulk Isolation** | Outer transaction rollback safety during partial bulk set failures via SQLite savepoints | **PASSED** |
 | **TC-36** | **Safe Handle Release on Open Failure** | Prevents unmanaged handle leaks on invalid/corrupt files during constructor PRAGMAs | **PASSED** |
 | **TC-37** | **Constructor Options Enforcement** | Enforces `cacheSizeMB`, `wal`, and `busyTimeout` PRAGMA settings upon database initialization | **PASSED** |
-| **TC-38** | **Atomic update() Isolation** | Immediate transaction isolation preventing lost updates during concurrent writes | **PASSED** |
+| **TC-38** | **update() Partial Merge** | A partial `update()` preserves unmodified fields and merges new ones (single connection) | **PASSED** |
 | **TC-39** | **Real-Time InTransaction Ground Truth**| Direct engine synchronization via `sqlite3_get_autocommit` reflecting raw SQL BEGIN/COMMIT | **PASSED** |
 | **TC-40** | **Typed Query & Clean Re-Import** | Strongly-typed columns and clean unwrapping on `set(get({keys}))` without wrapper nesting | **PASSED** |
 | **TC-41** | **Orphaned Collection Defense** | Guarantees orphaned child collections throw on unmanaged handle usage after owner closure | **PASSED** |
@@ -339,7 +360,7 @@ The implementation is verified by an automated test suite ([_TESTS/PSLocalBase.T
 | **TC-69** | **Array Mutation Structural JSON Equality** | Recursive structural equality for array elements preserving scalar types (numbers vs strings, booleans) | **PASSED** |
 | **TC-70** | **Atomic update() on Non-Existent Document** | Evaluates partialData via _DeepMerge against empty document, resolving array sentinels and descriptors into arrays | **PASSED** |
 | **TC-71** | **Composite Query Scoping, Projection & Connection Isolation** | Enforces connection isolation across union queries, RHS document key scoping, and projection on collectionGroup and union | **PASSED** |
-| **TC-72** | **VACUUM INTO Consistent Snapshot for Concurrent WAL Mode** | Exports complete, committed database snapshot directly from live WAL writer without uncheckpointed data loss | **PASSED** |
+| **TC-72** | **VACUUM INTO Snapshot from a Live WAL Connection** | Exports a complete, committed snapshot from an open WAL connection without losing uncheckpointed data | **PASSED** |
 | **TC-73** | **Native Lexical & ISO Timestamp Ordering for MIN / MAX** | Operates directly on json_extract without casting to REAL, preserving ISO 8601 dates and lexical text ordering | **PASSED** |
 | **TC-74** | **Accidental Collection Drop Defense on Ordered Mutation** | Rejects delete() chained with orderBy() preserving collection tables and indexes | **PASSED** |
 | **TC-75** | **Upsert Identity Auto-Provisioning & GUID Generation** | Extracts explicit document identity (key, id, _key) or generates a unique GUID, preventing arbitrary field key derivation | **PASSED** |
@@ -411,4 +432,4 @@ try {
 
 ### Multi-Client Reading over SMB Network Shares
 
-SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Full Documentation](README.md#11-reading-over-smb--network-shares) for the Staging / Snapshot pattern (`Open-LocalBaseFromSmb`) and direct read PRAGMA directives.
+SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Full Documentation](README.md#11-reading-over-smb--network-shares) for the snapshot pattern: the writer exports with `VACUUM INTO`, and each reader copies the published snapshot to a local temporary path before opening it.

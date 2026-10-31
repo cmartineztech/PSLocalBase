@@ -1,33 +1,35 @@
-﻿# PSLocalBase Test Suite
+# PSLocalBase Test Suite
 
-Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions.
+Automated regression and acceptance test suite for **PSLocalBase**, verifying zero-dependency imports, P/Invoke memory safety, ACID transactions, multi-process WAL concurrency, Unicode preservation, and fluent query isolation across all supported PowerShell editions. PSLocalBase is Windows-only; "PowerShell 7+" below means PowerShell 7 on Windows.
 
 ---
 
 ## Running the Tests
 
-You can execute the automated test runner in either Windows PowerShell 5.1 or PowerShell 7+ (Core):
+You can execute the automated test runner in either Windows PowerShell 5.1 or PowerShell 7+ on Windows:
 
 ```powershell
 # In Windows PowerShell 5.1 (Desktop):
 powershell.exe -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
-# In PowerShell 7+ (Core / Cross-Platform):
+# In PowerShell 7+ on Windows (Core):
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 ```
+
+The runner starts each suite in its own process of the same edition, so the native bridge and module state are fresh for every suite. It continues after a failing suite, prints a summary table, and exits with code 1 if any suite failed.
 
 To run individual test files directly:
 ```powershell
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (13 Suites / 186 Enumerated Checks + NativeStress)
+### Complete Multi-Suite Runner Overview (19 Suites)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suites:
+The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including `PSLocalBase.Review-v2-de8801d.Tests.ps1` (5 checks) and `PSLocalBase.PointBridge.Tests.ps1` (36 point-lookup cases and 3 isolated bridge scenarios). Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
 1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (83 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
-4. `PSLocalBase.NativeStress.Tests.ps1` - P/Invoke statement cleanup and high-concurrency lock contention (stress cycles and observations).
+4. `PSLocalBase.NativeStress.Tests.ps1` - P/Invoke statement cleanup, finalizer release of undisposed connections, and shared-memory lock contention between runspaces (5 checks plus observations).
 5. `PSLocalBase.Independent-c57b52c.Tests.ps1` - Dotted/underscore field independence and numeric privacy (7 checks).
 6. `PSLocalBase.Revalidation-3ecc2c1.Tests.ps1` - JSON path casing, legacy hash verification, and aggregation scoping (11 checks).
 7. `PSLocalBase.Review-83ed742.Tests.ps1` - Index expression migration and roundtrip mutations (7 checks).
@@ -37,8 +39,15 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 11. `PSLocalBase.Review-158582f.Tests.ps1` - Deletion query state preservation, RHS independent union snapshot, PowerShell -like wildcard matching, and RHS union query plan preservation (9 checks).
 12. `PSLocalBase.Review-fb3da3b.Tests.ps1` - Global composite pagination/projection and complete-string pattern deletion (6 checks).
 13. `PSLocalBase.Issues31-32.Tests.ps1` - Independent branch/global plans, projected JSON types, NUL/Unicode wildcard oracles, callback lifetime and SQL LIKE compatibility (7 checks).
+14. `PSLocalBase.Hardening-v2.Tests.ps1` - 2.0 regressions: filtered bulk replace, query immutability across writes, collectionGroup unions, NULL membership, typed aggregates, ISO dates, immediate transactions, zero-valued filters, stale handles, untrusted schemas, bounded deserialization, single-statement `query()`, `deleteDatabase()` path, strict options, session hygiene (17 checks; all fail on 1.0.x).
+15. `PSLocalBase.Property.Tests.ps1` - Seeded randomized comparison of `where()` operators, pagination and `union`/`unionAll` against an independent PowerShell model (3 checks, 160 randomized rounds).
+16. `PSLocalBase.WalMultiProcess.Tests.ps1` - A Windows PowerShell 5.1 process and a PowerShell 7 process write `add()`, array unions and transactional read-modify-write increments to one WAL file at the same time; verifies no lost writes, no lock errors, and `integrity_check = ok` (1 check).
 
-*(Note: The 186 enumerated checks represent distinct functional verification scenarios and regression groups across the 12 enumerated suites, not raw line/branch code coverage percentages. NativeStress also exercises complete-string pattern callbacks in its 500 statement-cleanup cycles. The interactive WPF GUI playground verification script `Playground/verify-playground.ps1` executes GUI/WPF checks separately).*
+17. `PSLocalBase.Review-v2-de8801d.Tests.ps1` - Point pagination and existing composite controls (5 checks).
+18. `PSLocalBase.PointBridge.Tests.ps1` - Point pagination parity and isolated native bridge upgrade scenarios (39 checks).
+19. `PSLocalBase.PrepareIsolation.Tests.ps1` - Compound SQL rejection before preparation, PRAGMA state preservation, CHECK enforcement, valid SQL/triggers and resource cleanup.
+
+*(Note: Check counts are distinct functional scenarios and regression groups, not line or branch coverage percentages. NativeStress also exercises complete-string pattern callbacks in its 500 statement-cleanup cycles. The WPF Playground verification script `Playground/verify-playground.ps1` executes GUI checks separately.)*
 
 ---
 
@@ -49,14 +58,14 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 | **TC-01** | **Zero Dependencies** | Imports cleanly in clean PS 5.1 & PS 7+ hosts without missing assembly errors | **PASSED** |
 | **TC-02** | **PSCustomObject Typing** | All queries return `[PSCustomObject]` supporting nested dot navigation (`$obj.a.b`) | **PASSED** |
 | **TC-03** | **Unicode Integrity** | Stores and retrieves accents, quotes, and multi-byte emojis (🚀🔥🌙) identically | **PASSED** |
-| **TC-04** | **Concurrency** | Multiple concurrent connections read/write simultaneously via WAL + busy_timeout | **PASSED** |
+| **TC-04** | **Cross-Connection Visibility** | Two connections to one WAL file see each other's commits (sequential; concurrency is covered by `WalMultiProcess`) | **PASSED** |
 | **TC-05** | **Pointer Release** | Calling `.close()` unbinds file handles so `Remove-Item` succeeds immediately | **PASSED** |
 | **TC-06** | **Auto & Custom Keys** | Auto-generates GUIDs or accepts custom keys via `.add()` | **PASSED** |
 | **TC-07** | **Deep Merge Update** | `.update()` recursively updates nested objects without clobbering existing keys | **PASSED** |
 | **TC-08** | **Where Operators** | Filters booleans, numbers, strings, nulls, and `IN` lists | **PASSED** |
 | **TC-09** | **Order & Limit** | Correctly sorts numeric and string fields ascending and descending with `limit` | **PASSED** |
 | **TC-10** | **Get with Keys** | Supports `.get(@{ keys = $true })` returning structured `{ key, data }` items | **PASSED** |
-| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` to atomically replace an entire collection | **PASSED** |
+| **TC-11** | **Collection Overwrite** | Supports `.set(@(...))` / `.replaceAll(...)` to atomically replace an entire unfiltered collection | **PASSED** |
 | **TC-12** | **Cascade Deletions** | Correctly deletes single docs, filtered docs, collections, and database files | **PASSED** |
 | **TC-13** | **ACID Transactions** | Verifies rollback restores state and commit persists state | **PASSED** |
 | **TC-14** | **Cross-Collection Queries** | Supports custom SQL queries, JOINs and aggregations across collections via `.query()` | **PASSED** |
@@ -68,12 +77,12 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 | **TC-20** | **Configurable Depth** | Deep serialization (> 10 levels) without stringification or truncation | **PASSED** |
 | **TC-21** | **Native Memory Safety** | `sqlite3_free` memory reclamation on failed queries and platform gating | **PASSED** |
 | **TC-22** | **Query Step Validation** | Checks return codes on `sqlite3_step` and surfaces `SQLITE_BUSY` or iteration errors | **PASSED** |
-| **TC-23** | **Fluent State Isolation** | Resets `CurrentKey` across `.set()`, `.get()`, and `.update()` in `try/finally` | **PASSED** |
+| **TC-23** | **Fluent State Isolation** | Verifies independent query branches and preservation of document targets | **PASSED** |
 | **TC-24** | **WAL Path Validation** | Rejects UNC network paths (`\\server\share`) and mapped network drives | **PASSED** |
 | **TC-25** | **Transaction Tracking** | Safe rollback on bulk set and error recovery without masking original exception | **PASSED** |
 | **TC-26** | **Search Path & Scalar IN** | System32 DLL search path isolation, balanced field regex, and scalar/empty `IN` handling | **PASSED** |
 | **TC-27** | **Explicit Collection Lifecycle** | Lazy collection navigation without ghost tables; explicit `.create()`, `.createCollection()`, and `.collectionExists()` | **PASSED** |
-| **TC-28** | **Target Document Auto-Provisioning** | Calling `.doc()` auto-provisions collection table; criteria key resolution via hashtable & PSCustomObject | **PASSED** |
+| **TC-28** | **Lazy Document Targeting** | Calling `.doc()` creates no table until a write; criteria key resolution via hashtable & PSCustomObject | **PASSED** |
 | **TC-29** | **Collection Schema Lifecycle** | Schema introspection via `collectionExists()`, explicit `createCollection()`, drop & immediate re-creation | **PASSED** |
 | **TC-30** | **Multiple Collection Isolation** | Data and index isolation across multiple collections; bulk overwrite and relational integrity | **PASSED** |
 | **TC-31** | **Isolated Collection Reference State** | Independent `$users` and `$orders` instances without shared state or cross-talk | **PASSED** |
@@ -83,7 +92,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 | **TC-35** | **SAVEPOINT Bulk Isolation** | Outer transaction rollback safety during partial bulk set failures via SQLite savepoints | **PASSED** |
 | **TC-36** | **Safe Handle Release on Open Failure** | Prevents unmanaged handle leaks on invalid/corrupt files during constructor PRAGMAs | **PASSED** |
 | **TC-37** | **Constructor Options Enforcement** | Enforces `cacheSizeMB`, `wal`, and `busyTimeout` PRAGMA settings upon database initialization | **PASSED** |
-| **TC-38** | **Atomic update() Isolation** | Immediate transaction isolation preventing lost updates during concurrent writes | **PASSED** |
+| **TC-38** | **update() Partial Merge** | A partial `update()` preserves unmodified fields and merges new ones (single connection) | **PASSED** |
 | **TC-39** | **Real-Time InTransaction Ground Truth**| Direct engine synchronization via `sqlite3_get_autocommit` reflecting raw SQL BEGIN/COMMIT | **PASSED** |
 | **TC-40** | **Typed Query & Clean Re-Import** | Strongly-typed columns and clean unwrapping on `set(get({keys}))` without wrapper nesting | **PASSED** |
 | **TC-41** | **Orphaned Collection Defense** | Guarantees orphaned child collections throw on unmanaged handle usage after owner closure | **PASSED** |
@@ -117,7 +126,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 | **TC-69** | **Array Mutation Structural JSON Equality** | Recursive structural equality for array elements preserving scalar types (numbers vs strings, booleans) and normalizing object key order | **PASSED** |
 | **TC-70** | **Atomic update() on Non-Existent Document** | Evaluates partialData via _DeepMerge against empty document, resolving array sentinels and descriptors into arrays | **PASSED** |
 | **TC-71** | **Composite Query Scoping & Connection Isolation** | Enforces connection isolation across union queries, RHS document key scoping, and projection on collectionGroup and union | **PASSED** |
-| **TC-72** | **VACUUM INTO Consistent Snapshot for WAL Mode** | Exports complete, committed database snapshot directly from live WAL writer without uncheckpointed data loss | **PASSED** |
+| **TC-72** | **VACUUM INTO Snapshot from a Live WAL Connection** | Exports a complete, committed snapshot from an open WAL connection without losing uncheckpointed data | **PASSED** |
 | **TC-73** | **Native Lexical & ISO Timestamp MIN / MAX** | Operates directly on json_extract without casting to REAL, preserving ISO 8601 dates and lexical text ordering | **PASSED** |
 | **TC-74** | **Accidental Collection Drop Defense on Ordered Mutation** | Rejects delete() chained with orderBy() preserving collection tables and indexes | **PASSED** |
 | **TC-75** | **Upsert Identity Auto-Provisioning & GUID Generation** | Extracts explicit document identity (key, id, _key) or generates a unique GUID, preventing arbitrary field key derivation | **PASSED** |
@@ -126,6 +135,6 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 13 focused test suit
 | **TC-78** | **Point-Lookup Scope Preservation in Composite Queries** | Prevents early single-document return in get() when chained with union() or collectionGroup() | **PASSED** |
 | **TC-79** | **Missing Branch Parameter Isolation in Composite Queries** | Isolates query parameter bindings so non-existent collections in union queries do not cause parameter count mismatches | **PASSED** |
 | **TC-80** | **Array Type Enforcement for Array Operators** | Enforces json_type = 'array' for array-contains and array-contains-any, excluding scalar and object matches | **PASSED** |
-| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Enforces IEEE underflow threshold (< 1e-28) preventing collision between Double and Decimal in ArrayUnion/ArrayRemove | **PASSED** |
+| **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Guards Doubles below Decimal resolution (\|x\| < 1e-28) so they never equal a non-zero Decimal in ArrayUnion/ArrayRemove | **PASSED** |
 | **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
 | **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |

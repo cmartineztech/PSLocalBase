@@ -60,22 +60,18 @@ $afterDisposed = [PSLocalBaseAuditNative]::MemoryUsed()
 if ($afterDisposed -ne $baseline) { throw "Native bytes differ after disposal: baseline=$baseline after=$afterDisposed" }
 Write-Host "[PASS] N02 - 100 disposed databases return SQLite allocations to baseline ($baseline bytes)."
 
-# A raw pointer list permits deterministic cleanup without retaining wrappers.
-# This is an architectural diagnostic: IDisposable still requires caller use.
-$retainedHandles = [System.Collections.Generic.List[IntPtr]]::new()
-try {
-    for ($i = 0; $i -lt 20; $i++) {
-        $abandoned = New-LocalBase
-        $abandoned.collection('items').doc('one').set(@{ value = ('x' * 65536) })
-        $retainedHandles.Add($abandoned.DbHandle)
-        $abandoned = $null
-    }
-    [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
-    $afterAbandoned = [PSLocalBaseAuditNative]::MemoryUsed()
-    Write-Host "[OBSERVATION] N03 - 20 undisposed wrappers after GC retain $($afterAbandoned - $baseline) native bytes."
-} finally {
-    foreach ($handle in $retainedHandles) { [void][WinSqlite3]::CloseV2($handle) }
+# Undisposed wrappers are released by the connection SafeHandle finalizer.
+for ($i = 0; $i -lt 20; $i++) {
+    $abandoned = New-LocalBase
+    $abandoned.collection('items').doc('one').set(@{ value = ('x' * 65536) })
+    $abandoned = $null
 }
+for ($attempt = 0; $attempt -lt 5 -and [PSLocalBaseAuditNative]::MemoryUsed() -ne $baseline; $attempt++) {
+    [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
+}
+$afterAbandoned = [PSLocalBaseAuditNative]::MemoryUsed()
+if ($afterAbandoned -ne $baseline) { throw "Undisposed wrappers retained native memory after GC: baseline=$baseline after=$afterAbandoned" }
+Write-Host "[PASS] N03 - 20 undisposed wrappers are closed by the finalizer; native memory returned to baseline."
 
 function New-SharedConnection([string]$Name) {
     $connection = New-LocalBase

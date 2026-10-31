@@ -1,697 +1,106 @@
-﻿# PSLocalBase Documentation & Quick Start Guide
+﻿# PSLocalBase Quick Start
 
-Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
+A five-minute introduction. Every method used here is described in detail, with all options and edge cases, in the [Full Documentation](README.md).
 
----
-
-## Table of Contents
-
-- [Quick Start in 2 Minutes](#quick-start-in-2-minutes)
-- [Visual Explorer: Interactive GUI Playground](#visual-explorer-interactive-gui-playground)
-- [1. Installation & Import](#1-installation--import)
-- [2. Database Initialization](#2-database-initialization)
-  - [Standard File-Based Persistence](#standard-file-based-persistence)
-  - [In-Memory Ephemeral Database](#in-memory-ephemeral-database)
-  - [Helper Cmdlet: `New-LocalBase`](#helper-cmdlet-new-localbase)
-- [3. Collections & Document Lifecycle](#3-collections--document-lifecycle)
-  - [Collection Navigation (`collection`)](#collection-navigation-collection)
-  - [Listing Collections (`getCollections`, `listCollections`)](#listing-collections-getcollections-listcollections)
-  - [Collection Existence Check (`collectionExists`)](#collection-existence-check-collectionexists)
-  - [Explicit Collection Creation (`create`, `createCollection`)](#explicit-collection-creation-create-createcollection)
-  - [Targeting Documents (`doc`)](#targeting-documents-doc)
-  - [Insert with Custom Key (`set`)](#insert-with-custom-key-set)
-  - [Insert with Auto-Generated GUID (`add`)](#insert-with-auto-generated-guid-add)
-  - [Atomic Upsert (`upsert`)](#atomic-upsert-upsert)
-  - [Bulk Insert Entire Collection](#bulk-insert-entire-collection)
-  - [Partial Update / Deep Merge (`update`)](#partial-update--deep-merge-update)
-  - [Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)](#atomic-array-mutations-arrayunion-arrayremove)
-  - [Secondary Expression Indexes (`createIndex`, `dropIndex`)](#secondary-expression-indexes-createindex-dropindex)
-  - [Storage Integrity & Validation (`validate`)](#storage-integrity--validation-validate)
-  - [Deleting Documents & Dropping Collections (`delete`, `drop`)](#deleting-documents--dropping-collections-delete-drop)
-- [4. Querying & Filtering](#4-querying--filtering)
-  - [Point Lookups](#point-lookups)
-  - [Collection-Wide Retrieval](#collection-wide-retrieval)
-  - [First Matching Record (`first`)](#first-matching-record-first)
-  - [O(1) Existence Verification (`exists`)](#o1-existence-verification-exists)
-  - [Selective Field Projection (`select`)](#selective-field-projection-select)
-  - [Distinct Values (`distinct`)](#distinct-values-distinct)
-  - [Filtering with `where()`](#filtering-with-where)
-  - [Array Membership & Intersection (`array-contains`, `array-contains-any`)](#array-membership--intersection-array-contains-array-contains-any)
-  - [Array Length Filtering (`whereLength`, `length`)](#array-length-filtering-wherelength-length)
-  - [Data Type Filtering (`whereType`, `type`)](#data-type-filtering-wheretype-type)
-  - [Array Index Filtering](#array-index-filtering)
-  - [Counting Records (`count`)](#counting-records-count)
-  - [Mathematical Aggregations (`sum`, `avg`, `min`, `max`)](#mathematical-aggregations-sum-avg-min-max)
-  - [Sorting & Pagination (`orderBy`, `skip`, `limit`)](#sorting--pagination-orderby-skip-limit)
-  - [Exposing Primary Keys (`keys = $true`)](#exposing-primary-keys-keys--true)
-  - [Query Immutability, Reusability & Branch Forking (`clone`, `fork`)](#query-immutability-reusability--branch-forking-clone-fork)
-- [5. Relational Lookups with `.populate()`](#5-relational-lookups-with-populate)
-- [6. Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)](#6-compound-queries--sharding-union-unionall-collectiongroup)
-- [7. Raw Cross-Collection Queries (`query`)](#7-raw-cross-collection-queries-query)
-- [8. Atomic ACID Transactions](#8-atomic-acid-transactions)
-- [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
-- [10. PowerShell Pipeline Integration & Object Standard](#10-powershell-pipeline-integration--object-standard)
-- [11. Reading Over SMB / Network Shares](#11-reading-over-smb--network-shares)
-  - [Why Direct SMB Access is Blocked](#why-direct-smb-access-is-blocked)
-  - [Writer Pattern: Publishing Consistent Snapshots via VACUUM INTO](#writer-pattern-publishing-consistent-snapshots-via-vacuum-into)
-  - [Client Pattern: Safe Local Temp Consumption](#client-pattern-safe-local-temp-consumption)
----
-
-## Quick Start in 2 Minutes
-
-Get up and running with embedded NoSQL persistence in PowerShell in under two minutes:
-
-```powershell
-Import-Module .\PSLocalBase.psd1 -Force
-
-# 1. Initialize embedded database (creates file & parent folder if not present)
-$db = [PSLocalBase]::new(".\mydata.db", @{
-    cacheSizeMB = 16      # Warm memory cache (default: 16 MB)
-    wal         = $true   # High-concurrency WAL mode (default: true)
-    depth       = 20      # Max JSON serialization depth (default: 20)
-})
-
-# 2. Insert documents (point set with custom key or auto-generated GUID)
-$db.collection("users").doc("usr-100").set(@{
-    name       = "Carlos Martinez"
-    role       = "Admin"
-    department = "Engineering"
-    active     = $true
-    skills     = @("PowerShell", "SQLite", "Cloud")
-})
-
-# 3. Read back single document as native [PSCustomObject]
-$user = $db.collection("users").doc("usr-100").get()
-Write-Host "User: $($user.name) | Role: $($user.role) | Active: $($user.active)"
-
-# 4. Query collection with filtering, ordering, and pipeline formatting
-$admins = $db.collection("users").where("role", "=", "Admin").orderBy("name", "asc").get()
-$admins | Format-Table name, department, role, active
-
-# 5. Clean close to release file handles
-$db.close()
-```
+PSLocalBase runs on Windows only, in Windows PowerShell 5.1 or PowerShell 7+, and has no dependencies beyond the `winsqlite3.dll` that ships with Windows.
 
 ---
 
-## Visual Explorer: Interactive GUI Playground
-
-Prefer a visual tool to explore documents, test queries, and generate PowerShell code with one click? Launch the built-in **WPF Playground**:
+## 1. Import and open a database
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
-# or
-powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+Import-Module .\PSLocalBase.psd1
+
+# File on disk (parent folders are created automatically); ':memory:' for a throwaway database
+$db = New-LocalBase -Path ".\app.db"
 ```
 
-* **Interactive Query Builder:** Build and execute `.where()`, `.orderBy()`, `.limit()`, and `.count()` with immediate feedback.
-* **Live PowerShell Code Snippets:** Copy generated PowerShell syntax directly to your clipboard.
-* **Seed Demo Data:** 1-click loading of realistic users, products, and orders datasets.
-* **Theme Switching:** Sleek dark and light themes with automatic Windows OS theme detection.
-
----
-
-## 1. Installation & Import
-
-PSLocalBase requires **zero external dependencies**, no NuGet packages, and no binary downloads. It uses Windows' native, pre-installed SQLite engine (`winsqlite3.dll`).
+Always close the database when you are done, ideally in a `finally` block:
 
 ```powershell
-# Import the module manifest
-Import-Module .\PSLocalBase.psd1 -Force
-```
-
-Compatible with:
-* **Windows PowerShell 5.1** (Desktop Edition / .NET Framework 4.x)
-* **PowerShell 7.x+** (Core Edition / .NET 6+) on Windows 10, Windows 11, Windows Server 2019+, and WinPE x64.
-
----
-
-## 2. Database Initialization
-
-### Standard File-Based Persistence
-Creates or opens a SQLite database file on disk. Parent directories are created automatically if they do not exist.
-
-```powershell
-# Method A: Using the standard class constructor
-$db = [PSLocalBase]::new(".\app_data.db")
-
-# Method B: With performance & serialization tuning options
-$db = [PSLocalBase]::new(".\app_data.db", @{
-    cacheSizeMB = 32      # 32 MB warm page cache (default: 16)
-    wal         = $true   # Write-Ahead Logging (default: true)
-    depth       = 20      # JSON serialization depth limit (default: 20)
-    busyTimeout = 5000    # Retry timeout on locks in ms (default: 5000)
-})
-```
-
-### In-Memory Ephemeral Database
-Lives exclusively in RAM with zero disk footprints. Ideal for testing, temporary caching, and CI/CD pipelines.
-
-```powershell
-$db = [PSLocalBase]::new(":memory:")
-```
-
-### Helper Cmdlet: `New-LocalBase`
-You can also initialize instances using standard PowerShell cmdlet syntax:
-
-```powershell
-# In-memory
-$db = New-LocalBase
-
-# File-based
-$db = New-LocalBase -Path "C:\Data\app.db"
-```
-
----
-
-## 3. Collections & Document Lifecycle
-
-Collections map to isolated SQLite tables. Collection navigation is **lazy**: referencing a collection (`$db.collection("name")`) or querying it does not create ghost/empty tables until documents are written.
-
-### Collection Navigation (`collection`)
-```powershell
-$col = $db.collection("orders")
-```
-
-### Listing Collections (`getCollections`, `listCollections`)
-Returns an array of all collection names present in the active database:
-```powershell
-$names = $db.getCollections()
-# Returns: @("users", "products", "orders")
-```
-
-### Collection Existence Check (`collectionExists`)
-```powershell
-if (-not $db.collectionExists("audit_logs")) {
-    $db.createCollection("audit_logs")
-}
-```
-
-### Explicit Collection Creation (`create`, `createCollection`)
-Pre-provisions the collection table in SQLite immediately without requiring initial documents:
-```powershell
-# Fluent chaining:
-$db.collection("audit_logs").create()
-
-# Direct method:
-$db.createCollection("audit_logs")
-```
-
-### Targeting Documents (`doc`)
-Targets a document either by its unique string key or by an object/hashtable criteria:
-```powershell
-# By string key:
-$db.collection("users").doc("usr-100")
-
-# By criteria hashtable:
-$db.collection("users").doc(@{ id = "usr-100" })
-```
-
-### Insert with Custom Key (`set`)
-```powershell
-$db.collection("users").doc("usr-100").set(@{
-    name       = "Carlos Martinez"
-    role       = "Lead Architect"
-    active     = $true
-    department = "Engineering"
-    skills     = @("PowerShell", "SQLite", "Security")
-})
-```
-
-### Insert with Auto-Generated GUID (`add`)
-Generates a unique 32-character GUID key and returns it:
-```powershell
-$logId = $db.collection("audit_logs").add(@{
-    action    = "UserLogin"
-    userId    = "usr-100"
-    timestamp = (Get-Date).ToString("o")
-})
-Write-Host "Created audit record with ID: $logId"
-```
-
-### Atomic Upsert (`upsert`)
-Inserts the document if it does not exist, or updates it atomically if the key already exists (`INSERT ... ON CONFLICT(key) DO UPDATE`):
-```powershell
-# Upsert with explicit custom key:
-$db.collection("devices").upsert(@{ serial = "SN-100"; status = "online" }, "dev-1")
-
-# Upsert with criteria object:
-$db.collection("devices").upsert(@{ id = "dev-1"; serial = "SN-100"; status = "online" })
-
-# Or using fluent .doc() chaining:
-$db.collection("devices").doc("dev-1").upsert(@{ serial = "SN-100"; status = "standby" })
-```
-
-### Bulk Insert Entire Collection
-Atomically replaces the entire collection with an array of objects:
-```powershell
-$products = @(
-    @{ id = "prod-1"; name = "Mechanical Keyboard"; price = 120.00; stock = 45 },
-    @{ id = "prod-2"; name = "Wireless Mouse";     price = 45.50;  stock = 120 },
-    @{ id = "prod-3"; name = "USB-C Hub";           price = 35.00;  stock = 80 }
-)
-$db.collection("products").set($products)
-```
-
-### Partial Update / Deep Merge (`update`)
-Performs a deep recursive merge into the targeted document using SQLite's native `json_patch()`. Existing properties remain untouched:
-```powershell
-$db.collection("users").doc("usr-100").update(@{
-    role    = "Principal Architect"
-    profile = @{
-        title = "Staff Fellow"
-    }
-})
-```
-
-### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
-Atomically mutate arrays inside documents without reading-modifying-writing the whole document:
-
-```powershell
-# Add tags without duplicates
-$db.collection("users").doc("usr-100").update(@{
-    skills = [PSLocalBase]::ArrayUnion("C#", "Security")
-})
-
-# Remove elements from array
-$db.collection("users").doc("usr-100").update(@{
-    skills = [PSLocalBase]::ArrayRemove("Security")
-})
-
-# Descriptor syntax also supported
-$db.collection("users").doc("usr-100").update(@{
-    skills = @{ '$arrayUnion' = @("CloudArchitecture") }
-})
-```
-
-> [!TIP]
-> **Numeric Precision & Subnormals:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons and preserve floating-point values below Decimal resolution (`|Double| < 1e-28`), preventing quantization loss and collisions between `Double` and `Decimal` types.
-
-### Secondary Expression Indexes (`createIndex`, `dropIndex`)
-Create native B-Tree indexes on document JSON fields for sub-millisecond querying over millions of records:
-
-```powershell
-# Standard secondary expression index
-$db.collection("users").createIndex("idx_users_role", "role")
-
-# Unique constraint index (throws exception on duplicate values)
-$db.collection("users").createIndex("idx_users_email", "email", $true)
-
-# Drop an index cleanly
-$db.collection("users").dropIndex("idx_users_role")
-```
-
-### Storage Integrity & Validation (`validate`)
-Every collection table is created with a strict table-level constraint:
-```sql
-doc TEXT NOT NULL CHECK (json_valid(doc))
-```
-To run an instant health audit on any collection:
-```powershell
-$report = $db.collection("users").validate()
-# Returns:
-# collection       : users
-# isValid          : True
-# totalRecords     : 10000
-# corruptedRecords : 0
-```
-
-### Deleting Documents & Dropping Collections (`delete`, `drop`)
-```powershell
-# Delete single targeted document
-$db.collection("users").doc("usr-100").delete()
-
-# Delete matching filtered documents
-$db.collection("audit_logs").where("timestamp", "<", (Get-Date).AddDays(-30).ToString("o")).delete()
-
-# Drop entire collection table
-$db.collection("temporary_data").drop()
-```
-
----
-
-## 4. Querying & Filtering
-
-### Point Lookups
-```powershell
-$user = $db.collection("users").doc("usr-100").get()
-```
-
-### Collection-Wide Retrieval
-```powershell
-$allUsers = $db.collection("users").get()
-```
-
-### First Matching Record (`first`)
-Retrieves the first matching document or returns `$null` without buffering arrays:
-```powershell
-$admin = $db.collection("users").where("role", "==", "Admin").first()
-```
-
-### O(1) Existence Verification (`exists`)
-Instantly checks if a record exists using `SELECT 1 ... LIMIT 1`:
-```powershell
-# Point lookup existence
-if ($db.collection("users").doc("usr-100").exists()) {
-    Write-Host "User exists!"
-}
-
-# Query existence
-if ($db.collection("products").where("stock", "<=", 0).exists()) {
-    Write-Host "Warning: Out-of-stock items detected."
-}
-```
-
-### Selective Field Projection (`select`)
-Extracts and builds smaller JSON objects directly inside SQLite's C engine, reducing memory overhead:
-```powershell
-$users = $db.collection("users").select("name", "department").get()
-```
-
-### Distinct Values (`distinct`)
-Retrieves deduplicated unique values leveraging SQLite B-Tree index scans:
-```powershell
-$roles = $db.collection("users").distinct("role")
-# Returns: @("Admin", "Developer", "Manager")
-```
-
-### Filtering with `where()`
-Supports chained filtering pushed down directly to SQLite's `json_extract()`:
-
-```powershell
-# Numeric comparisons
-$db.collection("products").where("price", "<=", 50.00).get()
-
-# Equality
-$db.collection("users").where("active", "==", $true).get()
-
-# String wildcards (LIKE)
-$db.collection("users").where("name", "LIKE", "%Martinez%").get()
-
-# Set inclusion (IN)
-$db.collection("users").where("role", "IN", @("Admin", "Lead Architect")).get()
-
-# Set exclusion (not-in)
-$db.collection("users").where("role", "not-in", @("Guest", "Disabled")).get()
-
-# Nested dot paths
-$db.collection("orders").where("shipping.address.city", "==", "Seattle").get()
-```
-
-### Array Membership & Intersection (`array-contains`, `array-contains-any`)
-```powershell
-# Check if array contains a specific item
-$devs = $db.collection("users").where("skills", "array-contains", "PowerShell").get()
-
-# Check if array intersects with a set of items
-$specialists = $db.collection("users").where("skills", "array-contains-any", @("Security", "Cloud")).get()
-```
-
-### Array Length Filtering (`whereLength`, `length`)
-Evaluates array size directly in C using SQLite's `json_array_length()`:
-```powershell
-# Dedicated fluent method
-$db.collection("orders").whereLength("items", ">", 3).get()
-
-# Operator syntax inside .where()
-$db.collection("users").where("skills", "length", "==", 5).get()
-```
-
-### Data Type Filtering (`whereType`, `type`)
-Inspects dynamic document schemas using SQLite's `json_type()` (`null`, `integer`, `real`, `text`, `array`, `object`):
-```powershell
-# Dedicated fluent method
-$db.collection("events").whereType("metadata", "==", "object").get()
-
-# Operator syntax inside .where()
-$db.collection("metrics").where("value", "type", "integer").get()
-```
-
-### Array Index Filtering
-Target specific array offsets using standard JSONPath indexing:
-```powershell
-$db.collection("orders").where("items[0].sku", "==", "KB-100").get()
-```
-
-### Counting Records (`count`)
-```powershell
-# Total collection count
-$totalUsers = $db.collection("users").count()
-
-# Filtered count
-$adminCount = $db.collection("users").where("role", "==", "Admin").count()
-```
-
-### Mathematical Aggregations (`sum`, `avg`, `min`, `max`)
-Performs calculations directly inside the native SQLite engine without bringing documents into PowerShell:
-```powershell
-$totalSales = $db.collection("orders").sum("totalAmount")
-$averageAge = $db.collection("users").avg("age")
-$cheapest   = $db.collection("products").min("price")
-$latestDate = $db.collection("audit_logs").max("timestamp")
-```
-
-### Sorting & Pagination (`orderBy`, `skip`, `limit`)
-```powershell
-$pagedUsers = $db.collection("users") `
-    .where("active", "==", $true) `
-    .orderBy("name", "asc") `
-    .skip(20) `
-    .limit(10) `
-    .get()
-```
-
-### Exposing Primary Keys (`keys = $true`)
-```powershell
-$records = $db.collection("users").get(@{ keys = $true })
-foreach ($r in $records) {
-    Write-Host "Key: $($r.key) | Data: $($r.data.name)"
-}
-```
-
-### Query Immutability, Reusability & Branch Forking (`clone`, `fork`)
-
-Query modifiers (`where()`, `whereLength()`, `whereType()`, `orderBy()`, `limit()`, `skip()`, `select()`, `populate()`) are strictly **immutable**: each call returns a new isolated child query instance without modifying the parent.
-
-Furthermore, terminal methods (`get()`, `count()`, `exists()`, `distinct()`, `sum()`, `avg()`, `min()`, `max()`) are **non-destructive** and do not wipe filters:
-
-```powershell
-# Define base query
-$activeUsers = $db.collection("users").where("active", "==", $true)
-
-# Reuse the query definition multiple times
-$totalActive = $activeUsers.count()
-$firstActive = $activeUsers.first()
-
-# Safely branch / fork without mutating $activeUsers
-$adminUsers = $activeUsers.where("role", "==", "Admin").get()
-$guestUsers = $activeUsers.where("role", "==", "Guest").get()
-
-# Explicit clone / fork
-$customBranch = $activeUsers.clone().orderBy("name", "asc")
-```
-
----
-
-## 5. Relational Lookups with `.populate()`
-
-Resolve foreign keys and joins across collections in a single native SQLite query, completely eliminating N+1 loop queries:
-
-```powershell
-# Embed customer user document into the order object
-$ordersWithCustomers = $db.collection("orders") `
-    .populate("customerId", "users", "customer") `
-    .get()
-
-foreach ($order in $ordersWithCustomers) {
-    Write-Host "Order: $($order.orderId) | Placed By: $($order.customer.name)"
-}
-```
-
----
-
-## 6. Compound Queries & Sharding (`union`, `unionAll`, `collectionGroup`)
-
-### Compound Queries (`union`, `unionAll`)
-Merge results across multiple distinct collections into a unified query:
-```powershell
-$activeQuery = $db.collection("active_orders").where("total", ">", 100)
-$archiveQuery = $db.collection("archived_orders").where("total", ">", 100)
-
-# Deduplicated UNION
-$allBigOrders = $activeQuery.union($archiveQuery).orderBy("total", "desc").get()
-
-# High-speed UNION ALL (without deduplication)
-$allOrders = $activeQuery.unionAll($archiveQuery).get()
-```
-
-### Sharded Querying (`collectionGroup`)
-Query across multiple collections matching a wildcard pattern (e.g. date-sharded logs or region tables). Each returned object automatically includes an origin property `._collection`:
-```powershell
-$criticalErrors = $db.collectionGroup("logs_2026_*") `
-    .where("level", "==", "CRITICAL") `
-    .orderBy("timestamp", "desc") `
-    .limit(50) `
-    .get()
-
-foreach ($err in $criticalErrors) {
-    Write-Host "[$($err._collection)] $($err.timestamp): $($err.message)"
-}
-```
-
-> [!NOTE]
-> **Snapshot Isolation:** Calling `.union()` or `.unionAll()` creates an immutable snapshot of both query branches via `.clone()`. Modifying source branches afterwards does not alter the composite query. Nested unions are prohibited.
-
-Modifiers before composition belong to the branch; modifiers after composition apply once to the combined result. `-like`/`-notlike` preserve complete strings (including NUL) through the host PowerShell matcher. SQL `LIKE` keeps SQLite semantics. Bracket classes remain unsupported. Restart PowerShell after upgrading the native bridge.
->
-> **Sharded Drop Protection:** Calling `.drop()` on `collectionGroup()` is strictly prohibited and throws `[System.InvalidOperationException]` to prevent accidental mass deletion across wildcard-matched tables.
-
----
-
-## 7. Raw Cross-Collection Queries (`query`)
-
-Execute arbitrary SQL statements across collections when complex joins, CTEs, or custom SQLite JSON expressions are required:
-
-```powershell
-$sql = @"
-SELECT 
-    json_extract(o.doc, '$.orderId') AS orderId,
-    json_extract(u.doc, '$.name') AS customerName,
-    json_extract(o.doc, '$.total') AS total
-FROM orders o
-JOIN users u ON json_extract(o.doc, '$.customerId') = u.key
-WHERE CAST(json_extract(o.doc, '$.total') AS REAL) > 100.0
-ORDER BY total DESC;
-"@
-
-$results = $db.query($sql)
-$results | Format-Table orderId, customerName, total
-```
-
----
-
-## 8. Atomic ACID Transactions
-
-Wrap multi-document operations in high-performance atomic transactions:
-
-```powershell
-$db.beginTransaction()
+$db = New-LocalBase -Path ".\app.db"
 try {
-    $db.collection("accounts").doc("acc-1").update(@{ balance = 400 })
-    $db.collection("accounts").doc("acc-2").update(@{ balance = 600 })
-    $db.commit()
-    Write-Host "Funds transferred successfully."
-} catch {
-    $db.rollback()
-    Write-Warning "Transfer failed, rolling back changes: $_"
-}
-```
-
----
-
-## 9. Production Best Practice: `try / finally`
-
-Always encapsulate database operations in a `try / finally` block to guarantee immediate connection closure and file handle release:
-
-```powershell
-$db = [PSLocalBase]::new(".\production.db")
-try {
-    $db.collection("metrics").add(@{
-        cpu  = (Get-CimInstance Win32_Processor).LoadPercentage
-        date = (Get-Date).ToString("o")
-    })
+    # ... work with $db ...
 } finally {
-    # Guaranteed cleanup: ensures file lock release even on unhandled exceptions
     $db.close()
 }
 ```
 
-### Deleting a Database Completely (`deleteDatabase`)
-To delete the active SQLite database file and its associated WAL journal files (`-wal`, `-shm`), invoke `.deleteDatabase()` directly from the root database instance:
+## 2. Write documents
+
 ```powershell
-$db = [PSLocalBase]::new(".\temporary.db")
-$db.collection("cache").add(@{ token = "xyz" })
-# Closes handle and deletes .\temporary.db, .\temporary.db-wal, .\temporary.db-shm
-$db.deleteDatabase()
+# Create or overwrite a document with a key you choose
+$db.collection("users").doc("usr-100").set(@{
+    name   = "Carlos Martinez"
+    role   = "Admin"
+    active = $true
+    skills = @("PowerShell", "SQLite")
+})
+
+# Let PSLocalBase generate the key
+$key = $db.collection("audit_logs").add(@{ action = "Login"; at = (Get-Date) })
+
+# Merge fields into an existing document
+$db.collection("users").doc("usr-100").update(@{ role = "Lead Architect" })
+
+# Add to an array without duplicates
+$db.collection("users").doc("usr-100").update(@{ skills = [PSLocalBase]::ArrayUnion("Security") })
 ```
 
----
+Collections are created by the first write; navigating to a collection or document never creates a table. Dates are stored as ISO-8601 UTC text.
 
-## 10. PowerShell Pipeline Integration & Object Standard
-
-Every single query method in PSLocalBase (`get()`, `first()`, `select()`, `populate()`, `collectionGroup()`, `union()`) returns **100% native PowerShell `[PSCustomObject]` instances**.
-
-No raw JSON strings, no custom dictionaries, and no manual conversion steps required:
+## 3. Read and query
 
 ```powershell
-# 1. Filter and export directly to CSV
-$db.collection("products").where("stock", ">", 0).get() |
-    Select-Object id, name, price, stock |
-    Export-Csv -Path ".\inventory.csv" -NoTypeInformation
+# One document by key ($null if it does not exist)
+$user = $db.collection("users").doc("usr-100").get()
+$user.name
 
-# 2. Interactive Windows GridView
-$db.collection("users").get() | Out-GridView -Title "Active Users Directory"
+# Filter, sort and paginate
+$admins = $db.collection("users").
+    where("active", "==", $true).
+    where("role", "IN", @("Admin", "Lead Architect")).
+    orderBy("name", "asc").
+    limit(10).
+    get()
 
-# 3. Pipeline grouping & sorting
-$db.collectionGroup("logs_2026_*").get() |
-    Group-Object _collection |
-    Select-Object Name, Count
+# Counts and aggregates run inside SQLite
+$total  = $db.collection("users").count()
+$recent = $db.collection("audit_logs").where("at", ">=", (Get-Date).AddDays(-1)).count()
 ```
 
----
+Queries are immutable: `where()`, `orderBy()`, `limit()` and the other modifiers return a new query, and writing through a query does not change it, so you can keep and reuse them.
 
-## 11. Reading Over SMB / Network Shares
-
-PSLocalBase enforces local drive access and strictly rejects UNC (`\\server\share`) and mapped network paths because SQLite's default **Write-Ahead Logging (`WAL`)** mode relies on shared memory (`.db-shm`) and OS-level locking primitives that network shares cannot safely coordinate.
-
-### Why Direct SMB Access is Blocked
-
-Opening a live SQLite database directly over SMB invites locking deadlocks and silent database corruption. Furthermore, simply copying a live `.db` file while a writer has active WAL transactions leaves committed changes in `.db-wal`, producing an incomplete or stale copy.
-
-### Writer Pattern: Publishing Consistent Snapshots via `VACUUM INTO`
-
-To safely distribute databases across network shares, the writer process exports a clean, completed snapshot directly using SQLite's native `VACUUM INTO`, then publishes the finished snapshot file to the share:
+## 4. Delete
 
 ```powershell
-# 1. On the writer server: export consistent snapshot from live WAL DB
-$db.query("VACUUM INTO 'C:\Staging\catalog_snapshot.db';")
-
-# 2. Atomically publish the completed snapshot to the SMB share
-Move-Item -LiteralPath "C:\Staging\catalog_snapshot.db" -Destination "\\server\share\catalog.db" -Force
+$db.collection("users").doc("usr-100").delete()             # one document
+$db.collection("audit_logs").where("action", "=", "Login").delete()   # matching documents
+$db.collection("audit_logs").drop()                           # the whole collection
 ```
 
-### Client Pattern: Safe Local Temp Consumption
-
-Clients query published snapshots by copying them to a unique local temporary file, executing queries at full local NVMe speeds (**100,000+ ops/sec**) with zero network lock contention, and cleaning up in `finally`:
+## 5. Transactions
 
 ```powershell
-$smbSnapshot = "\\server\share\catalog.db"
-$tempPath    = Join-Path ([System.IO.Path]::GetTempPath()) ("pslocalbase_" + [System.Guid]::NewGuid().ToString("N") + ".db")
-
+$db.beginTransaction()
 try {
-    # 1. Copy snapshot to unique local temporary storage
-    Copy-Item -LiteralPath $smbSnapshot -Destination $tempPath -Force
-
-    # 2. Query at full local speed with zero network contention
-    $db = [PSLocalBase]::new($tempPath)
-    try {
-        $products = $db.collection("hardware").where("inStock", "==", $true).get()
-        $products | Format-Table id, name, price
-    } finally {
-        $db.close()
-    }
-} finally {
-    if (Test-Path $tempPath) {
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-    }
+    $db.collection("accounts").doc("a").update(@{ balance = 400 })
+    $db.collection("accounts").doc("b").update(@{ balance = 600 })
+    $db.commit()
+} catch {
+    $db.rollback()
+    throw
 }
 ```
 
+`beginTransaction()` takes the write lock immediately, so other processes writing to the same file wait (up to `busyTimeout`, 5 seconds by default) instead of failing.
+
 ---
 
-## Related Documentation
+## Next steps
 
-* [Technical Architecture Specification](SPECIFICATION.md)
-* [Performance Benchmarks (10k Records)](BENCHMARKS.md)
-* [Security Policy & Threat Model](../SECURITY.md)
-* [Main Project README](../README.md)
+- [Full Documentation](README.md): every method, operator and option.
+- [Technical Specification](SPECIFICATION.md): storage model and API contract.
+- [Security Policy](../SECURITY.md): threat model and safe use of `query()`.
+- [Playground](../Playground/README.md): a WPF app to explore a database visually.
+- [Changelog](../CHANGELOG.md): what changed in 2.0.0.

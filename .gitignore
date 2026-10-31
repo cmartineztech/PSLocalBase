@@ -26,3 +26,5 @@ $RECYCLE.BIN/
 
 # Benchmark output artifacts
 *.html
+
+_TESTS/temp_bench_*/
