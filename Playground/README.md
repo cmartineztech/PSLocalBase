@@ -50,6 +50,9 @@ pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 # Launch explicitly in Dark Mode:
 pwsh -File .\Playground\Playground.ps1 -DarkMode
 
+# Open a custom or existing database file (supports absolute and relative paths):
+pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DatabasePath "C:\Data\my-app.db"
+
 # Windows PowerShell 5.1:
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 ```

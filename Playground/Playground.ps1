@@ -8,6 +8,7 @@
     and a dual-pane layout (interactive code cards on the left, live database explorer & console on the right).
 .EXAMPLE
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
+    pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DatabasePath "C:\Data\my-database.db"
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DarkMode
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -Theme Dark
     powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
@@ -75,7 +76,14 @@ function Start-PlaygroundApp {
     if ($modulePsd1) { Import-Module $modulePsd1 -Force }
 
     # Initialize PSLocalBase instance
-    $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
+    # Resolve database path (supports absolute paths, CWD relative paths, and PSScriptRoot fallback)
+    if ([System.IO.Path]::IsPathRooted($DbPath)) {
+        $resolvedDbPath = [System.IO.Path]::GetFullPath($DbPath)
+    } elseif (Test-Path (Join-Path (Get-Location).Path $DbPath)) {
+        $resolvedDbPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $DbPath))
+    } else {
+        $resolvedDbPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $DbPath))
+    }
     $script:fullDbPath = [System.IO.Path]::GetFullPath($resolvedDbPath)
     $dbFileExisted = (Test-Path $resolvedDbPath) -and ((Get-Item $resolvedDbPath).Length -gt 0)
     $script:db = [PSLocalBase]::new($resolvedDbPath, @{
@@ -1151,7 +1159,7 @@ namespace PSLocalBaseUI {
         $lblTotalEntries.Text = "Total entries: $($rows.Count) in collection '$CollectionName'"
 
         # File metrics
-        $dbFile = Join-Path $PSScriptRoot $DbPath
+        $dbFile = $script:fullDbPath
         if (Test-Path $dbFile) {
             $kb = [math]::Round((Get-Item $dbFile).Length / 1KB, 1)
             $lblDbMetrics.Text = "Storage: $($script:fullDbPath) ($kb KB | WAL Mode)"
