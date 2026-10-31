@@ -30,6 +30,10 @@ Daylight theme optimized for high-readability environments with cool blue-gray c
 
 ![PSLocalBase Playground Light Mode](screenshots/light-mode.png)
 
+## Security Model
+
+The code cards and the `>` prompt execute whatever PowerShell you enter, with your Windows permissions and full access to `$db`. The Playground is a local developer tool, not a sandbox: do not paste untrusted code into it or expose it to other users.
+
 ---
 
 ## Quick Launch
@@ -90,3 +94,5 @@ pwsh -ExecutionPolicy Bypass -File .\Playground\verify-playground.ps1
 # or
 powershell.exe -ExecutionPolicy Bypass -File .\Playground\verify-playground.ps1
 ```
+
+CI runs this verification in both PowerShell 7 and Windows PowerShell 5.1.

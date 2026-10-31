@@ -1,4 +1,4 @@
-﻿# PSLocalBase Documentation & Reference Guide
+# PSLocalBase Documentation & Reference Guide
 
 Welcome to the comprehensive **PSLocalBase** documentation guide! This document provides everything you need to know about embedded NoSQL document persistence in PowerShell, from a 2-minute quick start to advanced multi-collection sharding, relational joins, and multi-client SMB architecture.
 
@@ -22,7 +22,8 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
   - [Insert with Custom Key (`set`)](#insert-with-custom-key-set)
   - [Insert with Auto-Generated GUID (`add`)](#insert-with-auto-generated-guid-add)
   - [Atomic Upsert (`upsert`)](#atomic-upsert-upsert)
-  - [Bulk Insert Entire Collection](#bulk-insert-entire-collection)
+  - [Replace an Entire Collection (`replaceAll`)](#replace-an-entire-collection-replaceall)
+  - [Dates](#dates)
   - [Partial Update / Deep Merge (`update`)](#partial-update--deep-merge-update)
   - [Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)](#atomic-array-mutations-arrayunion-arrayremove)
   - [Secondary Expression Indexes (`createIndex`, `dropIndex`)](#secondary-expression-indexes-createindex-dropindex)
@@ -82,6 +83,7 @@ $db.collection("users").doc("usr-100").set(@{
 
 # 3. Read back single document as native [PSCustomObject]
 $user = $db.collection("users").doc("usr-100").get()
+
 Write-Host "User: $($user.name) | Role: $($user.role) | Active: $($user.active)"
 
 # 4. Query collection with filtering, ordering, and pipeline formatting
@@ -97,6 +99,9 @@ $db.close()
 ## Visual Explorer: Interactive GUI Playground
 
 Prefer a visual tool to explore documents, test queries, and generate PowerShell code with one click? Launch the built-in **WPF Playground**:
+
+![PSLocalBase Playground](../Playground/screenshots/dark-mode.png)
+
 
 ```powershell
 pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
@@ -130,7 +135,8 @@ Import-Module .\PSLocalBase.psd1 -Force
 | **Supported by Design** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Supported by design via native System32 `winsqlite3.dll` and .NET Framework 4.5+ / .NET Core runtime. |
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
-* **CI Test Suite:** Continuous integration executes the complete multi-suite test runner (`_TESTS/run-tests.ps1`, 122+ test cases) on both PowerShell 7 and Windows PowerShell 5.1 on every commit.
+* **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows; importing on Linux or macOS throws `PlatformNotSupportedException`.
+* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 19-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
 * **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -169,7 +175,12 @@ $db = New-LocalBase
 
 # File-based
 $db = New-LocalBase -Path "C:\Data\app.db"
+
+# File-based with options (same keys as the constructor hashtable)
+$db = New-LocalBase -Path "C:\Data\app.db" -Options @{ busyTimeout = 10000; synchronous = "FULL" }
 ```
+
+Supported options: `wal` (default `$true`), `synchronous` (`EXTRA`, `FULL`, `NORMAL`, `OFF`; default `NORMAL` with WAL), `busyTimeout` (ms, default 5000), `cacheSizeMB` (default 16), `depth` (1-100, default 20), `maxDocumentBytes` (default 16MB), `maxReadDepth` (default 100) and `debug` (default `$false`). Boolean options accept `$true`/`$false` or `true`/`false`/`1`/`0`/`yes`/`no`; anything else throws. A closed instance cannot be reopened.
 
 ---
 
@@ -207,13 +218,21 @@ $db.createCollection("audit_logs")
 ```
 
 ### Targeting Documents (`doc`)
-Targets a document either by its unique string key or by an object/hashtable criteria:
+Targets a document either by its unique string key or by an object/hashtable that names it with `key`, `id` or `_key`. Targeting creates no table; the first write does:
 ```powershell
 # By string key:
 $db.collection("users").doc("usr-100")
 
 # By criteria hashtable:
 $db.collection("users").doc(@{ id = "usr-100" })
+```
+
+Writing through a reference leaves it unchanged, so it can be reused:
+```powershell
+$user = $db.collection("users").doc("usr-100")
+$user.set(@{ name = "Carlos" })
+$user.update(@{ role = "Admin" })
+$user.get()   # still usr-100
 ```
 
 ### Insert with Custom Key (`set`)
@@ -251,19 +270,25 @@ $db.collection("devices").upsert(@{ id = "dev-1"; serial = "SN-100"; status = "o
 $db.collection("devices").doc("dev-1").upsert(@{ serial = "SN-100"; status = "standby" })
 ```
 
-### Bulk Insert Entire Collection
-Atomically replaces the entire collection with an array of objects:
+### Replace an Entire Collection (`replaceAll`)
+Atomically replaces every document in the collection with an array of objects. `set(@(...))` is an alias:
 ```powershell
 $products = @(
     @{ id = "prod-1"; name = "Mechanical Keyboard"; price = 120.00; stock = 45 },
     @{ id = "prod-2"; name = "Wireless Mouse";     price = 45.50;  stock = 120 },
     @{ id = "prod-3"; name = "USB-C Hub";           price = 35.00;  stock = 80 }
 )
-$db.collection("products").set($products)
+$db.collection("products").replaceAll($products)
 ```
 
+> [!WARNING]
+> Replacing deletes every existing document, so it is rejected with `InvalidOperationException` on a query that has `where()`, `orderBy()`, `limit()` or `skip()`. To change a subset, use `where(...).delete()` followed by `add()`/`set()`.
+
+### Dates
+`DateTime` and `DateTimeOffset` values are stored as ISO-8601 UTC strings (`2026-01-02T03:04:05.0000000Z`) in both PowerShell editions, and the same conversion is applied to `where()` values, `IN` lists and `query()` parameters, so date comparisons are lexical and correct. Reads return the stored text unchanged.
+
 ### Partial Update / Deep Merge (`update`)
-Performs a deep recursive merge into the targeted document using SQLite's native `json_patch()`. Existing properties remain untouched:
+Performs a deep recursive merge into the targeted document inside a single `BEGIN IMMEDIATE` transaction (read, merge, write). Existing properties remain untouched, and a missing document is created from the partial data:
 ```powershell
 $db.collection("users").doc("usr-100").update(@{
     role    = "Principal Architect"
@@ -300,29 +325,32 @@ $db.collection("users").doc("usr-100").update(@{
 Create native B-Tree indexes on document JSON fields for sub-millisecond querying over millions of records:
 
 ```powershell
-# Standard secondary expression index
-$db.collection("users").createIndex("idx_users_role", "role")
+# Standard secondary expression index on a JSON field
+$db.collection("users").createIndex("role")
 
-# Unique constraint index (throws exception on duplicate values)
-$db.collection("users").createIndex("idx_users_email", "email", $true)
+# Unique constraint index (throws on duplicate values); $true is shorthand for @{ unique = $true }
+$db.collection("users").createIndex("email", @{ unique = $true })
 
-# Drop an index cleanly
-$db.collection("users").dropIndex("idx_users_role")
+# Descending index
+$db.collection("orders").createIndex("createdAt", @{ order = "desc" })
+
+# Drop the index for a field (the argument is the field, not an index name)
+$db.collection("users").dropIndex("role")
 ```
+
+Index names are generated internally from the collection and field (`idx_<collection>__<field>_<hash>`).
 
 ### Storage Integrity & Validation (`validate`)
 Every collection table is created with a strict table-level constraint:
 ```sql
 doc TEXT NOT NULL CHECK (json_valid(doc))
 ```
-To run an instant health audit on any collection:
+To run an instant health audit on any collection, call `validate()`. It returns a `[bool]`: `$true` when no document is NULL or invalid JSON (and for a collection that does not exist yet), `$false` otherwise:
 ```powershell
-$report = $db.collection("users").validate()
-# Returns:
-# collection       : users
-# isValid          : True
-# totalRecords     : 10000
-# corruptedRecords : 0
+if (-not $db.collection("users").validate()) {
+    $bad = $db.query("SELECT key FROM users WHERE doc IS NULL OR json_valid(doc) = 0;")
+    Write-Warning "Invalid documents: $($bad.key -join ', ')"
+}
 ```
 
 ### Deleting Documents & Dropping Collections (`delete`, `drop`)
@@ -331,7 +359,7 @@ $report = $db.collection("users").validate()
 $db.collection("users").doc("usr-100").delete()
 
 # Delete matching filtered documents
-$db.collection("audit_logs").where("timestamp", "<", (Get-Date).AddDays(-30).ToString("o")).delete()
+$db.collection("audit_logs").where("timestamp", "<", (Get-Date).AddDays(-30)).delete()
 
 # Truncate all records from collection (preserves table schema and indexes)
 $db.collection("temporary_data").delete()
@@ -345,8 +373,10 @@ $db.collection("temporary_data").drop()
 ## 4. Querying & Filtering
 
 ### Point Lookups
+Retrieves a single document by key as a native `[PSCustomObject]`, or `$null` if not found. Point lookups honor `limit()` and `skip()` clauses (for example, `.limit(0)` or `.skip(1)` returns `$null`).
 ```powershell
 $user = $db.collection("users").doc("usr-100").get()
+
 ```
 
 ### Collection-Wide Retrieval
@@ -406,9 +436,14 @@ $db.collection("users").where("role", "IN", @("Admin", "Lead Architect")).get()
 # Set exclusion (not-in)
 $db.collection("users").where("role", "not-in", @("Guest", "Disabled")).get()
 
+# Dates are compared as ISO-8601 UTC text; pass [datetime] values directly
+$db.collection("audit_logs").where("timestamp", ">=", (Get-Date).AddDays(-7)).get()
+
 # Nested dot paths
 $db.collection("orders").where("shipping.address.city", "==", "Seattle").get()
 ```
+
+`IN` with a `$null` member also matches documents where the field is null or missing. `not-in` only matches documents where the field is present and not null (an empty list therefore returns every document that has the field); `$null` members are ignored.
 
 ### Array Membership & Intersection (`array-contains`, `array-contains-any`)
 ```powershell
@@ -422,18 +457,23 @@ $specialists = $db.collection("users").where("skills", "array-contains-any", @("
 ### Array Length Filtering (`whereLength`, `length`)
 Evaluates array size directly in C using SQLite's `json_array_length()`:
 ```powershell
-# Dedicated fluent method
+# Dedicated fluent method: whereLength(field, operator, count); operators =, !=, >, >=, <, <=
 $db.collection("orders").whereLength("items", ">", 3).get()
+$db.collection("users").whereLength("skills", 5).get()   # exactly 5
 
-# Operator syntax inside .where()
-$db.collection("users").where("skills", "length", "==", 5).get()
+# Operator syntax inside .where(): length, length>, length>=, length<, length<=, length!=
+$db.collection("users").where("skills", "length", 5).get()
+$db.collection("orders").where("items", "length>", 3).get()
 ```
 
+Unknown `whereLength()` operators throw `ArgumentException`.
+
 ### Data Type Filtering (`whereType`, `type`)
-Inspects dynamic document schemas using SQLite's `json_type()` (`null`, `integer`, `real`, `text`, `array`, `object`):
+Inspects dynamic document schemas using SQLite's `json_type()` (`null`, `integer`, `real`, `text`, `array`, `object`, `true`, `false`), plus the groups `number` (integer or real) and `boolean` (true or false):
 ```powershell
-# Dedicated fluent method
-$db.collection("events").whereType("metadata", "==", "object").get()
+# Dedicated fluent method: whereType(field, type)
+$db.collection("events").whereType("metadata", "object").get()
+$db.collection("flags").whereType("enabled", "boolean").get()
 
 # Operator syntax inside .where()
 $db.collection("metrics").where("value", "type", "integer").get()
@@ -462,6 +502,8 @@ $averageAge = $db.collection("users").avg("age")
 $cheapest   = $db.collection("products").min("price")
 $latestDate = $db.collection("audit_logs").max("timestamp")
 ```
+
+`sum()` and `avg()` only use JSON numbers; text, booleans and nulls are ignored rather than counted as `0`. `min()` and `max()` compare JSON numbers numerically and return them as `[long]` or `[double]`; when a field holds no numbers they compare text and return a string (which is how ISO-8601 dates work).
 
 ### Sorting & Pagination (`orderBy`, `skip`, `limit`)
 ```powershell
@@ -538,7 +580,7 @@ $allOrders = $activeQuery.unionAll($archiveQuery).get()
 ```
 
 ### Sharded Querying (`collectionGroup`)
-Query across multiple collections matching a wildcard pattern (e.g. date-sharded logs or region tables). Each returned object automatically includes an origin property `._collection`:
+Query across multiple collections matching a wildcard pattern (e.g. date-sharded logs or region tables). Matching tables are resolved each time the query runs, so collections created or dropped later are reflected. Each returned object includes an origin property `._collection`, which can also be filtered with `where("_collection", "=", "logs_2026_01")`. A collection group cannot be combined with `union()`/`unionAll()`:
 ```powershell
 $criticalErrors = $db.collectionGroup("logs_2026_*") `
     .where("level", "==", "CRITICAL") `
@@ -580,6 +622,8 @@ $results = $db.query($sql)
 $results | Format-Table orderId, customerName, total
 ```
 
+`query()` runs exactly one statement and rejects any further statement after the first `;`. Treat it as trusted code: build the SQL yourself and pass every external value through the parameter array (`$db.query("... WHERE key = ?", @($key))`). Error messages include the SQL text only when `debug` is enabled.
+
 ---
 
 ## 8. Atomic ACID Transactions
@@ -598,6 +642,8 @@ try {
     Write-Warning "Transfer failed, rolling back changes: $_"
 }
 ```
+
+`beginTransaction()` issues `BEGIN IMMEDIATE`: the write lock is taken at the start, so another process writing to the same file makes it wait up to `busyTimeout` instead of failing with `database is locked` when the transaction first writes. `beginTransaction('deferred')` and `beginTransaction('exclusive')` select the other SQLite modes.
 
 ---
 
@@ -619,13 +665,15 @@ try {
 ```
 
 ### Deleting a Database Completely (`deleteDatabase`)
-To delete the active SQLite database file and its associated WAL journal files (`-wal`, `-shm`), invoke `.deleteDatabase()` directly from the root database instance:
+To delete the active SQLite database file and its associated journal files (`-wal`, `-shm`, `-journal`), invoke `.deleteDatabase()` directly from the root database instance. The path comes from SQLite itself:
 ```powershell
 $db = [PSLocalBase]::new(".\temporary.db")
 $db.collection("cache").add(@{ token = "xyz" })
-# Closes handle and deletes .\temporary.db, .\temporary.db-wal, .\temporary.db-shm
+# Closes handle and deletes .\temporary.db and its -wal, -shm and -journal files
 $db.deleteDatabase()
 ```
+
+An instance that is never closed is released by the garbage collector through a `SafeHandle` finalizer, but only `close()`/`Dispose()` release the file lock at a predictable moment.
 
 ---
 

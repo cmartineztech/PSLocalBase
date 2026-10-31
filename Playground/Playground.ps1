@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase Playground - Modern Windows Desktop NoSQL Database Explorer
 .DESCRIPTION
@@ -9,14 +9,35 @@
 .EXAMPLE
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
     pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -DarkMode
+    pwsh -ExecutionPolicy Bypass -File .\Playground\Playground.ps1 -Theme Dark
     powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 #>
 
 [CmdletBinding()]
 param(
     [string]$DatabasePath = "playground.db",
+    [ValidateSet('Light', 'Dark')][string]$Theme,
     [switch]$DarkMode
 )
+
+# ---------------------------------------------------------------------------
+# Windows OS Theme Detection Helper
+# ---------------------------------------------------------------------------
+function Get-SystemThemePreference {
+    try {
+        $regKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        if (Test-Path $regKey) {
+            $prop = Get-ItemProperty -Path $regKey -ErrorAction SilentlyContinue
+            if ($null -ne $prop.AppsUseLightTheme) {
+                if ($prop.AppsUseLightTheme -eq 0) { return 'Dark' } else { return 'Light' }
+            }
+            if ($null -ne $prop.SystemUsesLightTheme) {
+                if ($prop.SystemUsesLightTheme -eq 0) { return 'Dark' } else { return 'Light' }
+            }
+        }
+    } catch { }
+    return 'Light'
+}
 
 # ---------------------------------------------------------------------------
 # Pre-Flight: Ensure STA Mode for WPF
@@ -24,10 +45,13 @@ param(
 function Start-PlaygroundApp {
     param(
         [string]$DbPath,
+        [string]$Theme,
         [bool]$StartInDark = $false
     )
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    try { [System.Windows.Media.RenderOptions]::ProcessRenderMode = [System.Windows.Interop.RenderMode]::SoftwareOnly } catch { }
 
     if ($null -eq [System.Windows.Application]::Current) {
         $script:wpfApp = [System.Windows.Application]::new()
@@ -44,55 +68,6 @@ function Start-PlaygroundApp {
         throw "Could not find PSLocalBase.psd1 in $parentDir or $PSScriptRoot"
     }
     Import-Module $modulePsd1 -Force
-
-    # Ensure dynamic runtime parity even if loaded in a session with a stale pre-compiled class
-    try {
-        if ($null -eq ([PSLocalBase].GetMethod('_CollectionExists'))) {
-            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _CollectionExists -Value {
-                param([string]$name)
-                $this._EnsureOpen()
-                if ([string]::IsNullOrWhiteSpace($name)) { return $false }
-                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1;", @($name))
-                return ($rows.Count -gt 0)
-            } -Force
-        }
-        if ($null -eq ([PSLocalBase].GetMethod('_EnsureCollectionTable'))) {
-            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _EnsureCollectionTable -Value {
-                $this._EnsureOpen()
-                if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                    throw [System.InvalidOperationException]::new("No collection specified.")
-                }
-                $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
-                $this._ExecuteDirectSql($createSql)
-            } -Force
-        }
-        if ($null -eq ([PSLocalBase].GetMethod('create'))) {
-            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName create -Value {
-                $this._EnsureOpen()
-                if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                    throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
-                }
-                $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT);"
-                $this._ExecuteDirectSql($createSql)
-                return $this
-            } -Force
-        }
-        if ($null -eq ([PSLocalBase].GetMethod('createCollection'))) {
-            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName createCollection -Value {
-                param([string]$name)
-                return $this.collection($name).create()
-            } -Force
-        }
-        if ($null -eq ([PSLocalBase].GetMethod('collectionExists'))) {
-            Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionExists -Value {
-                param([string]$name)
-                $this._EnsureOpen()
-                if ([string]::IsNullOrWhiteSpace($name)) { return $false }
-                $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1;", @($name))
-                return ($rows.Count -gt 0)
-            } -Force
-        }
-    } catch { }
 
     # Initialize PSLocalBase instance
     $resolvedDbPath = Join-Path $PSScriptRoot $DbPath
@@ -174,8 +149,11 @@ function Start-PlaygroundApp {
         Title="PSLocalBase | Playground v1.0.0"
         Width="1280" Height="840" MinWidth="1100" MinHeight="720"
         WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
         ShowInTaskbar="True"
         FontFamily="Segoe UI"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         Background="{DynamicResource BgColor}"
         Foreground="{DynamicResource FgColor}">
 
@@ -463,6 +441,7 @@ function Start-PlaygroundApp {
 
             <!-- Top Action Buttons & Theme Switcher -->
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Name="btnDocs" Content="Docs &#x2197;" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" ToolTip="Open PSLocalBase Online Documentation"/>
                 <Button Name="btnToggleTheme" Content="&#x1F319; Dark Mode" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                 <Button Name="btnSeedDemo" Content="Seed Demo Data" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                 <Button Name="btnCheckpointWal" Content="Flush WAL Checkpoint" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
@@ -662,7 +641,7 @@ function Start-PlaygroundApp {
                                      Text="Search key or text..."/>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Name="btnClearCollection" Content="Delete Collection" Style="{StaticResource DangerButtonStyle}" Margin="0,0,8,0"/>
+                                <Button Name="btnClearCollection" Content="Delete Collection" Style="{StaticResource DangerButtonStyle}" Margin="0,0,8,0" ToolTip="Permanently delete this collection and its documents (.drop())"/>
                                 <Button Name="btnDeleteDoc" Content="Delete Selected" Style="{StaticResource SecondaryButtonStyle}"/>
                             </StackPanel>
                         </Grid>
@@ -754,16 +733,17 @@ function Start-PlaygroundApp {
                         </Border>
 
                         <!-- Interactive CLI Input (>) -->
-                        <Border Grid.Row="2" Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="8,2">
+                        <Border Grid.Row="2" Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="10,3">
                             <Grid VerticalAlignment="Center">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="&gt;" FontSize="13" FontWeight="Bold" Foreground="{DynamicResource HeaderColor}" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="0" Text="&gt;" FontFamily="Consolas" FontSize="13" FontWeight="Bold"
+                                           Foreground="{DynamicResource HeaderColor}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBox Name="txtConsoleInput" Grid.Column="1" Height="24" BorderThickness="0" Background="Transparent"
-                                         FontFamily="Consolas" FontSize="12" Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
-                                         VerticalAlignment="Center"/>
+                                         FontFamily="Consolas" FontSize="13" Foreground="{DynamicResource FgColor}" CaretBrush="{DynamicResource FgColor}"
+                                         VerticalAlignment="Center" VerticalContentAlignment="Center" Padding="0"/>
                             </Grid>
                         </Border>
                     </Grid>
@@ -801,9 +781,20 @@ function Start-PlaygroundApp {
     $modVer = if ($modInfo -and $modInfo.Version) { $modInfo.Version.ToString() } else { "1.0.0" }
     $script:window.Title = "PSLocalBase | Playground v$modVer"
 
+    # Responsive screen sizing based on primary working area (matching LiteDeploy.Manager)
+    try {
+        $workingArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $script:window.Height = [Math]::Min(860, [Math]::Max(720, [int]($workingArea.Height * 0.85)))
+        $script:window.Width  = [Math]::Min(1360, [Math]::Max(1100, [int]($workingArea.Width * 0.78)))
+    } catch { }
+
+    # Native DWM Frame Theme hook on SourceInitialized (HWND creation)
+    $script:window.Add_SourceInitialized({ Set-NativeFrameTheme $script:window })
+
     # -----------------------------------------------------------------------
     # Element Handles
     # -----------------------------------------------------------------------
+    $btnDocs          = $script:window.FindName("btnDocs")
     $btnToggleTheme   = $script:window.FindName("btnToggleTheme")
     $btnNavAdd        = $script:window.FindName("btnNavAdd")
     $btnNavGet        = $script:window.FindName("btnNavGet")
@@ -862,79 +853,131 @@ function Start-PlaygroundApp {
     $script:isDarkMode = $false
 
     # -----------------------------------------------------------------------
+    # Native Windows Frame Theme & DWM Styling (Matching LiteDeploy.Manager)
+    # -----------------------------------------------------------------------
+    if (-not ('PSLocalBaseUI.NativeFrame' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace PSLocalBaseUI {
+    public static class NativeFrame {
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+    }
+}
+'@ -ErrorAction SilentlyContinue
+    }
+
+    function Set-NativeFrameTheme {
+        param($Window)
+        if (-not $Window) { $Window = $script:window }
+        if (-not $Window) { return }
+        try {
+            $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper $Window).Handle
+            if ($hwnd -eq [IntPtr]::Zero) { return }
+
+            $dark = if ($script:isDarkMode) { 1 } else { 0 }
+            $size = 4
+            # DWMWA_USE_IMMERSIVE_DARK_MODE: 20 on Windows 10 (18985+) / Windows 11; fallback 19 on older Windows 10
+            $hr = [PSLocalBaseUI.NativeFrame]::DwmSetWindowAttribute($hwnd, 20, [ref]$dark, $size)
+            if ($hr -ne 0) {
+                [void][PSLocalBaseUI.NativeFrame]::DwmSetWindowAttribute($hwnd, 19, [ref]$dark, $size)
+            }
+
+            # Windows 11 Build >= 22000 title bar colors (BGR hex COLORREF 0x00bbggrr)
+            $build = 0
+            try {
+                $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name CurrentBuildNumber -ErrorAction Stop).CurrentBuildNumber
+            } catch { }
+
+            if ($build -ge 22000) {
+                # Dark:  Bg #121418 -> BGR 0x00181412, Fg #F3F4F6 -> BGR 0x00F6F4F3, Border #2C313A -> BGR 0x003A312C
+                # Light: Bg #F0F4FA -> BGR 0x00FAF4F0, Fg #1A2332 -> BGR 0x0032231A, Border #D0DAE6 -> BGR 0x00E6DAD0
+                $caption = if ($script:isDarkMode) { 0x00181412 } else { 0x00FAF4F0 }
+                $text    = if ($script:isDarkMode) { 0x00F6F4F3 } else { 0x0032231A }
+                $border  = if ($script:isDarkMode) { 0x003A312C } else { 0x00E6DAD0 }
+
+                [void][PSLocalBaseUI.NativeFrame]::DwmSetWindowAttribute($hwnd, 35, [ref]$caption, $size) # DWMWA_CAPTION_COLOR
+                [void][PSLocalBaseUI.NativeFrame]::DwmSetWindowAttribute($hwnd, 36, [ref]$text, $size)    # DWMWA_TEXT_COLOR
+                [void][PSLocalBaseUI.NativeFrame]::DwmSetWindowAttribute($hwnd, 34, [ref]$border, $size)  # DWMWA_BORDER_COLOR
+            }
+        } catch { }
+    }
+
+    # -----------------------------------------------------------------------
     # Modal Input Dialog (Prompt for Collection Creation)
     # -----------------------------------------------------------------------
     function Show-InputBox([string]$Title, [string]$Prompt, [string]$DefaultValue = "") {
         $dlg = [System.Windows.Window]::new()
         $dlg.Title = $Title
-        $dlg.Width = 380
-        $dlg.Height = 175
+        $dlg.Width = 420
+        $dlg.SizeToContent = [System.Windows.SizeToContent]::Height
         $dlg.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
         $dlg.Owner = $script:window
         $dlg.ResizeMode = [System.Windows.ResizeMode]::NoResize
+        $dlg.UseLayoutRounding = $true
+        $dlg.SnapsToDevicePixels = $true
         $dlg.Background = $script:window.Resources["SurfaceBg"]
         $dlg.Foreground = $script:window.Resources["FgColor"]
 
-        $grid = [System.Windows.Controls.Grid]::new()
-        $grid.Margin = [System.Windows.Thickness]::new(16)
-        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
-        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
-        [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]::new())
+        $panel = [System.Windows.Controls.StackPanel]::new()
+        $panel.Margin = [System.Windows.Thickness]::new(20, 18, 20, 18)
 
         $lbl = [System.Windows.Controls.TextBlock]::new()
         $lbl.Text = $Prompt
         $lbl.Foreground = $script:window.Resources["FgColor"]
-        $lbl.FontSize = 12
-        $lbl.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
-        [System.Windows.Controls.Grid]::SetRow($lbl, 0)
-        [void]$grid.Children.Add($lbl)
+        $lbl.FontSize = 13
+        $lbl.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+        [void]$panel.Children.Add($lbl)
 
         $txt = [System.Windows.Controls.TextBox]::new()
         $txt.Text = $DefaultValue
-        $txt.Height = 30
-        $txt.FontSize = 12
-        $txt.Padding = [System.Windows.Thickness]::new(6, 4, 6, 4)
+        $txt.Height = 34
+        $txt.FontSize = 13
+        $txt.Padding = [System.Windows.Thickness]::new(10, 6, 10, 6)
+        $txt.VerticalContentAlignment = [System.Windows.VerticalAlignment]::Center
         $txt.Background = $script:window.Resources["InputBg"]
         $txt.Foreground = $script:window.Resources["FgColor"]
         $txt.BorderBrush = $script:window.Resources["BorderColor"]
+        $txt.BorderThickness = [System.Windows.Thickness]::new(1)
         $txt.CaretBrush = $script:window.Resources["FgColor"]
-        $txt.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
-        [System.Windows.Controls.Grid]::SetRow($txt, 1)
-        [void]$grid.Children.Add($txt)
+        $txt.Margin = [System.Windows.Thickness]::new(0, 0, 0, 18)
+        [void]$panel.Children.Add($txt)
 
         $btnPanel = [System.Windows.Controls.StackPanel]::new()
         $btnPanel.Orientation = [System.Windows.Controls.Orientation]::Horizontal
         $btnPanel.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
-        [System.Windows.Controls.Grid]::SetRow($btnPanel, 2)
 
         $btnCancel = [System.Windows.Controls.Button]::new()
         $btnCancel.Content = "Cancel"
-        $btnCancel.Width = 75
-        $btnCancel.Height = 28
-        $btnCancel.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+        $btnCancel.Width = 85
+        $btnCancel.Height = 32
+        $btnCancel.Margin = [System.Windows.Thickness]::new(0, 0, 10, 0)
         $btnCancel.Style = $script:window.Resources["SecondaryButtonStyle"]
-        $btnCancel.add_Click({ $dlg.DialogResult = $false; $dlg.Close() })
+        $btnCancel.IsCancel = $true
+        $btnCancel.add_Click({ $dlg.DialogResult = $false })
         [void]$btnPanel.Children.Add($btnCancel)
 
         $btnOk = [System.Windows.Controls.Button]::new()
         $btnOk.Content = "Create"
-        $btnOk.Width = 75
-        $btnOk.Height = 28
+        $btnOk.Width = 85
+        $btnOk.Height = 32
         $btnOk.Style = $script:window.Resources["PrimaryButtonStyle"]
         $btnOk.IsDefault = $true
-        $btnOk.add_Click({ $dlg.DialogResult = $true; $dlg.Close() })
+        $btnOk.add_Click({ $dlg.DialogResult = $true })
         [void]$btnPanel.Children.Add($btnOk)
 
-        [void]$grid.Children.Add($btnPanel)
-        $dlg.Content = $grid
-        $txt.SelectAll()
-        $txt.Focus()
+        [void]$panel.Children.Add($btnPanel)
+        $dlg.Content = $panel
+        [void]$txt.SelectAll()
+        [void]$txt.Focus()
 
-        $result = $dlg.ShowDialog()
-        if ($result -eq $true) {
-            return $txt.Text.Trim()
+        $dlg.Add_SourceInitialized({ Set-NativeFrameTheme $dlg })
+        $dialogResult = $dlg.ShowDialog()
+        if ($dialogResult -eq $true -and -not [string]::IsNullOrWhiteSpace($txt.Text)) {
+            return [string]$txt.Text.Trim()
         }
-        return $null
+        return ""
     }
 
     # -----------------------------------------------------------------------
@@ -964,6 +1007,9 @@ function Start-PlaygroundApp {
 
         # Re-apply category active tab styling
         Set-PlaygroundCategory $script:currentCategory
+
+        # Update Native DWM Window Frame & Title Bar styling (LiteDeploy.Manager pattern)
+        Set-NativeFrameTheme $script:window
     }
 
     # -----------------------------------------------------------------------
@@ -1146,6 +1192,7 @@ function Start-PlaygroundApp {
             $isCreateColl = ($Code.Contains(".create(") -or $Code.Contains(".createCollection("))
             $isExistsColl = ($Code.Contains(".collectionExists("))
             $isDeleteColl = ($Code.Contains(".delete()") -and -not $Code.Contains(".doc(") -and -not $Code.Contains(".where("))
+            $isDropColl   = ($Code.Contains(".drop()") -and -not $Code.Contains(".doc("))
 
             if ($isCreateColl) {
                 $targetColl = $script:activeCollection
@@ -1174,19 +1221,32 @@ function Start-PlaygroundApp {
                     $StatusLabel.Foreground = if ($existsVal) { [System.Windows.Media.Brushes]::ForestGreen } else { [System.Windows.Media.Brushes]::Goldenrod }
                 }
             }
+            elseif ($isDropColl) {
+                $targetColl = $script:activeCollection
+                if ($Code -match 'collection\(\s*[''"]([^''"]+)[''"]\s*\)\.drop\(') {
+                    $c = $Matches[1]
+                    if ($c -ne '$coll' -and $c -ne '$($coll)') { $targetColl = $c }
+                }
+                $logMsg = "Collection `"$targetColl`" deleted successfully."
+                $dataToLog = @{ collection = $targetColl; status = "Dropped" }
+                if ($script:activeCollection -eq $targetColl) {
+                    $script:activeCollection = ""
+                }
+                if ($null -ne $StatusLabel) {
+                    $StatusLabel.Text = "$([char]0x2714) Dropped '$targetColl' ($($ms)ms)"
+                    $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
+                }
+            }
             elseif ($isDeleteColl) {
                 $targetColl = $script:activeCollection
                 if ($Code -match 'collection\(\s*[''"]([^''"]+)[''"]\s*\)\.delete\(') {
                     $c = $Matches[1]
                     if ($c -ne '$coll' -and $c -ne '$($coll)') { $targetColl = $c }
                 }
-                $logMsg = "Collection `"$targetColl`" deleted successfully."
-                $dataToLog = @{ collection = $targetColl; status = "Deleted" }
-                if ($script:activeCollection -eq $targetColl) {
-                    $script:activeCollection = ""
-                }
+                $logMsg = "Collection `"$targetColl`" emptied successfully (all documents deleted)."
+                $dataToLog = @{ collection = $targetColl; status = "Emptied" }
                 if ($null -ne $StatusLabel) {
-                    $StatusLabel.Text = "$([char]0x2714) Deleted '$targetColl' ($($ms)ms)"
+                    $StatusLabel.Text = "$([char]0x2714) Emptied '$targetColl' ($($ms)ms)"
                     $StatusLabel.Foreground = [System.Windows.Media.Brushes]::ForestGreen
                 }
             }
@@ -1347,14 +1407,14 @@ function Start-PlaygroundApp {
 `$db.collection('$coll').doc('custom-item-key').delete()
 "@
 
-                $lblCard2Title.Text = "Delete Entire Collection"
+                $lblCard2Title.Text = "Empty Collection Documents (Truncate)"
                 $txtCodeCard2.Text = @"
 `$db.collection('$coll').delete()
 "@
 
-                $lblCard3Title.Text = "Check Collection Exists"
+                $lblCard3Title.Text = "Drop Collection Table & Schema"
                 $txtCodeCard3.Text = @"
-`$db.collectionExists('$coll')
+`$db.collection('$coll').drop()
 "@
             }
             "Custom PowerShell Script" {
@@ -1427,6 +1487,17 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     # -----------------------------------------------------------------------
     # Event Wiring
     # -----------------------------------------------------------------------
+    $btnDocs.add_Click({
+        try {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new("https://github.com/cmartineztech/PSLocalBase/tree/main/_DOCS")
+            $psi.UseShellExecute = $true
+            [void][System.Diagnostics.Process]::Start($psi)
+            Log-ToConsole "Opened PSLocalBase documentation in default web browser."
+        } catch {
+            Log-ToConsole "Failed to open documentation: $($_.Exception.Message)"
+        }
+    })
+
     $btnToggleTheme.add_Click({
         Set-AppTheme (-not $script:isDarkMode)
     })
@@ -1501,7 +1572,9 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
     })
 
     $btnCreateCollection.add_Click({
-        $name = Show-InputBox "Create Collection" "Enter alphanumeric collection name:" "inventory"
+        $rawName = Show-InputBox "Create Collection" "Enter alphanumeric collection name:" "inventory"
+        $name = if ($rawName -is [System.Array]) { ($rawName | Where-Object { $_ -ne $null -and $_ -ne $false }) -join "" } else { [string]$rawName }
+        $name = $name.Trim()
         if ([string]::IsNullOrWhiteSpace($name)) { return }
         try {
             [void]$script:db.collection($name).create()
@@ -1524,10 +1597,10 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
             return
         }
         $target = $script:activeCollection
-        $res = [System.Windows.MessageBox]::Show("Are you sure you want to delete the entire collection `"$target`" and all its documents?", "Delete Collection", "YesNo", "Warning")
+        $res = [System.Windows.MessageBox]::Show("Are you sure you want to permanently delete collection `"$target`" and all its documents?", "Delete Collection", "YesNo", "Warning")
         if ($res -eq "Yes") {
-            [void]$script:db.collection($target).delete()
-            Log-ToConsole "Collection `"$target`" deleted successfully." @{ collection = $target; status = "Deleted" }
+            [void]$script:db.collection($target).drop()
+            Log-ToConsole "Collection `"$target`" deleted successfully." @{ collection = $target; status = "Dropped" }
             $script:activeCollection = ""
             Refresh-DatabaseState
         }
@@ -1613,18 +1686,14 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
         }
     })
 
-    # Detect Windows OS Dark Theme preference if not specified
-    $initialDark = $StartInDark
-    if (-not $initialDark) {
-        try {
-            $regKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-            if (Test-Path $regKey) {
-                $appsUseLightTheme = (Get-ItemProperty -Path $regKey -Name "AppsUseLightTheme" -ErrorAction SilentlyContinue).AppsUseLightTheme
-                if ($appsUseLightTheme -eq 0) {
-                    $initialDark = $true
-                }
-            }
-        } catch { }
+    # Resolve Theme: explicit -DarkMode switch > explicit -Theme param > Windows OS Theme
+    $initialDark = $false
+    if ($StartInDark) {
+        $initialDark = $true
+    } elseif (-not [string]::IsNullOrWhiteSpace($Theme)) {
+        $initialDark = ($Theme -eq 'Dark')
+    } else {
+        $initialDark = ((Get-SystemThemePreference) -eq 'Dark')
     }
 
     Set-AppTheme $initialDark
@@ -1647,7 +1716,14 @@ Write-Host "Found `$(`$results.Count) documents in $coll"
 $isSta = [System.Threading.Thread]::CurrentThread.GetApartmentState() -eq [System.Threading.ApartmentState]::STA
 
 if ($isSta) {
-    Start-PlaygroundApp -DbPath $DatabasePath -StartInDark:$DarkMode
+    $startParams = @{
+        DbPath = $DatabasePath
+        StartInDark = [bool]$DarkMode
+    }
+    if ($PSBoundParameters.ContainsKey('Theme') -and -not [string]::IsNullOrWhiteSpace($Theme)) {
+        $startParams['Theme'] = $Theme
+    }
+    Start-PlaygroundApp @startParams
 } else {
     Write-Host "[PSLocalBase Playground] Starting in dedicated STA Runspace..." -ForegroundColor Cyan
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -1664,6 +1740,9 @@ if ($isSta) {
     $ps.Runspace = $rs
     [void]$ps.AddScript((Get-Content -Path $scriptPath -Raw))
     [void]$ps.AddParameter('DatabasePath', $DatabasePath)
+    if ($PSBoundParameters.ContainsKey('Theme') -and -not [string]::IsNullOrWhiteSpace($Theme)) {
+        [void]$ps.AddParameter('Theme', $Theme)
+    }
     if ($DarkMode) {
         [void]$ps.AddParameter('DarkMode', $true)
     }

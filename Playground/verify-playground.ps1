@@ -1,4 +1,4 @@
-﻿Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase -ErrorAction Stop
 
 $parentDir = Split-Path $PSScriptRoot -Parent
 if (-not $parentDir) { $parentDir = (Get-Location).Path }
@@ -33,6 +33,7 @@ try {
 
     # 3. Verify all named elements
     $requiredElements = @(
+        'btnDocs',
         'btnToggleTheme',
         'btnNavAdd', 'btnNavGet', 'btnNavUpdate', 'btnNavDelete', 'btnNavCustom',
         'btnSeedDemo', 'btnCheckpointWal', 'btnResetDatabase',

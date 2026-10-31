@@ -19,7 +19,7 @@ Tests were conducted across both **5,000 records** and **10,000 records** across
 | **Storage Modes** | Persistent WAL Disk (`.db`) & High-Performance In-Memory (`:memory:`) |
 | **Disk Sync Strategy** | SQLite atomic `VACUUM INTO` vs PowerShell `ConvertTo-Json -Depth 20` |
 | **Test Suites** | `_TESTS/benchmark-comparison.ps1` (5k) & `_TESTS/benchmark-10k.ps1` (10k) |
-| **Measurement Date** | Updated 2026-10-29 |
+| **Measurement Date** | Updated 2026-10-30 |
 
 ### Benchmark Methodology & Scope
 
@@ -40,24 +40,24 @@ Tests were conducted across both **5,000 records** and **10,000 records** across
 At 10,000 records, the fundamental architectural differences between an indexed B-Tree database engine and flat file serialization become stark:
 
 ### 🌟 Part 1: Persistent Disk Comparison (10,000 Records)
-* 🚀 **Individual Deletions on Disk:** PSLocalBase is **482.26x faster** (70.24 ms vs 33,874.14 ms).
-* ⚡ **Atomic Document Upsert on Disk:** PSLocalBase is **412.80x faster** (58.59 ms vs 24,185.80 ms) via native `INSERT ... ON CONFLICT DO UPDATE`.
-* ⚡ **Partial Document Updates on Disk:** PSLocalBase is **148.02x faster** (119.25 ms vs 17,651.23 ms).
-* 📑 **Selective Field Projection (`select()`):** PSLocalBase is **14.06x faster** (55.06 ms vs 774.11 ms) using native `json_object` filtering in C.
-* 🔍 **Sorting & Top-N Pagination:** PSLocalBase is **13.93x faster** (46.94 ms vs 653.98 ms).
-* 🎯 **Instant Existence Verification (`exists()`):** PSLocalBase is **13.04x faster** (85.93 ms vs 1,120.11 ms) with SQL `SELECT 1 ... LIMIT 1`.
-* 🏷️ **Array Length Filtering (`whereLength()`):** PSLocalBase is **9.26x faster** (114.21 ms vs 1,057.71 ms) evaluating SQLite `json_array_length`.
-* 📊 **Aggregate Count (`count()`):** PSLocalBase is **8.39x faster** (66.95 ms vs 561.58 ms).
-* 🔗 **Relational Cross-Collection JOIN:** PSLocalBase is **5.61x faster** (231.31 ms vs 1,296.88 ms).
-* ➕ **Mathematical Aggregations (`sum()`):** PSLocalBase is **3.30x faster** (356.76 ms vs 1,177.10 ms).
-* 🎯 **Point Lookups by Key:** PSLocalBase is **3.23x faster** (238.68 ms vs 769.84 ms).
-* 🔎 **Multi-filter Query (`active` AND `score >= 80`):** PSLocalBase is **3.11x faster** (163.50 ms vs 509.12 ms).
+* 🚀 **Individual Deletions on Disk:** PSLocalBase is **553.62x faster** (16.42 ms vs 9,090.44 ms).
+* ⚡ **Atomic Document Upsert on Disk:** PSLocalBase is **419.05x faster** (21.30 ms vs 8,925.83 ms) via native `INSERT ... ON CONFLICT DO UPDATE`.
+* ⚡ **Partial Document Updates on Disk:** PSLocalBase is **133.86x faster** (68.44 ms vs 9,161.33 ms).
+* 🎯 **Instant Existence Verification (`exists()`):** PSLocalBase is **23.45x faster** (11.51 ms vs 269.96 ms) with SQL `SELECT 1 ... LIMIT 1`.
+* 🔍 **Sorting & Top-N Pagination:** PSLocalBase is **14.14x faster** (27.47 ms vs 388.45 ms).
+* 📑 **Selective Field Projection (`select()`):** PSLocalBase is **10.70x faster** (24.52 ms vs 262.31 ms) using native `json_object` filtering in C.
+* 📊 **Aggregate Count (`count()`):** PSLocalBase is **9.64x faster** (31.04 ms vs 299.10 ms).
+* ➕ **Mathematical Aggregations (`sum()`):** PSLocalBase is **7.45x faster** (39.80 ms vs 296.65 ms).
+* 🏷️ **Array Length Filtering (`whereLength()`):** PSLocalBase is **7.03x faster** (34.74 ms vs 244.21 ms) evaluating SQLite `json_array_length`.
+* 🔗 **Relational Cross-Collection JOIN:** PSLocalBase is **4.35x faster** (35.37 ms vs 153.98 ms).
+* 🎯 **Point Lookups by Key:** PSLocalBase is **3.91x faster** (122.32 ms vs 478.12 ms).
+* 🔎 **Multi-filter Query (`active` AND `score >= 80`):** PSLocalBase is **2.39x faster** (126.71 ms vs 302.94 ms).
 
 ### ⚡ Part 2: In-Memory Engine & Disk Sync (10,000 Records)
-* 💾 **Disk Synchronization Flush:** PSLocalBase's native atomic `VACUUM INTO` is **14.48x faster** than serializing and writing flat JSON to disk (75.72 ms vs 1,096.08 ms).
-* 🎯 **In-Memory Point Lookups (100 random IDs):** PSLocalBase is **10.10x faster** (84.35 ms vs 852.07 ms) due to primary key B-Tree index lookup vs PowerShell collection scans.
-* 📑 **In-Memory Sorting & Pagination:** PSLocalBase is **4.54x faster** (34.06 ms vs 154.48 ms).
-* ✏️ **In-Memory Document Updates (100 docs):** PSLocalBase is **4.05x faster** (240.19 ms vs 973.39 ms).
+* 💾 **Disk Synchronization Flush:** PSLocalBase's native atomic `VACUUM INTO` is **16.66x faster** than serializing and writing flat JSON to disk (24.34 ms vs 405.54 ms).
+* 🎯 **In-Memory Point Lookups (100 random IDs):** PSLocalBase is **8.07x faster** (25.53 ms vs 206.00 ms) due to primary key B-Tree index lookup vs PowerShell collection scans.
+* 📑 **In-Memory Sorting & Pagination:** PSLocalBase is **4.82x faster** (13.36 ms vs 64.38 ms).
+* ✏️ **In-Memory Document Updates (100 docs):** PSLocalBase is **2.65x faster** (102.75 ms vs 272.69 ms).
 
 ---
 
@@ -67,19 +67,19 @@ Direct persistence to disk (`PSLocalBase` SQLite `.db` in WAL mode vs flat `.jso
 
 | Operation | PSLocalBase (ms) | Flat JSON File (ms) | Speedup Factor | Winner |
 | :--- | :---: | :---: | :---: | :---: |
-| **Individual Deletions (10 records on disk)** | **70.24 ms** | 33,874.14 ms | **482.26x** | **PSLocalBase** 🏆 |
-| **Atomic Upsert (10 records on disk)** | **58.59 ms** | 24,185.80 ms | **412.80x** | **PSLocalBase** 🏆 |
-| **Partial Updates (10 records on disk)** | **119.25 ms** | 17,651.23 ms | **148.02x** | **PSLocalBase** 🏆 |
-| **Selective Field Projection (`select()` 100 docs)** | **55.06 ms** | 774.11 ms | **14.06x** | **PSLocalBase** 🏆 |
-| **Sorting & Pagination (Top 10 DESC)** | **46.94 ms** | 653.98 ms | **13.93x** | **PSLocalBase** 🏆 |
-| **Instant Existence Check (`exists()`)** | **85.93 ms** | 1,120.11 ms | **13.04x** | **PSLocalBase** 🏆 |
-| **Array Length Filtering (`whereLength`)** | **114.21 ms** | 1,057.71 ms | **9.26x** | **PSLocalBase** 🏆 |
-| **Scalar Aggregate Count (`count()`)** | **66.95 ms** | 561.58 ms | **8.39x** | **PSLocalBase** 🏆 |
-| **Dual Collection Relational JOIN (5k x 5k)** | **231.31 ms** | 1,296.88 ms | **5.61x** | **PSLocalBase** 🏆 |
-| **In-Engine Mathematical Sum (`sum()`)** | **356.76 ms** | 1,177.10 ms | **3.30x** | **PSLocalBase** 🏆 |
-| **Point Lookups (100 random IDs)** | **238.68 ms** | 769.84 ms | **3.23x** | **PSLocalBase** 🏆 |
-| **Multi-filter Query (`active` AND `score >= 80`)** | **163.50 ms** | 509.12 ms | **3.11x** | **PSLocalBase** 🏆 |
-| **Bulk Ingestion (10,000 records to disk)** | 5,156.00 ms | 795.26 ms | 0.15x | Flat JSON *(raw string dump)* |
+| **Individual Deletions (10 records on disk)** | **16.42 ms** | 9,090.44 ms | **553.62x** | **PSLocalBase** 🏆 |
+| **Atomic Upsert (10 records on disk)** | **21.30 ms** | 8,925.83 ms | **419.05x** | **PSLocalBase** 🏆 |
+| **Partial Updates (10 records on disk)** | **68.44 ms** | 9,161.33 ms | **133.86x** | **PSLocalBase** 🏆 |
+| **Instant Existence Check (`exists()`)** | **11.51 ms** | 269.96 ms | **23.45x** | **PSLocalBase** 🏆 |
+| **Sorting & Pagination (Top 10 DESC)** | **27.47 ms** | 388.45 ms | **14.14x** | **PSLocalBase** 🏆 |
+| **Selective Field Projection (`select()` 100 docs)** | **24.52 ms** | 262.31 ms | **10.70x** | **PSLocalBase** 🏆 |
+| **Scalar Aggregate Count (`count()`)** | **31.04 ms** | 299.10 ms | **9.64x** | **PSLocalBase** 🏆 |
+| **In-Engine Mathematical Sum (`sum()`)** | **39.80 ms** | 296.65 ms | **7.45x** | **PSLocalBase** 🏆 |
+| **Array Length Filtering (`whereLength`)** | **34.74 ms** | 244.21 ms | **7.03x** | **PSLocalBase** 🏆 |
+| **Dual Collection Relational JOIN (5k x 5k)** | **35.37 ms** | 153.98 ms | **4.35x** | **PSLocalBase** 🏆 |
+| **Point Lookups (100 random IDs)** | **122.32 ms** | 478.12 ms | **3.91x** | **PSLocalBase** 🏆 |
+| **Multi-filter Query (`active` AND `score >= 80`)** | **126.71 ms** | 302.94 ms | **2.39x** | **PSLocalBase** 🏆 |
+| **Bulk Ingestion (10,000 records to disk)** | 3,938.03 ms | 304.21 ms | 0.08x | Flat JSON *(raw string dump)* |
 
 ---
 
@@ -92,15 +92,15 @@ Both systems operate with the entire dataset pre-loaded in memory. Modifications
 
 | Operation | PSLocalBase In-Memory (ms) | Flat JSON In-Memory (ms) | Speedup Factor | Winner |
 | :--- | :---: | :---: | :---: | :---: |
-| **SYNC IN-MEMORY STATE TO DISK** | **75.72 ms** | 1,096.08 ms | **14.48x** | **PSLocalBase** 🏆 |
-| **Point Lookups (100 random IDs)** | **84.35 ms** | 852.07 ms | **10.10x** | **PSLocalBase** 🏆 |
-| **Sorting & Pagination (Top 10)** | **34.06 ms** | 154.48 ms | **4.54x** | **PSLocalBase** 🏆 |
-| **In-Memory 100 Document Updates** | **240.19 ms** | 973.39 ms | **4.05x** | **PSLocalBase** 🏆 |
-| **Loading 10,000 Records into RAM** | 3,192.33 ms | 321.86 ms | 0.10x | Flat JSON |
-| **Aggregate Count (Filter + Count)** | 33.59 ms | 14.40 ms | 0.43x | Flat JSON *(direct object property)* |
-| **Multi-filter Query (`active` AND `score >= 80`)** | 161.10 ms | 17.20 ms | 0.11x | Flat JSON *(direct object property)* |
+| **SYNC IN-MEMORY STATE TO DISK** | **24.34 ms** | 405.54 ms | **16.66x** | **PSLocalBase** 🏆 |
+| **Point Lookups (100 random IDs)** | **25.53 ms** | 206.00 ms | **8.07x** | **PSLocalBase** 🏆 |
+| **Sorting & Pagination (Top 10)** | **13.36 ms** | 64.38 ms | **4.82x** | **PSLocalBase** 🏆 |
+| **In-Memory 100 Document Updates** | **102.75 ms** | 272.69 ms | **2.65x** | **PSLocalBase** 🏆 |
+| **Loading 10,000 Records into RAM** | 1,696.14 ms | 101.91 ms | 0.06x | Flat JSON |
+| **Aggregate Count (Filter + Count)** | 11.26 ms | 3.54 ms | 0.31x | Flat JSON *(direct object property)* |
+| **Multi-filter Query (`active` AND `score >= 80`)** | 61.86 ms | 7.15 ms | 0.12x | Flat JSON *(direct object property)* |
 
-> **Analysis of In-Memory Filtering:** For pure in-memory read-only sequential scans across pre-allocated .NET objects, PowerShell's native pipeline can read existing object pointers without boundary transitions. However, as soon as indexing, lookups, sorting, data mutations, or disk persistence are required, PSLocalBase completely outclasses in-memory flat structures by **4x to 10x**, with **14.5x faster disk flushes**.
+> **Analysis of In-Memory Filtering:** For pure in-memory read-only sequential scans across pre-allocated .NET objects, PowerShell's native pipeline can read existing object pointers without boundary transitions. However, as soon as indexing, lookups, sorting, data mutations, or disk persistence are required, PSLocalBase completely outclasses in-memory flat structures by **2.6x to 8x**, with **16.6x faster disk flushes**.
 
 ---
 
@@ -110,14 +110,14 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 
 | Operation | PSLocalBase (ms) | Flat JSON File (ms) | Speedup Factor | Winner |
 | :--- | :---: | :---: | :---: | :---: |
-| **Individual Deletions (10 docs)** | **50.81 ms** | 8,772.54 ms | **172.65x** | **PSLocalBase** 🏆 |
-| **Partial Updates (10 docs)** | **230.71 ms** | 17,086.84 ms | **74.06x** | **PSLocalBase** 🏆 |
-| **Sorting & Pagination (Top 10 DESC)** | **73.49 ms** | 825.88 ms | **11.24x** | **PSLocalBase** 🏆 |
-| **Scalar Aggregate Count (`count()`)** | **93.72 ms** | 481.30 ms | **5.14x** | **PSLocalBase** 🏆 |
-| **Relational JOIN (`orders` JOIN `users`)** | **31.20 ms** | 77.93 ms | **2.50x** | **PSLocalBase** 🏆 |
-| **Point Lookups (100 random IDs)** | **680.12 ms** | 1,072.04 ms | **1.58x** | **PSLocalBase** 🏆 |
-| **Multi-filter Query (`active` + `score >= 80`)** | **400.95 ms** | 579.65 ms | **1.45x** | **PSLocalBase** 🏆 |
-| **Bulk Ingestion (5,000 docs)** | 6,913.30 ms | 587.76 ms | 0.09x | Flat JSON |
+| **Individual Deletions (10 docs)** | **18.13 ms** | 4,487.39 ms | **247.51x** | **PSLocalBase** 🏆 |
+| **Partial Updates (10 docs)** | **94.58 ms** | 5,652.73 ms | **59.77x** | **PSLocalBase** 🏆 |
+| **Sorting & Pagination (Top 10 DESC)** | **25.65 ms** | 277.30 ms | **10.81x** | **PSLocalBase** 🏆 |
+| **Scalar Aggregate Count (`count()`)** | **26.84 ms** | 178.10 ms | **6.64x** | **PSLocalBase** 🏆 |
+| **Relational JOIN (`orders` JOIN `users`)** | **34.97 ms** | 90.72 ms | **2.59x** | **PSLocalBase** 🏆 |
+| **Point Lookups (100 random IDs)** | **150.11 ms** | 301.22 ms | **2.01x** | **PSLocalBase** 🏆 |
+| **Multi-filter Query (`active` + `score >= 80`)** | **109.62 ms** | 143.39 ms | **1.31x** | **PSLocalBase** 🏆 |
+| **Bulk Ingestion (5,000 docs)** | 2,546.68 ms | 163.61 ms | 0.06x | Flat JSON |
 
 ---
 
@@ -133,7 +133,7 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 1. **B-Tree Page Allocation:** SQLite structures data into fixed-size 4KB pages containing cell pointers, interior nodes, and leaf records for $O(\log N)$ access.
 2. **Primary Key Indexes:** Pre-computed index trees for fast point lookups and uniqueness validation.
 3. **Write-Ahead Logging (`WAL`):** Maintains transaction isolation and concurrency metadata.
-4. **Conclusion:** Spending ~2.7 MB of extra disk space yields **148x to 482x faster updates and deletes**, **14.5x faster disk synchronization**, and zero risk of JSON corruption.
+4. **Conclusion:** Spending ~2.7 MB of extra disk space yields **133x to 553x faster updates and deletes**, **16.6x faster disk synchronization**, and zero risk of JSON corruption.
 
 ---
 
@@ -160,7 +160,7 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 │           ▼ (WriteAllText: Replaces Entire File on Disk)                        │
 │  [Disk JSON File]                                                               │
 │                                                                                 │
-│  ⚠️ MULTIPLIED BY N OPERATIONS: 10 UPDATES = ~17.6 SECONDS!                     │
+│  ⚠️ MULTIPLIED BY N OPERATIONS: 10 UPDATES = ~9.1 SECONDS!                      │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -177,7 +177,7 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 │  [Native WAL In-Place Page Write (~4KB appended to WAL journal)]                │
 │           │                                                                     │
 │           ▼                                                                     │
-│  ⚡ COMPLETED IN ~12 MILLISECONDS PER UPDATE (148x FASTER)                       │
+│  ⚡ COMPLETED IN ~6.8 MILLISECONDS PER UPDATE (133x FASTER)                      │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 

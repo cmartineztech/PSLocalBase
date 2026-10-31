@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PSLocalBase - Embedded NoSQL document database for PowerShell.
 .DESCRIPTION
@@ -35,28 +35,37 @@ class PSLocalBaseArrayOp {
 # 2. Main PSLocalBase Class Definition
 # ---------------------------------------------------------------------------
 class PSLocalBase : System.IDisposable {
-    [IntPtr]$DbHandle = [IntPtr]::Zero
-    [string]$FilePath
-    [string]$CurrentCollection = ""
-    [string]$CurrentKey = ""
-    [System.Collections.Generic.List[string]]$WhereClauses
-    [System.Collections.Generic.List[object]]$WhereParameters
+    static [string]$IdentifierPattern = '\A[a-zA-Z0-9_]+\z'
+    static [string]$FieldPathPattern = '\A[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*\z'
+    static [string]$IndexedFieldPathPattern = '\A[a-zA-Z0-9_]+(\[\d+\])*(\.[a-zA-Z0-9_]+(\[\d+\])*)*\z'
+    static [string]$GroupPatternPattern = '\A[a-zA-Z0-9_*?]+\z'
+    static [object]$SupportsDateKind = $null
+
+    hidden [IntPtr]$DbHandle = [IntPtr]::Zero
+    hidden [System.Runtime.InteropServices.SafeHandle]$ConnectionOwner = $null
+    hidden [long]$HandleGeneration = 0
+    hidden [bool]$WasOpened = $false
+    hidden [string]$FilePath
+    hidden [string]$CurrentCollection = ""
+    hidden [string]$CurrentKey = ""
+    hidden [System.Collections.Generic.List[string]]$WhereClauses
+    hidden [System.Collections.Generic.List[object]]$WhereParameters
     [string]$JournalMode = ""
-    [string]$OrderByClause = ""
-    [object]$LimitValue = $null
-    [object]$SkipValue = $null
+    hidden [string]$OrderByClause = ""
+    hidden [System.Nullable[int]]$LimitValue = $null
+    hidden [System.Nullable[int]]$SkipValue = $null
     [bool]$InTransaction = $false
     [hashtable]$config
-    [bool]$IsChildInstance = $false
-    [PSLocalBase]$ParentDb = $null
-    [System.Collections.Generic.List[hashtable]]$PopulateClauses
-    [PSLocalBase]$UnionQuery = $null
-    [PSLocalBase]$UnionLeftQuery = $null
-    [string]$UnionType = ""
-    [bool]$IsCollectionGroup = $false
-    [string[]]$GroupTables = @()
-    [bool]$IsComposedInUnion = $false
-    [System.Collections.Generic.List[string]]$SelectedFields
+    hidden [bool]$IsChildInstance = $false
+    hidden [PSLocalBase]$ParentDb = $null
+    hidden [System.Collections.Generic.List[hashtable]]$PopulateClauses
+    hidden [PSLocalBase]$UnionQuery = $null
+    hidden [PSLocalBase]$UnionLeftQuery = $null
+    hidden [string]$UnionType = ""
+    hidden [bool]$IsCollectionGroup = $false
+    hidden [string[]]$GroupTables = @()
+    hidden [bool]$IsComposedInUnion = $false
+    hidden [System.Collections.Generic.List[string]]$SelectedFields
 
     # Default constructor (in-memory)
     PSLocalBase() {
@@ -91,9 +100,22 @@ class PSLocalBase : System.IDisposable {
         $this.IsCollectionGroup = $false
         $this.GroupTables = @()
         $this.InTransaction = if ($parent) { $parent.InTransaction } else { $false }
+        $this.HandleGeneration = if ($parent) { $parent.HandleGeneration } else { 0 }
     }
 
-    [void] Init([string]$filePath, [hashtable]$options) {
+    static [bool] _ToStrictBool([string]$name, [object]$value) {
+        if ($value -is [bool]) { return $value }
+        if ([PSLocalBase]::_IsNumber($value)) { return ([double]$value -ne 0) }
+        $text = ([string]$value).Trim().ToLowerInvariant()
+        if ($text -in @('true', '1', 'yes', 'on')) { return $true }
+        if ($text -in @('false', '0', 'no', 'off', '')) { return $false }
+        throw [System.ArgumentException]::new("Option '$name' must be a boolean value. Provided: '$value'.")
+    }
+
+    hidden [void] Init([string]$filePath, [hashtable]$options) {
+        if ($this.WasOpened) {
+            throw [System.InvalidOperationException]::new("A PSLocalBase instance cannot be reopened. Create a new instance instead.")
+        }
         if ([string]::IsNullOrWhiteSpace($filePath)) {
             throw [System.ArgumentException]::new("Database file path cannot be null or empty.")
         }
@@ -121,6 +143,26 @@ class PSLocalBase : System.IDisposable {
                 $this.config[$k] = $options[$k]
             }
         }
+        foreach ($boolKey in @('debug', 'wal')) {
+            $this.config[$boolKey] = [PSLocalBase]::_ToStrictBool($boolKey, $this.config[$boolKey])
+        }
+        $depthKey = if ($null -ne $options -and -not $options.ContainsKey('depth') -and $options.ContainsKey('maxDepth')) { 'maxDepth' } else { 'depth' }
+        $depthValue = 0
+        if (-not [int]::TryParse([string]$this.config[$depthKey], [ref]$depthValue) -or $depthValue -lt 1 -or $depthValue -gt 100) {
+            throw [System.ArgumentOutOfRangeException]::new($depthKey, "Option '$depthKey' must be an integer between 1 and 100.")
+        }
+        $this.config['depth'] = $depthValue
+        foreach ($limitKey in @('maxDocumentBytes', 'maxReadDepth')) {
+            if ($this.config.ContainsKey($limitKey)) {
+                $parsedLimit = 0L
+                if (-not [long]::TryParse([string]$this.config[$limitKey], [ref]$parsedLimit) -or $parsedLimit -lt 1) {
+                    throw [System.ArgumentOutOfRangeException]::new($limitKey, "Option '$limitKey' must be a positive integer.")
+                }
+                $this.config[$limitKey] = $parsedLimit
+            }
+        }
+        if (-not $this.config.ContainsKey('maxDocumentBytes')) { $this.config['maxDocumentBytes'] = 16MB }
+        if (-not $this.config.ContainsKey('maxReadDepth')) { $this.config['maxReadDepth'] = 100L }
 
         # Resolve path
         if ($filePath -eq ":memory:") {
@@ -172,20 +214,26 @@ class PSLocalBase : System.IDisposable {
         }
 
         $this.DbHandle = $handle
+        $this.WasOpened = $true
+        $this.HandleGeneration++
 
         try {
-            if ($null -eq [WinSqlite3].GetMethod('RegisterPsLike')) {
+            $bridgeVersion = [WinSqlite3].GetField('BridgeVersion')
+            if ($null -eq $bridgeVersion -or [int]$bridgeVersion.GetValue($null) -lt 4) {
                 throw [System.InvalidOperationException]::new("Restart PowerShell to load the updated PSLocalBase native bridge.")
             }
+            $this.ConnectionOwner = ('PSLocalBaseConnectionHandle' -as [type])::new($handle)
             $likeRc = [WinSqlite3]::RegisterPsLike($this.DbHandle)
             if ($likeRc -ne [WinSqlite3]::SQLITE_OK) {
                 throw [System.InvalidOperationException]::new("Failed to register PSLocalBase pattern matching (Code: $likeRc).")
             }
+            # Schema objects (triggers, views, CHECK and index expressions) may only call innocuous functions.
+            $this._ExecuteDirectSql("PRAGMA trusted_schema = OFF;")
             $busyMs = if ($this.config.ContainsKey("busyTimeout")) { [int]$this.config["busyTimeout"] } else { 5000 }
             [void][WinSqlite3]::BusyTimeout($this.DbHandle, $busyMs)
             $this._ExecuteDirectSql("PRAGMA busy_timeout = $busyMs;")
 
-            $useWal = if ($this.config.ContainsKey("wal")) { [bool]$this.config["wal"] } else { $true }
+            $useWal = [bool]$this.config["wal"]
             if ($this.FilePath -ne ":memory:") {
                 if ($useWal) {
                     $this._ExecuteDirectSql("PRAGMA journal_mode = WAL;")
@@ -200,7 +248,7 @@ class PSLocalBase : System.IDisposable {
                     "FULL"
                 }
                 $syncUpper = $syncVal.Trim().ToUpperInvariant()
-                if ($syncUpper -notmatch '^(EXTRA|FULL|NORMAL|OFF|0|1|2|3)$') {
+                if ($syncUpper -notmatch '\A(EXTRA|FULL|NORMAL|OFF|0|1|2|3)\z') {
                     throw [System.ArgumentException]::new("Invalid synchronous mode '$syncVal'. Supported modes: EXTRA, FULL, NORMAL, OFF, 0, 1, 2, 3.")
                 }
                 $this._ExecuteDirectSql("PRAGMA synchronous = $syncUpper;")
@@ -221,10 +269,7 @@ class PSLocalBase : System.IDisposable {
             $cacheKib = -1 * ($cacheMB * 1024)
             $this._ExecuteDirectSql("PRAGMA cache_size = $cacheKib;")
         } catch {
-            if ($this.DbHandle -ne [IntPtr]::Zero) {
-                [void][WinSqlite3]::CloseV2($this.DbHandle)
-                $this.DbHandle = [IntPtr]::Zero
-            }
+            $this.close()
             throw
         }
     }
@@ -238,13 +283,14 @@ class PSLocalBase : System.IDisposable {
         $names = [System.Collections.Generic.List[string]]::new()
         foreach ($r in $rows) {
             $tableName = $r[0]
-            # Verify table has compatible schema (key and doc columns)
-            $cols = $this._ExecuteBoundQuery("PRAGMA table_info([$tableName]);", @())
+            # Names come from the database file, which may be untrusted.
+            if ($tableName -notmatch [PSLocalBase]::IdentifierPattern) { continue }
+            $cols = $this._ExecuteBoundQuery("SELECT name FROM pragma_table_info(?);", @($tableName))
             $hasKey = $false
             $hasDoc = $false
             foreach ($c in $cols) {
-                if ($c[1] -eq "key") { $hasKey = $true }
-                if ($c[1] -eq "doc") { $hasDoc = $true }
+                if ($c[0] -eq "key") { $hasKey = $true }
+                if ($c[0] -eq "doc") { $hasDoc = $true }
             }
             if ($hasKey -and $hasDoc) {
                 $names.Add($tableName)
@@ -331,6 +377,16 @@ class PSLocalBase : System.IDisposable {
         return $this.collection($name).create()
     }
 
+    static [string] _PathHash([string]$collection, [string]$field) {
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($collection):$($field)"))
+            return [BitConverter]::ToString($hashBytes).Replace("-", "")
+        } finally {
+            $hasher.Dispose()
+        }
+    }
+
     [PSLocalBase] createIndex([string]$field) {
         return $this.createIndex($field, @{})
     }
@@ -348,17 +404,16 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
         }
 
         $this._EnsureCollectionTable()
 
         $canonicalCol = $this._ResolveCanonicalCollectionName($this.CurrentCollection)
-        $hasher = [System.Security.Cryptography.SHA256]::Create()
-        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($canonicalCol):$($fieldToCheck)"))
-        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 16)
-        $pathHash8 = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
+        $pathHex = [PSLocalBase]::_PathHash($canonicalCol, $fieldToCheck)
+        $pathHash = $pathHex.Substring(0, 16)
+        $pathHash8 = $pathHex.Substring(0, 8)
         $cleanCol = $canonicalCol -replace '[^a-zA-Z0-9_]', '_'
         $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
         $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
@@ -410,7 +465,10 @@ class PSLocalBase : System.IDisposable {
                 try {
                     $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT sp_idx_upgrade;")
                     $this._ExecuteDirectSql("RELEASE SAVEPOINT sp_idx_upgrade;")
-                } catch { }
+                } catch {
+                    # The original failure is rethrown below; a rollback error must not replace it.
+                    Write-Verbose "Index upgrade rollback failed: $($_.Exception.Message)"
+                }
                 throw
             }
         }
@@ -434,15 +492,14 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
         }
 
         $canonicalCol = $this._ResolveCanonicalCollectionName($this.CurrentCollection)
-        $hasher = [System.Security.Cryptography.SHA256]::Create()
-        $hashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($canonicalCol):$($fieldToCheck)"))
-        $pathHash = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 16)
-        $pathHash8 = [BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 8)
+        $pathHex = [PSLocalBase]::_PathHash($canonicalCol, $fieldToCheck)
+        $pathHash = $pathHex.Substring(0, 16)
+        $pathHash8 = $pathHex.Substring(0, 8)
         $cleanCol = $canonicalCol -replace '[^a-zA-Z0-9_]', '_'
         $cleanField = $fieldToCheck -replace '[^a-zA-Z0-9_]', '_'
         $indexName = "idx_${cleanCol}__${cleanField}_${pathHash}"
@@ -450,8 +507,7 @@ class PSLocalBase : System.IDisposable {
         $hashPattern8 = "*__${cleanField}_${pathHash8}"
 
         $rawCol = $this.CurrentCollection -replace '[^a-zA-Z0-9_]', '_'
-        $rawHashBytes = $hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$($this.CurrentCollection):$fieldToCheck"))
-        $rawPathHash = [BitConverter]::ToString($rawHashBytes).Replace("-", "").Substring(0, 16)
+        $rawPathHash = [PSLocalBase]::_PathHash($this.CurrentCollection, $fieldToCheck).Substring(0, 16)
         $rawIndexName = "idx_${rawCol}__${cleanField}_${rawPathHash}"
 
         $docColPattern = '(?:["''`\[]?\w+["''`\]]?\.)?(?:["''`\[]doc["''`\]]|doc)'
@@ -565,11 +621,11 @@ class PSLocalBase : System.IDisposable {
         }
         $cleanFField = $foreignField.Trim()
         if ($cleanFField.StartsWith("$.")) { $cleanFField = $cleanFField.Substring(2) }
-        if ($cleanFField -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($cleanFField -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Foreign field '$foreignField' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
         }
         $cleanFCol = $foreignCollection.Trim()
-        if ($cleanFCol -notmatch '^[a-zA-Z0-9_]+$') {
+        if ($cleanFCol -notmatch [PSLocalBase]::IdentifierPattern) {
             throw [System.ArgumentException]::new("Foreign collection name '$foreignCollection' is invalid. Only alphanumeric characters and underscores are allowed.")
         }
         $cleanAs = if (-not [string]::IsNullOrWhiteSpace($asProperty)) {
@@ -578,7 +634,7 @@ class PSLocalBase : System.IDisposable {
             $cleanFField
         }
         if ($cleanAs.StartsWith("$.")) { $cleanAs = $cleanAs.Substring(2) }
-        if ($cleanAs -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($cleanAs -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Target property name '$cleanAs' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
         }
 
@@ -595,6 +651,7 @@ class PSLocalBase : System.IDisposable {
     [PSLocalBase] clone() {
         $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
         $copy = [PSLocalBase]::new($this.DbHandle, $this.FilePath, $this.config, $root)
+        $copy.HandleGeneration = $this.HandleGeneration
         $copy.CurrentCollection = $this.CurrentCollection
         $copy.CurrentKey = $this.CurrentKey
         if ($null -ne $this.WhereClauses) { $copy.WhereClauses.AddRange($this.WhereClauses) }
@@ -632,6 +689,9 @@ class PSLocalBase : System.IDisposable {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
         }
+        if ($this.IsCollectionGroup -or $otherQuery.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("union() does not support collectionGroup() queries. Query each collection explicitly or use collectionGroup() alone.")
+        }
         if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery -or $otherQuery.IsComposedInUnion) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
         }
@@ -654,6 +714,9 @@ class PSLocalBase : System.IDisposable {
     [PSLocalBase] unionAll([PSLocalBase]$otherQuery) {
         if ($null -eq $otherQuery) {
             throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
+        }
+        if ($this.IsCollectionGroup -or $otherQuery.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("unionAll() does not support collectionGroup() queries. Query each collection explicitly or use collectionGroup() alone.")
         }
         if ($this.IsComposedInUnion -or $null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery -or $otherQuery.IsComposedInUnion) {
             throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
@@ -680,22 +743,23 @@ class PSLocalBase : System.IDisposable {
             throw [System.ArgumentException]::new("Collection pattern cannot be null or whitespace.")
         }
         $trimmedPattern = $pattern.Trim()
-        if ($trimmedPattern -notmatch '^[a-zA-Z0-9_*?]+$') {
+        if ($trimmedPattern -notmatch [PSLocalBase]::GroupPatternPattern) {
             throw [System.ArgumentException]::new("Collection group pattern '$pattern' is invalid. Only alphanumeric characters, underscores, and wildcard * ? are allowed.")
         }
 
         $allTables = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", @())
-        $patternRegex = '^' + [regex]::Escape($trimmedPattern).Replace('\*', '.*').Replace('\?', '.') + '$'
+        $patternRegex = '\A' + [regex]::Escape($trimmedPattern).Replace('\*', '.*').Replace('\?', '.') + '\z'
         $matchedTables = [System.Collections.Generic.List[string]]::new()
         foreach ($row in $allTables) {
             $tableName = $row[0]
-            if ($tableName -match $patternRegex -and $tableName -match '^[a-zA-Z0-9_]+$') {
+            if ($tableName -match $patternRegex -and $tableName -match [PSLocalBase]::IdentifierPattern) {
                 $matchedTables.Add($tableName)
             }
         }
 
         $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
         $child = [PSLocalBase]::new($this.DbHandle, $this.FilePath, $this.config, $root)
+        $child.HandleGeneration = $this.HandleGeneration
         $child.CurrentCollection = $trimmedPattern
         $child.IsCollectionGroup = $true
         $child.GroupTables = $matchedTables.ToArray()
@@ -708,19 +772,20 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($name)) {
             throw [System.ArgumentException]::new("Collection name cannot be null or whitespace.")
         }
-        if ($name -notmatch '^[a-zA-Z0-9_]+$') {
+        if ($name -notmatch [PSLocalBase]::IdentifierPattern) {
             throw [System.ArgumentException]::new("Collection name '$name' is invalid. Only alphanumeric characters and underscores are allowed.")
         }
 
         $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
         $child = [PSLocalBase]::new($this.DbHandle, $this.FilePath, $this.config, $root)
+        $child.HandleGeneration = $this.HandleGeneration
         $child.CurrentCollection = $name
         $child._ResetQueryState()
 
         return $child
     }
 
-        [string] _ExtractDocumentId([object]$data) {
+    [string] _ExtractDocumentId([object]$data) {
         if ($null -eq $data) { return "" }
         if ($data -is [System.Collections.IDictionary]) {
             if ($data.Contains("key") -and -not [string]::IsNullOrWhiteSpace([string]$data["key"])) { return [string]$data["key"] }
@@ -736,24 +801,21 @@ class PSLocalBase : System.IDisposable {
         }
         return ""
     }
-[string] _ResolveKeyFromCriteria([object]$keyOrCriteria) {
+    [string] _ResolveKeyFromCriteria([object]$keyOrCriteria) {
         if ($null -eq $keyOrCriteria) { return "" }
         if ($keyOrCriteria -is [string]) { return $keyOrCriteria }
+        # Criteria objects must name the key explicitly; any other property is not an identity.
         if ($keyOrCriteria -is [System.Collections.IDictionary]) {
             if ($keyOrCriteria.Contains("key")) { return [string]$keyOrCriteria["key"] }
             if ($keyOrCriteria.Contains("id")) { return [string]$keyOrCriteria["id"] }
             if ($keyOrCriteria.Contains("_key")) { return [string]$keyOrCriteria["_key"] }
-            foreach ($val in $keyOrCriteria.Values) {
-                return [string]$val
-            }
+            return ""
         }
         if ($keyOrCriteria -is [System.Management.Automation.PSCustomObject]) {
             if ($keyOrCriteria.PSObject.Properties["key"]) { return [string]$keyOrCriteria.key }
             if ($keyOrCriteria.PSObject.Properties["id"]) { return [string]$keyOrCriteria.id }
             if ($keyOrCriteria.PSObject.Properties["_key"]) { return [string]$keyOrCriteria._key }
-            foreach ($prop in $keyOrCriteria.PSObject.Properties) {
-                return [string]$prop.Value
-            }
+            return ""
         }
         return [string]$keyOrCriteria
     }
@@ -774,7 +836,7 @@ class PSLocalBase : System.IDisposable {
         $resolvedKey = $this._ResolveKeyFromCriteria($keyOrCriteria)
 
         if ([string]::IsNullOrWhiteSpace($resolvedKey)) {
-            throw [System.ArgumentException]::new("Document key could not be resolved from criteria.")
+            throw [System.ArgumentException]::new("Document key could not be resolved from criteria. Pass a string key or an object with a 'key', 'id', or '_key' property.")
         }
 
         if ($resolvedKey.IndexOf([char]0) -ge 0) {
@@ -785,9 +847,6 @@ class PSLocalBase : System.IDisposable {
         $target.CurrentKey = $resolvedKey
         $target.WhereClauses.Clear()
         $target.WhereParameters.Clear()
-
-        # Automatic schema provisioning on target navigation (.doc())
-        $target._EnsureCollectionTable()
         return $target
     }
 
@@ -816,6 +875,82 @@ class PSLocalBase : System.IDisposable {
         return ($currentDepth -gt $maxDepth)
     }
 
+    static [bool] _IsNumber([object]$value) {
+        return ($value -is [byte] -or $value -is [sbyte] -or $value -is [int16] -or $value -is [uint16] -or
+                $value -is [int32] -or $value -is [uint32] -or $value -is [int64] -or $value -is [uint64] -or
+                $value -is [single] -or $value -is [double] -or $value -is [decimal])
+    }
+
+    static [object] _NormalizeScalar([object]$value) {
+        if ($value -is [datetime]) {
+            return ([datetime]$value).ToUniversalTime().ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($value -is [System.DateTimeOffset]) {
+            return ([System.DateTimeOffset]$value).UtcDateTime.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        return $value
+    }
+
+    hidden [object] _NormalizeForJson([object]$obj) {
+        if ($null -eq $obj) { return $null }
+        if ($obj -is [datetime] -or $obj -is [System.DateTimeOffset]) { return [PSLocalBase]::_NormalizeScalar($obj) }
+        if ($obj -is [string] -or $obj -is [System.ValueType] -or $obj -is [PSLocalBaseArrayOp]) { return $obj }
+        if ($obj -is [System.Collections.IDictionary]) {
+            $copy = [ordered]@{}
+            foreach ($k in $obj.Keys) {
+                $this._AddNormalizedMember($copy, [string]$k, $obj[$k])
+            }
+            return $copy
+        }
+        if ($obj -is [System.Management.Automation.PSCustomObject]) {
+            $copy = [ordered]@{}
+            foreach ($prop in $obj.PSObject.Properties) {
+                $this._AddNormalizedMember($copy, $prop.Name, $prop.Value)
+            }
+            return $copy
+        }
+        if ($obj -is [System.Collections.IEnumerable]) {
+            $list = [System.Collections.Generic.List[object]]::new()
+            foreach ($elem in $obj) { $list.Add($this._NormalizeForJson($elem)) }
+            return [object[]]$list.ToArray()
+        }
+        return $obj
+    }
+
+    hidden [void] _AddNormalizedMember([System.Collections.Specialized.OrderedDictionary]$target, [string]$name, [object]$value) {
+        # ConvertFrom-Json rejects empty and case-insensitively duplicated names, which would make the collection unreadable.
+        if ([string]::IsNullOrEmpty($name)) {
+            throw [System.ArgumentException]::new("Document property names cannot be empty.")
+        }
+        if ($target.Contains($name)) {
+            throw [System.ArgumentException]::new("Document property '$name' is duplicated (property names are case-insensitive).")
+        }
+        $target[$name] = $this._NormalizeForJson($value)
+    }
+
+    hidden [object] _DeserializeDoc([string]$key, [string]$json) {
+        $maxBytes = [long]$this.config['maxDocumentBytes']
+        $maxDepth = [long]$this.config['maxReadDepth']
+        if (([long]$json.Length * 2) -gt $maxBytes) {
+            throw [System.IO.InvalidDataException]::new("Document '$key' exceeds maxDocumentBytes ($maxBytes).")
+        }
+        if ([WinSqlite3]::JsonNestingDepth($json) -gt $maxDepth) {
+            throw [System.IO.InvalidDataException]::new("Document '$key' exceeds maxReadDepth ($maxDepth).")
+        }
+        if ($null -eq [PSLocalBase]::SupportsDateKind) {
+            [PSLocalBase]::SupportsDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')
+        }
+        try {
+            # DateKind String keeps stored date text unchanged across editions.
+            if ([PSLocalBase]::SupportsDateKind) {
+                return (ConvertFrom-Json -InputObject $json -DateKind String)
+            }
+            return (ConvertFrom-Json -InputObject $json)
+        } catch {
+            throw [System.IO.InvalidDataException]::new("Document '$key' could not be deserialized.")
+        }
+    }
+
     [string] _SerializeJson([object]$data) {
         $depth = 20
         if ($this.config -and $this.config.ContainsKey("depth")) {
@@ -827,8 +962,9 @@ class PSLocalBase : System.IDisposable {
         if ($this._ExceedsDepth($data, $depth, 0)) {
             throw [System.InvalidOperationException]::new("Object serialization exceeded configured maximum depth ($depth). Increase 'depth' in configuration options to serialize deeply nested structures.")
         }
+        $normalized = $this._NormalizeForJson($data)
         $jsonWarn = $null
-        $json = ConvertTo-Json -InputObject $data -Compress -Depth $depth -WarningVariable jsonWarn -WarningAction SilentlyContinue
+        $json = ConvertTo-Json -InputObject $normalized -Compress -Depth $depth -WarningVariable jsonWarn -WarningAction SilentlyContinue
         if ($jsonWarn -and $jsonWarn.Count -gt 0) {
             throw [System.InvalidOperationException]::new("Object serialization exceeded configured maximum depth ($depth). Increase 'depth' in configuration options to serialize deeply nested structures.")
         }
@@ -850,91 +986,115 @@ class PSLocalBase : System.IDisposable {
         if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
             throw [System.InvalidOperationException]::new("Cannot execute mutation operation on a composite query (union/collectionGroup).")
         }
-        $this._EnsureCollectionTable()
 
         # Case 1: Targeted document (.doc('key').set(data))
         if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
             if ($this.CurrentKey.IndexOf([char]0) -ge 0) {
                 throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
             }
-            try {
-                $json = $this._SerializeJson($data)
-                $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
-                $this._ExecuteBoundSql($sql, @($this.CurrentKey, $json))
-            } finally {
-                $this._ResetQueryState()
-            }
+            $this._EnsureCollectionTable()
+            $json = $this._SerializeJson($data)
+            $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
+            $this._ExecuteBoundSql($sql, @($this.CurrentKey, $json))
             return
         }
 
         # Case 2: Collection-level set (overwrite entire collection)
         if ($data -is [System.Collections.IEnumerable] -and $data -isnot [string] -and $data -isnot [System.Collections.IDictionary]) {
-            $isOuterTx = $this._GetInTransaction()
-            $spName = ""
-            if ($isOuterTx) {
-                $spName = "sp_bulk_" + [System.Guid]::NewGuid().ToString("N")
-                $this._ExecuteDirectSql("SAVEPOINT $spName;")
-            } else {
-                $this.beginTransaction()
-            }
-            try {
-                $this._ExecuteDirectSql("DELETE FROM [$($this.CurrentCollection)];")
-                foreach ($item in $data) {
-                    $itemKey = ""
-                    $itemData = $item
-                    if ($options -and $options["keys"] -eq $true) {
-                        # If item is exported wrapper @{ key = ...; data = ... }, unwrap payload cleanly
-                        if ($item -is [System.Collections.IDictionary] -and $item.Contains("key") -and $item.Contains("data")) {
-                            $itemKey = [string]$item["key"]
-                            $itemData = $item["data"]
-                        } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["key"] -and $null -ne $item.PSObject.Properties["data"]) {
-                            $itemKey = [string]$item.key
-                            $itemData = $item.data
-                        } elseif ($item -is [System.Collections.IDictionary] -and $item.Contains("_key")) {
-                            $itemKey = [string]$item["_key"]
-                        } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["_key"]) {
-                            $itemKey = [string]$item._key
-                        } elseif ($item -is [System.Collections.IDictionary] -and $item.Contains("key")) {
-                            $itemKey = [string]$item["key"]
-                        } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["key"]) {
-                            $itemKey = [string]$item.key
-                        }
-                    }
-                    if ([string]::IsNullOrEmpty($itemKey)) {
-                        if ($itemData -is [System.Collections.IDictionary] -and $itemData.Contains("id")) {
-                            $itemKey = [string]$itemData["id"]
-                        } elseif ($itemData -is [System.Management.Automation.PSCustomObject] -and $null -ne $itemData.PSObject.Properties["id"]) {
-                            $itemKey = [string]$itemData.id
-                        } else {
-                            $itemKey = [System.Guid]::NewGuid().ToString("N")
-                        }
-                    }
-                    if ($itemKey.IndexOf([char]0) -ge 0) {
-                        throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
-                    }
-                    $json = $this._SerializeJson($itemData)
-                    $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?);"
-                    $this._ExecuteBoundSql($sql, @($itemKey, $json))
-                }
-                if ($isOuterTx) {
-                    $this._ExecuteDirectSql("RELEASE SAVEPOINT $spName;")
-                } else {
-                    $this.commit()
-                }
-            } catch {
-                if ($isOuterTx) {
-                    try { $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT $spName; RELEASE SAVEPOINT $spName;") } catch { }
-                } else {
-                    try { $this.rollback() } catch { }
-                }
-                throw
-            } finally {
-                $this._ResetQueryState()
-            }
+            $this._ReplaceAll($data, $options)
             return
         }
 
         throw [System.InvalidOperationException]::new("No document key selected. Call .doc('key') to set a single document or pass an array of items to overwrite the collection.")
+    }
+
+    [void] replaceAll([object]$items) {
+        $this.replaceAll($items, @{})
+    }
+
+    [void] replaceAll([object]$items, [hashtable]$options) {
+        $this._EnsureOpen()
+        if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
+            throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .replaceAll().")
+        }
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot execute mutation operation on a composite query (union/collectionGroup).")
+        }
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            throw [System.InvalidOperationException]::new("replaceAll() replaces the whole collection and cannot be called after doc().")
+        }
+        if ($null -eq $items -or $items -is [string] -or $items -is [System.Collections.IDictionary] -or $items -isnot [System.Collections.IEnumerable]) {
+            throw [System.ArgumentException]::new("replaceAll() expects an array of documents.")
+        }
+        $this._ReplaceAll($items, $options)
+    }
+
+    hidden [void] _ReplaceAll([object]$data, [hashtable]$options) {
+        if ($this.WhereClauses.Count -gt 0 -or -not [string]::IsNullOrEmpty($this.OrderByClause) -or $null -ne $this.LimitValue -or $null -ne $this.SkipValue) {
+            throw [System.InvalidOperationException]::new("Replacing a collection is not allowed on a filtered, sorted, or paginated query because it deletes every document. Call replaceAll() on the unfiltered collection, or use where(...).delete() and add()/set() to modify a subset.")
+        }
+        $this._EnsureCollectionTable()
+        $isOuterTx = $this._GetInTransaction()
+        $spName = ""
+        if ($isOuterTx) {
+            $spName = "sp_bulk_" + [System.Guid]::NewGuid().ToString("N")
+            $this._ExecuteDirectSql("SAVEPOINT $spName;")
+        } else {
+            $this.beginTransaction()
+        }
+        try {
+            $this._ExecuteDirectSql("DELETE FROM [$($this.CurrentCollection)];")
+            foreach ($item in $data) {
+                $itemKey = ""
+                $itemData = $item
+                if ($options -and $options["keys"] -eq $true) {
+                    # Exported wrappers @{ key = ...; data = ... } are unwrapped to their payload.
+                    if ($item -is [System.Collections.IDictionary] -and $item.Contains("key") -and $item.Contains("data")) {
+                        $itemKey = [string]$item["key"]
+                        $itemData = $item["data"]
+                    } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["key"] -and $null -ne $item.PSObject.Properties["data"]) {
+                        $itemKey = [string]$item.key
+                        $itemData = $item.data
+                    } elseif ($item -is [System.Collections.IDictionary] -and $item.Contains("_key")) {
+                        $itemKey = [string]$item["_key"]
+                    } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["_key"]) {
+                        $itemKey = [string]$item._key
+                    } elseif ($item -is [System.Collections.IDictionary] -and $item.Contains("key")) {
+                        $itemKey = [string]$item["key"]
+                    } elseif ($item -is [System.Management.Automation.PSCustomObject] -and $null -ne $item.PSObject.Properties["key"]) {
+                        $itemKey = [string]$item.key
+                    }
+                }
+                if ([string]::IsNullOrEmpty($itemKey)) {
+                    if ($itemData -is [System.Collections.IDictionary] -and $itemData.Contains("id")) {
+                        $itemKey = [string]$itemData["id"]
+                    } elseif ($itemData -is [System.Management.Automation.PSCustomObject] -and $null -ne $itemData.PSObject.Properties["id"]) {
+                        $itemKey = [string]$itemData.id
+                    } else {
+                        $itemKey = [System.Guid]::NewGuid().ToString("N")
+                    }
+                }
+                if ($itemKey.IndexOf([char]0) -ge 0) {
+                    throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
+                }
+                $json = $this._SerializeJson($itemData)
+                $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?);"
+                $this._ExecuteBoundSql($sql, @($itemKey, $json))
+            }
+            if ($isOuterTx) {
+                $this._ExecuteDirectSql("RELEASE SAVEPOINT $spName;")
+            } else {
+                $this.commit()
+            }
+        } catch {
+            # The original failure is rethrown below; a rollback error must not replace it.
+            if ($isOuterTx) {
+                try { $this._ExecuteDirectSql("ROLLBACK TO SAVEPOINT $spName; RELEASE SAVEPOINT $spName;") } catch { Write-Verbose "Savepoint rollback failed: $($_.Exception.Message)" }
+            } else {
+                try { $this.rollback() } catch { Write-Verbose "Rollback failed: $($_.Exception.Message)" }
+            }
+            throw
+        }
     }
 
     [string] add([object]$data) {
@@ -970,8 +1130,6 @@ class PSLocalBase : System.IDisposable {
         $json = $this._SerializeJson($data)
         $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?);"
         $this._ExecuteBoundSql($sql, @($newKey, $json))
-        $this.CurrentKey = ""
-        $this._ResetQueryState()
         return $newKey
     }
 
@@ -1000,32 +1158,27 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("Cannot upsert documents on a composite query (union).")
         }
 
-        try {
-            $targetKey = if (-not [string]::IsNullOrWhiteSpace($this.CurrentKey)) {
-                $this.CurrentKey
-            } elseif (-not [string]::IsNullOrWhiteSpace($customKey)) {
-                $customKey
-            } else {
-                $this._ExtractDocumentId($data)
-            }
-
-            if ([string]::IsNullOrWhiteSpace($targetKey)) {
-                $targetKey = [System.Guid]::NewGuid().ToString("N")
-            }
-
-            if ($targetKey.IndexOf([char]0) -ge 0) {
-                throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
-            }
-
-            $this._EnsureCollectionTable()
-            $json = $this._SerializeJson($data)
-            $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
-            $this._ExecuteBoundSql($sql, @($targetKey, $json))
-            return $targetKey
-        } finally {
-            $this.CurrentKey = ""
-            $this._ResetQueryState()
+        $targetKey = if (-not [string]::IsNullOrWhiteSpace($this.CurrentKey)) {
+            $this.CurrentKey
+        } elseif (-not [string]::IsNullOrWhiteSpace($customKey)) {
+            $customKey
+        } else {
+            $this._ExtractDocumentId($data)
         }
+
+        if ([string]::IsNullOrWhiteSpace($targetKey)) {
+            $targetKey = [System.Guid]::NewGuid().ToString("N")
+        }
+
+        if ($targetKey.IndexOf([char]0) -ge 0) {
+            throw [System.ArgumentException]::new("Document key cannot contain null characters (U+0000).")
+        }
+
+        $this._EnsureCollectionTable()
+        $json = $this._SerializeJson($data)
+        $sql = "INSERT INTO [$($this.CurrentCollection)] (key, doc) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;"
+        $this._ExecuteBoundSql($sql, @($targetKey, $json))
+        return $targetKey
     }
 
     [void] update([object]$partialData) {
@@ -1037,6 +1190,10 @@ class PSLocalBase : System.IDisposable {
             throw [System.InvalidOperationException]::new("No document key specified. Call .doc('key') before .update().")
         }
 
+        if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
+            throw [System.InvalidOperationException]::new("Cannot execute mutation operation on a composite query (union/collectionGroup).")
+        }
+        $this._EnsureCollectionTable()
         $targetKey = $this.CurrentKey
         $startedTx = $false
         if (-not $this._GetInTransaction()) {
@@ -1048,7 +1205,7 @@ class PSLocalBase : System.IDisposable {
             # Retrieve existing raw document without any select/populate view transformations
             $rawRows = $this._ExecuteBoundQuery("SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;", @($targetKey))
             $existing = if ($rawRows.Count -gt 0 -and $null -ne $rawRows[0][1]) {
-                ConvertFrom-Json -InputObject $rawRows[0][1]
+                $this._DeserializeDoc($targetKey, $rawRows[0][1])
             } else {
                 $null
             }
@@ -1068,11 +1225,9 @@ class PSLocalBase : System.IDisposable {
             if ($startedTx) { $this._ExecuteDirectSql("COMMIT;") }
         } catch {
             if ($startedTx) {
-                try { $this._ExecuteDirectSql("ROLLBACK;") } catch { }
+                try { $this._ExecuteDirectSql("ROLLBACK;") } catch { Write-Verbose "Rollback failed: $($_.Exception.Message)" }
             }
             throw
-        } finally {
-            $this._ResetQueryState()
         }
     }
 
@@ -1121,6 +1276,9 @@ class PSLocalBase : System.IDisposable {
     }
 
     [string] _BuildBranchSelect([PSLocalBase]$q, [System.Collections.Generic.List[object]]$queryParams) {
+        if ($q.CurrentCollection -notmatch [PSLocalBase]::IdentifierPattern) {
+            throw [System.InvalidOperationException]::new("Collection name '$($q.CurrentCollection)' is invalid.")
+        }
         if (-not $this._CollectionExists($q.CurrentCollection)) {
             return "SELECT '' AS key, '' AS doc WHERE 0"
         }
@@ -1150,16 +1308,7 @@ class PSLocalBase : System.IDisposable {
 
         $branchOrder = if (-not [string]::IsNullOrEmpty($q.OrderByClause)) { " " + $q.OrderByClause } else { "" }
 
-        $branchLimit = ""
-        if ($null -ne $q.LimitValue -and $q.LimitValue -ge 0) {
-            if ($null -ne $q.SkipValue -and $q.SkipValue -gt 0) {
-                $branchLimit = " LIMIT $($q.LimitValue) OFFSET $($q.SkipValue)"
-            } else {
-                $branchLimit = " LIMIT $($q.LimitValue)"
-            }
-        } elseif ($null -ne $q.SkipValue -and $q.SkipValue -gt 0) {
-            $branchLimit = " LIMIT -1 OFFSET $($q.SkipValue)"
-        }
+        $branchLimit = $q._PagingSql()
 
         return "SELECT key, $branchDocExpr AS doc FROM [$($q.CurrentCollection)]$branchWhere$branchOrder$branchLimit"
     }
@@ -1170,7 +1319,7 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\[\d+\])*(\.[a-zA-Z0-9_]+(\[\d+\])*)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::IndexedFieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid. Only alphanumeric characters, underscores, dots, and balanced numeric array brackets are allowed.")
         }
 
@@ -1179,8 +1328,16 @@ class PSLocalBase : System.IDisposable {
         }
 
         $trimmedOp = $operator.Trim().ToUpperInvariant()
+        $sqlOp = [PSLocalBase]::_NormalizeOperator($operator)
 
-        # Normalize operator
+        # Work on an isolated clone to ensure query immutability
+        $target = $this.clone()
+        $target.CurrentKey = ""
+        return $this._CompileFilter($target, "`$.$fieldToCheck", $sqlOp, $trimmedOp, [PSLocalBase]::_NormalizeScalar($value))
+    }
+
+    static [string] _NormalizeOperator([string]$operator) {
+        $trimmedOp = $operator.Trim().ToUpperInvariant()
         $sqlOp = switch -Regex ($trimmedOp) {
             '^(=|==|-EQ)$'                 { '=' }
             '^(!=|<>|-NE)$'                { '!=' }
@@ -1205,33 +1362,26 @@ class PSLocalBase : System.IDisposable {
                 throw [System.ArgumentException]::new("Unsupported operator '$operator' in where clause.")
             }
         }
+        return $sqlOp
+    }
 
-        # Work on an isolated clone to ensure query immutability
-        $target = $this.clone()
-        $target.CurrentKey = ""
-
-        # Format JSON field selector using trimmed field path
-        $jsonField = "`$.$fieldToCheck"
-
+    # Appends the SQL predicate for one validated where() condition to $target.
+    hidden [PSLocalBase] _CompileFilter([PSLocalBase]$target, [string]$jsonField, [string]$sqlOp, [string]$trimmedOp, [object]$value) {
         # Case A: Parameterized IN and NOT IN list
         if ($sqlOp -eq 'IN' -or $sqlOp -eq 'NOT IN') {
             if ($null -eq $value -or $value -is [System.Collections.IDictionary]) {
                 throw [System.ArgumentException]::new("Value for '$sqlOp' operator must be an array or scalar value, not null or a dictionary.")
             }
-            $items = if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
-                $value
-            } else {
-                @($value)
-            }
+            $items = @($value)
             $placeholders = [System.Collections.Generic.List[string]]::new()
-            foreach ($elem in $items) {
+            $matchesNull = $false
+            foreach ($rawElem in $items) {
+                $elem = [PSLocalBase]::_NormalizeScalar($rawElem)
                 if ($null -eq $elem) {
-                    $placeholders.Add("NULL")
+                    $matchesNull = $true
                 } elseif ($elem -is [bool]) {
                     $placeholders.Add($(if ($elem) { "1" } else { "0" }))
-                } elseif ($elem -is [byte] -or $elem -is [sbyte] -or $elem -is [int16] -or $elem -is [uint16] -or
-                          $elem -is [int32] -or $elem -is [uint32] -or $elem -is [int64] -or
-                          $elem -is [single] -or $elem -is [double] -or $elem -is [decimal]) {
+                } elseif ([PSLocalBase]::_IsNumber($elem)) {
                     $placeholders.Add("?")
                     $target.WhereParameters.Add($elem)
                 } else {
@@ -1239,18 +1389,19 @@ class PSLocalBase : System.IDisposable {
                     $target.WhereParameters.Add([string]$elem)
                 }
             }
-            if ($placeholders.Count -eq 0) {
-                if ($sqlOp -eq 'IN') {
-                    $target.WhereClauses.Add("1 = 0")
-                } else {
-                    $target.WhereClauses.Add("1 = 1")
-                }
-                return $target
-            }
+            $extract = "json_extract(doc, '$jsonField')"
+            $list = [string]::Join(", ", $placeholders)
+            # SQL NULL never satisfies IN/NOT IN, so null members are matched with IS NULL.
             if ($sqlOp -eq 'IN') {
-                $clause = "json_extract(doc, '$jsonField') IN (" + [string]::Join(", ", $placeholders) + ")"
+                $parts = [System.Collections.Generic.List[string]]::new()
+                if ($placeholders.Count -gt 0) { $parts.Add("$extract IN ($list)") }
+                if ($matchesNull) { $parts.Add("$extract IS NULL") }
+                $clause = if ($parts.Count -eq 0) { "1 = 0" } else { "(" + [string]::Join(" OR ", $parts) + ")" }
+            } elseif ($placeholders.Count -gt 0) {
+                $clause = "($extract IS NOT NULL AND $extract NOT IN ($list))"
             } else {
-                $clause = "(json_extract(doc, '$jsonField') IS NOT NULL AND json_extract(doc, '$jsonField') NOT IN (" + [string]::Join(", ", $placeholders) + "))"
+                # Like every not-in, an empty exclusion list still requires the field to be present.
+                $clause = "$extract IS NOT NULL"
             }
             $target.WhereClauses.Add($clause)
             return $target
@@ -1264,9 +1415,7 @@ class PSLocalBase : System.IDisposable {
             if ($value -is [bool]) {
                 $boolLit = if ($value) { "1" } else { "0" }
                 $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit))")
-            } elseif ($value -is [byte] -or $value -is [sbyte] -or $value -is [int16] -or $value -is [uint16] -or
-                      $value -is [int32] -or $value -is [uint32] -or $value -is [int64] -or
-                      $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
+            } elseif ([PSLocalBase]::_IsNumber($value)) {
                 $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
                 $target.WhereParameters.Add($value)
             } else {
@@ -1336,10 +1485,12 @@ class PSLocalBase : System.IDisposable {
             $targetType = [string]$value.ToString().Trim().ToLowerInvariant()
             if ($targetType -eq 'number' -or $targetType -eq 'numeric') {
                 $target.WhereClauses.Add("json_type(doc, '$jsonField') IN ('integer', 'real')")
+            } elseif ($targetType -eq 'boolean' -or $targetType -eq 'bool') {
+                $target.WhereClauses.Add("json_type(doc, '$jsonField') IN ('true', 'false')")
             } else {
-                $validTypes = @('null', 'integer', 'real', 'text', 'array', 'object')
+                $validTypes = @('null', 'integer', 'real', 'text', 'array', 'object', 'true', 'false')
                 if ($validTypes -notcontains $targetType) {
-                    throw [System.ArgumentException]::new("Invalid JSON type '$targetType'. Expected one of: $($validTypes -join ', '), number, numeric.")
+                    throw [System.ArgumentException]::new("Invalid JSON type '$targetType'. Expected one of: $($validTypes -join ', '), number, numeric, boolean.")
                 }
                 $target.WhereClauses.Add("json_type(doc, '$jsonField') = ?")
                 $target.WhereParameters.Add($targetType)
@@ -1379,9 +1530,7 @@ class PSLocalBase : System.IDisposable {
         }
 
         # Case D: Strongly-typed Numbers
-        if ($value -is [byte] -or $value -is [sbyte] -or $value -is [int16] -or $value -is [uint16] -or
-            $value -is [int32] -or $value -is [uint32] -or $value -is [int64] -or
-            $value -is [single] -or $value -is [double] -or $value -is [decimal]) {
+        if ([PSLocalBase]::_IsNumber($value)) {
             $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
             $target.WhereParameters.Add($value)
             return $target
@@ -1400,8 +1549,14 @@ class PSLocalBase : System.IDisposable {
     }
 
     [PSLocalBase] whereLength([string]$field, [string]$operator, [int]$count) {
+        if ([string]::IsNullOrWhiteSpace($operator)) {
+            throw [System.ArgumentException]::new("Operator cannot be null or empty in whereLength().")
+        }
         $cleanOp = $operator.Trim().ToLowerInvariant()
         $op = switch ($cleanOp) {
+            '='   { 'length' }
+            '=='  { 'length' }
+            '-eq' { 'length' }
             '>'   { 'length>' }
             '-gt' { 'length>' }
             '>='  { 'length>=' }
@@ -1412,7 +1567,7 @@ class PSLocalBase : System.IDisposable {
             '-le' { 'length<=' }
             '!='  { 'length!=' }
             '-ne' { 'length!=' }
-            default { 'length' }
+            default { throw [System.ArgumentException]::new("Unsupported operator '$operator' in whereLength(). Use =, !=, >, >=, <, or <=.") }
         }
         return $this.where($field, $op, $count)
     }
@@ -1433,7 +1588,7 @@ class PSLocalBase : System.IDisposable {
             if (-not [string]::IsNullOrWhiteSpace($f)) {
                 $clean = $f.Trim()
                 if ($clean.StartsWith("$.")) { $clean = $clean.Substring(2) }
-                if ($clean -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+                if ($clean -notmatch [PSLocalBase]::FieldPathPattern) {
                     throw [System.ArgumentException]::new("Field name '$f' is invalid for select(). Only alphanumeric characters, underscores, and dots are allowed.")
                 }
                 if (-not $target.SelectedFields.Contains($clean)) {
@@ -1478,7 +1633,7 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\[\d+\])*(\.[a-zA-Z0-9_]+(\[\d+\])*)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::IndexedFieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in orderBy. Only alphanumeric characters, underscores, dots, and balanced numeric array brackets are allowed.")
         }
         if ([string]::IsNullOrWhiteSpace($direction)) {
@@ -1532,203 +1687,177 @@ class PSLocalBase : System.IDisposable {
 
         $withKeys = ($null -ne $options -and $options["keys"] -eq $true)
 
-        try {
-            $hasPopulate = ($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0)
+        $hasPopulate = ($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0)
 
-            # Build populate expression and joins if requested
-            $docExpr = "doc"
-            $joinsBuilder = [System.Text.StringBuilder]::new()
-            if ($hasPopulate) {
-                $docExpr = "m.doc"
-                for ($i = 0; $i -lt $this.PopulateClauses.Count; $i++) {
-                    $p = $this.PopulateClauses[$i]
-                    $fCol = $p.foreignCollection
-                    $fKey = $p.foreignField
-                    $asP = $p.asProperty
-                    [void]$joinsBuilder.Append(" LEFT JOIN [$fCol] f$i ON f$i.key = json_extract(m.doc, '`$.$fKey')")
-                    $docExpr = "json_set($docExpr, '`$.$asP', CASE WHEN f$i.key IS NULL THEN NULL ELSE json(f$i.doc) END)"
+        # Build populate expression and joins if requested
+        $docExpr = "doc"
+        $joinsBuilder = [System.Text.StringBuilder]::new()
+        if ($hasPopulate) {
+            $docExpr = "m.doc"
+            for ($i = 0; $i -lt $this.PopulateClauses.Count; $i++) {
+                $p = $this.PopulateClauses[$i]
+                $fCol = $p.foreignCollection
+                $fKey = $p.foreignField
+                $asP = $p.asProperty
+                if ($fCol -notmatch [PSLocalBase]::IdentifierPattern -or $fKey -notmatch [PSLocalBase]::FieldPathPattern -or $asP -notmatch [PSLocalBase]::FieldPathPattern) {
+                    throw [System.InvalidOperationException]::new("Invalid populate() definition.")
                 }
+                if (-not $this._CollectionExists($fCol)) {
+                    # A missing foreign collection resolves every reference to null, like a missing document.
+                    $docExpr = "json_set($docExpr, '`$.$asP', NULL)"
+                    continue
+                }
+                [void]$joinsBuilder.Append(" LEFT JOIN [$fCol] f$i ON f$i.key = json_extract(m.doc, '`$.$fKey')")
+                $docExpr = "json_set($docExpr, '`$.$asP', CASE WHEN f$i.key IS NULL THEN NULL ELSE json(f$i.doc) END)"
             }
-
-            $hasSelect = ($null -ne $this.SelectedFields -and $this.SelectedFields.Count -gt 0)
-            if ($hasSelect) {
-                $selectPairs = [System.Collections.Generic.List[string]]::new()
-                foreach ($f in $this.SelectedFields) {
-                    $selectPairs.Add("'$f', CASE WHEN json_type($docExpr, '`$.$f') IN ('array', 'object') THEN json(json_extract($docExpr, '`$.$f')) WHEN json_type($docExpr, '`$.$f') = 'true' THEN json('true') WHEN json_type($docExpr, '`$.$f') = 'false' THEN json('false') ELSE json_extract($docExpr, '`$.$f') END")
-                }
-                $docExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
-            }
-
-            # Case 1: Point lookup by key (.doc('key').get())
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                $sql = if ($hasPopulate) {
-                    "SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m$($joinsBuilder.ToString()) WHERE m.key = ?;"
-                } elseif ($hasSelect) {
-                    "SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
-                } else {
-                    "SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
-                }
-                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-                if ($rows.Count -eq 0) {
-                    return $null
-                }
-                $k = $rows[0][0]
-                $json = $rows[0][1]
-                $obj = ConvertFrom-Json -InputObject $json
-
-                if ($withKeys) {
-                    return [PSCustomObject]@{
-                        key  = $k
-                        data = $obj
-                    }
-                }
-                return $obj
-            }
-
-            # Case 2: CollectionGroup, Union, or standard Collection retrieval
-            $querySql = ""
-            $queryParams = [System.Collections.Generic.List[object]]::new()
-
-            if ($this.IsCollectionGroup) {
-                if ($this.GroupTables.Count -eq 0) {
-                    return @()
-                }
-                $wherePart = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
-                $subqueries = [System.Collections.Generic.List[string]]::new()
-                foreach ($tbl in $this.GroupTables) {
-                    $subqueries.Add("SELECT key, json_set(doc, '$._collection', '$tbl') AS doc FROM [$tbl]$wherePart")
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $innerSql = [string]::Join(" UNION ALL ", $subqueries)
-
-                $sqlBuilder = [System.Text.StringBuilder]::new()
-                                if ($hasSelect) {
-                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM ($innerSql)")
-                } else {
-                    [void]$sqlBuilder.Append("SELECT key, doc FROM ($innerSql)")
-                }
-                if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
-                    [void]$sqlBuilder.Append(" $($this.OrderByClause)")
-                }
-                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)")
-                    } else {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue)")
-                    }
-                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    [void]$sqlBuilder.Append(" LIMIT -1 OFFSET $($this.SkipValue)")
-                }
-                $querySql = $sqlBuilder.ToString()
-            } elseif ($null -ne $this.UnionQuery) {
-                if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
-                    throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
-                }
-                if ($null -ne $this.UnionQuery.UnionQuery) {
-                    throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
-                }
-                if ($null -ne $this.UnionQuery.PopulateClauses -and $this.UnionQuery.PopulateClauses.Count -gt 0) {
-                    throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
-                }
-                $q1Exists = $this._CollectionExists($this.CurrentCollection)
-                $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
-                if (-not $q1Exists -and -not $q2Exists) {
-                    return @()
-                }
-
-                $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
-                $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
-
-                $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
-                $sqlBuilder = [System.Text.StringBuilder]::new()
-                if ($hasSelect) {
-                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
-                } else {
-                    [void]$sqlBuilder.Append("SELECT key, doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
-                }
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                    [void]$sqlBuilder.Append(" WHERE key = ?")
-                    $queryParams.Add($this.CurrentKey)
-                } elseif ($this.WhereClauses.Count -gt 0) {
-                    [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $this.WhereClauses))
-                    $queryParams.AddRange($this.WhereParameters)
-                }
-                if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
-                    [void]$sqlBuilder.Append(" $($this.OrderByClause)")
-                }
-                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)")
-                    } else {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue)")
-                    }
-                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    [void]$sqlBuilder.Append(" LIMIT -1 OFFSET $($this.SkipValue)")
-                }
-                $querySql = $sqlBuilder.ToString()
-            } else {
-                $sqlBuilder = [System.Text.StringBuilder]::new()
-                if ($hasPopulate) {
-                    [void]$sqlBuilder.Append("SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m")
-                    [void]$sqlBuilder.Append($joinsBuilder.ToString())
-                } elseif ($hasSelect) {
-                    [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)]")
-                } else {
-                    [void]$sqlBuilder.Append("SELECT key, doc FROM [$($this.CurrentCollection)]")
-                }
-
-                if ($this.WhereClauses.Count -gt 0) {
-                    [void]$sqlBuilder.Append(" WHERE ")
-                    $whereStr = [string]::Join(" AND ", $this.WhereClauses)
-                    if ($hasPopulate) {
-                        $whereStr = $whereStr -replace '(?<![a-zA-Z0-9_\.])\bdoc\b', 'm.doc'
-                    }
-                    [void]$sqlBuilder.Append($whereStr)
-                }
-
-                if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
-                    [void]$sqlBuilder.Append(" ")
-                    $orderStr = $this.OrderByClause
-                    if ($hasPopulate) {
-                        $orderStr = $orderStr -replace '(?<![a-zA-Z0-9_\.])\bdoc\b', 'm.doc'
-                    }
-                    [void]$sqlBuilder.Append($orderStr)
-                }
-
-                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)")
-                    } else {
-                        [void]$sqlBuilder.Append(" LIMIT $($this.LimitValue)")
-                    }
-                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    [void]$sqlBuilder.Append(" LIMIT -1 OFFSET $($this.SkipValue)")
-                }
-                $querySql = $sqlBuilder.ToString()
-                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-            }
-
-            $rows = $this._ExecuteBoundQuery($querySql, $queryParams.ToArray())
-
-            $results = [System.Collections.Generic.List[PSCustomObject]]::new()
-            foreach ($row in $rows) {
-                $k = $row[0]
-                $json = $row[1]
-                $obj = ConvertFrom-Json -InputObject $json
-
-                if ($withKeys) {
-                    $results.Add([PSCustomObject]@{
-                        key  = $k
-                        data = $obj
-                    })
-                } else {
-                    $results.Add([PSCustomObject]$obj)
-                }
-            }
-
-            return [PSCustomObject[]]$results.ToArray()
-        } finally {
         }
+
+        $hasSelect = ($null -ne $this.SelectedFields -and $this.SelectedFields.Count -gt 0)
+        if ($hasSelect) {
+            $selectPairs = [System.Collections.Generic.List[string]]::new()
+            foreach ($f in $this.SelectedFields) {
+                $selectPairs.Add("'$f', CASE WHEN json_type($docExpr, '`$.$f') IN ('array', 'object') THEN json(json_extract($docExpr, '`$.$f')) WHEN json_type($docExpr, '`$.$f') = 'true' THEN json('true') WHEN json_type($docExpr, '`$.$f') = 'false' THEN json('false') ELSE json_extract($docExpr, '`$.$f') END")
+            }
+            $docExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
+        }
+
+        # Case 1: Point lookup by key (.doc('key').get())
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
+            $sql = if ($hasPopulate) {
+                "SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m$($joinsBuilder.ToString()) WHERE m.key = ?;"
+            } elseif ($hasSelect) {
+                "SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
+            } else {
+                "SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
+            }
+            $sql = $sql.TrimEnd(';') + $this._PagingSql() + ';'
+            $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
+            if ($rows.Count -eq 0) {
+                return $null
+            }
+            $k = $rows[0][0]
+            $obj = $this._DeserializeDoc($k, $rows[0][1])
+
+            if ($withKeys) {
+                return [PSCustomObject]@{
+                    key  = $k
+                    data = $obj
+                }
+            }
+            return $obj
+        }
+
+        # Case 2: CollectionGroup, Union, or standard Collection retrieval
+        $querySql = ""
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+
+        if ($this.IsCollectionGroup) {
+            $innerSql = $this._BuildGroupSource($queryParams)
+            if ([string]::IsNullOrEmpty($innerSql)) {
+                return @()
+            }
+
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            if ($hasSelect) {
+                [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM ($innerSql)")
+            } else {
+                [void]$sqlBuilder.Append("SELECT key, doc FROM ($innerSql)")
+            }
+            if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
+                [void]$sqlBuilder.Append(" $($this.OrderByClause)")
+            }
+            [void]$sqlBuilder.Append($this._PagingSql())
+            $querySql = $sqlBuilder.ToString()
+        } elseif ($null -ne $this.UnionQuery) {
+            if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
+                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
+            }
+            if ($null -ne $this.UnionQuery.UnionQuery) {
+                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
+            }
+            if ($null -ne $this.UnionQuery.PopulateClauses -and $this.UnionQuery.PopulateClauses.Count -gt 0) {
+                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
+            }
+            $q1Exists = $this._CollectionExists($this.CurrentCollection)
+            $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
+            if (-not $q1Exists -and -not $q2Exists) {
+                return @()
+            }
+
+            $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
+            $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
+
+            $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            if ($hasSelect) {
+                [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
+            } else {
+                [void]$sqlBuilder.Append("SELECT key, doc FROM (SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql))")
+            }
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                [void]$sqlBuilder.Append(" WHERE key = ?")
+                $queryParams.Add($this.CurrentKey)
+            } elseif ($this.WhereClauses.Count -gt 0) {
+                [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $this.WhereClauses))
+                $queryParams.AddRange($this.WhereParameters)
+            }
+            if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
+                [void]$sqlBuilder.Append(" $($this.OrderByClause)")
+            }
+            [void]$sqlBuilder.Append($this._PagingSql())
+            $querySql = $sqlBuilder.ToString()
+        } else {
+            $sqlBuilder = [System.Text.StringBuilder]::new()
+            if ($hasPopulate) {
+                [void]$sqlBuilder.Append("SELECT m.key, $docExpr AS doc FROM [$($this.CurrentCollection)] m")
+                [void]$sqlBuilder.Append($joinsBuilder.ToString())
+            } elseif ($hasSelect) {
+                [void]$sqlBuilder.Append("SELECT key, $docExpr AS doc FROM [$($this.CurrentCollection)]")
+            } else {
+                [void]$sqlBuilder.Append("SELECT key, doc FROM [$($this.CurrentCollection)]")
+            }
+
+            if ($this.WhereClauses.Count -gt 0) {
+                [void]$sqlBuilder.Append(" WHERE ")
+                $whereStr = [string]::Join(" AND ", $this.WhereClauses)
+                if ($hasPopulate) {
+                    $whereStr = $whereStr -replace '(?<![a-zA-Z0-9_\.])\bdoc\b', 'm.doc'
+                }
+                [void]$sqlBuilder.Append($whereStr)
+            }
+
+            if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
+                [void]$sqlBuilder.Append(" ")
+                $orderStr = $this.OrderByClause
+                if ($hasPopulate) {
+                    $orderStr = $orderStr -replace '(?<![a-zA-Z0-9_\.])\bdoc\b', 'm.doc'
+                }
+                [void]$sqlBuilder.Append($orderStr)
+            }
+
+            [void]$sqlBuilder.Append($this._PagingSql())
+            $querySql = $sqlBuilder.ToString()
+            if ($null -ne $this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+        }
+
+        $rows = $this._ExecuteBoundQuery($querySql, $queryParams.ToArray())
+
+        $results = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($row in $rows) {
+            $k = $row[0]
+            $obj = $this._DeserializeDoc($k, $row[1])
+
+            if ($withKeys) {
+                $results.Add([PSCustomObject]@{
+                    key  = $k
+                    data = $obj
+                })
+            } else {
+                $results.Add([PSCustomObject]$obj)
+            }
+        }
+
+        return [PSCustomObject[]]$results.ToArray()
     }
 
     [object] first() {
@@ -1736,6 +1865,7 @@ class PSLocalBase : System.IDisposable {
     }
 
     [object] first([hashtable]$options) {
+        if ($null -ne $this.LimitValue -and $this.LimitValue -eq 0) { return $null }
         $clone = $this.clone()
         $clone.LimitValue = 1
         $res = $clone.get($options)
@@ -1752,24 +1882,18 @@ class PSLocalBase : System.IDisposable {
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
         }
+        if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue) {
+            # Pagination changes which documents are visible, so exists() follows count().
+            return ($this.count() -gt 0)
+        }
         if ($this.IsCollectionGroup) {
-            if ($this.GroupTables.Count -eq 0) {
+            $queryParams = [System.Collections.Generic.List[object]]::new()
+            $innerSql = $this._BuildGroupSource($queryParams)
+            if ([string]::IsNullOrEmpty($innerSql)) {
                 return $false
             }
-            try {
-                $wherePart = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
-                $subqueries = [System.Collections.Generic.List[string]]::new()
-                $queryParams = [System.Collections.Generic.List[object]]::new()
-                foreach ($tbl in $this.GroupTables) {
-                    $subqueries.Add("SELECT 1 FROM [$tbl]$wherePart")
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $innerSql = [string]::Join(" UNION ALL ", $subqueries)
-                $sql = "SELECT 1 FROM ($innerSql) LIMIT 1;"
-                $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
-                return ($rows.Count -gt 0)
-            } finally {
-            }
+            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM ($innerSql) LIMIT 1;", $queryParams.ToArray())
+            return ($rows.Count -gt 0)
         }
 
         if ($null -ne $this.UnionQuery) {
@@ -1779,11 +1903,8 @@ class PSLocalBase : System.IDisposable {
             if ($this.UnionQuery.DbHandle -ne $this.DbHandle) {
                 throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
             }
-            try {
-                $rows = $this.limit(1).get()
-                return ($null -ne $rows -and $rows.Count -gt 0)
-            } finally {
-            }
+            $rows = $this.limit(1).get()
+            return ($null -ne $rows -and $rows.Count -gt 0)
         }
 
         if (-not $this._CollectionExists($this.CurrentCollection)) {
@@ -1800,7 +1921,7 @@ class PSLocalBase : System.IDisposable {
         if ($this.WhereClauses.Count -gt 0) {
             [void]$sqlBuilder.Append(" WHERE ")
             [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-            if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            if ($null -ne $this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
         }
         [void]$sqlBuilder.Append(" LIMIT 1;")
         $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
@@ -1820,7 +1941,7 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
         }
         if (-not $this._CollectionExists($this.CurrentCollection)) {
@@ -1828,7 +1949,7 @@ class PSLocalBase : System.IDisposable {
         }
         $sqlBuilder = [System.Text.StringBuilder]::new()
         $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
-        [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
+        [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract AS v FROM [$($this.CurrentCollection)]")
         $queryParams = [System.Collections.Generic.List[object]]::new()
         $whereList = [System.Collections.Generic.List[string]]::new()
         if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
@@ -1837,17 +1958,17 @@ class PSLocalBase : System.IDisposable {
         }
         if ($this.WhereClauses.Count -gt 0) {
             $whereList.AddRange($this.WhereClauses)
-            if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+            if ($null -ne $this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
         }
         $whereList.Add("$jsonExtract IS NOT NULL")
         [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
         [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
 
-        $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
+        $rows = $this._ExecuteTypedQuery($sqlBuilder.ToString(), $queryParams.ToArray())
         $distinctList = [System.Collections.Generic.List[object]]::new()
         foreach ($row in $rows) {
-            if ($row.Count -gt 0 -and $null -ne $row[0]) {
-                $distinctList.Add($row[0])
+            if ($null -ne $row.v) {
+                $distinctList.Add($row.v)
             }
         }
         return [object[]]$distinctList.ToArray()
@@ -1883,7 +2004,7 @@ class PSLocalBase : System.IDisposable {
         }
         $trimmedField = $field.Trim()
         $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-        if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
+        if ($fieldToCheck -notmatch [PSLocalBase]::FieldPathPattern) {
             throw [System.ArgumentException]::new("Field name '$field' is invalid in $aggFunc(). Only alphanumeric characters, underscores, and dots are allowed.")
         }
         if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
@@ -1896,95 +2017,52 @@ class PSLocalBase : System.IDisposable {
             if ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG") { return 0.0 }
             return $null
         }
-        $sqlBuilder = [System.Text.StringBuilder]::new()
-            $isNumericAgg = ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG")
-            $jsonExtract = if ($isNumericAgg) {
-                "CAST(json_extract(doc, '`$.$fieldToCheck') AS REAL)"
-            } else {
-                "json_extract(doc, '`$.$fieldToCheck')"
-            }
-            $aggExpr = if ($isNumericAgg) {
-                "COALESCE($aggFunc($jsonExtract), 0.0)"
-            } else {
-                "$aggFunc($jsonExtract)"
-            }
-            [void]$sqlBuilder.Append("SELECT $aggExpr FROM [$($this.CurrentCollection)]")
-            $queryParams = [System.Collections.Generic.List[object]]::new()
-            $whereList = [System.Collections.Generic.List[string]]::new()
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                $whereList.Add("key = ?")
-                $queryParams.Add($this.CurrentKey)
-            }
-            if ($this.WhereClauses.Count -gt 0) {
-                $whereList.AddRange($this.WhereClauses)
-                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-            }
-            $whereList.Add("json_extract(doc, '`$.$fieldToCheck') IS NOT NULL")
-            [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList) + ";")
-
-            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
-            if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
-                $raw = $rows[0][0]
-                if ($null -eq $raw -or [string]::IsNullOrEmpty([string]$raw)) {
-                    if ($isNumericAgg) { return 0.0 }
-                    return $null
-                }
-                if ($isNumericAgg) {
-                    return [double]$raw
-                }
-                # For MIN / MAX: if value is an ISO date or text, preserve as string
-                $strRaw = [string]$raw
-                if ($strRaw -match '^\d{4}-\d{2}') {
-                    return $strRaw
-                }
-                $numVal = 0.0
-                if ([double]::TryParse($strRaw, [System.Globalization.NumberStyles]::Float -bor [System.Globalization.NumberStyles]::AllowThousands, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$numVal)) {
-                    if ($strRaw -match '^-?\d+$') {
-                        $longVal = 0L
-                        if ([int64]::TryParse($strRaw, [ref]$longVal)) { return $longVal }
-                    }
-                    return $numVal
-                }
-                return $strRaw
-            }
-            if ($isNumericAgg) { return 0.0 }
-            return $null
+        $isNumericAgg = ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG")
+        $extract = "json_extract(doc, '`$.$fieldToCheck')"
+        $numericFilter = "json_type(doc, '`$.$fieldToCheck') IN ('integer', 'real')"
+        if ($isNumericAgg) {
+            $value = $this._AggregateValue("COALESCE($aggFunc($extract), 0.0)", $numericFilter)
+            if ($null -eq $value) { return 0.0 }
+            return [double]$value
         }
+        # MIN/MAX compare JSON numbers numerically; text is used only when no numbers exist.
+        $numericResult = $this._AggregateValue("$aggFunc($extract)", $numericFilter)
+        if ($null -ne $numericResult) { return $numericResult }
+        return $this._AggregateValue("$aggFunc($extract)", "json_type(doc, '`$.$fieldToCheck') = 'text'")
+    }
+
+    hidden [object] _AggregateValue([string]$aggExpr, [string]$typeFilter) {
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+        $whereList = [System.Collections.Generic.List[string]]::new()
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            $whereList.Add("key = ?")
+            $queryParams.Add($this.CurrentKey)
+        }
+        if ($this.WhereClauses.Count -gt 0) {
+            $whereList.AddRange($this.WhereClauses)
+            if ($null -ne $this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+        }
+        $whereList.Add($typeFilter)
+        $sql = "SELECT $aggExpr AS v FROM [$($this.CurrentCollection)] WHERE " + [string]::Join(" AND ", $whereList) + ";"
+        $rows = $this._ExecuteTypedQuery($sql, $queryParams.ToArray())
+        if ($rows.Count -eq 0) { return $null }
+        return $rows[0].v
+    }
 
     [int] count() {
         $this._EnsureOpen()
 
         if ($this.IsCollectionGroup) {
-            if ($this.GroupTables.Count -eq 0) {
+            $queryParams = [System.Collections.Generic.List[object]]::new()
+            $innerSql = $this._BuildGroupSource($queryParams)
+            if ([string]::IsNullOrEmpty($innerSql)) {
                 return 0
             }
-            try {
-                $wherePart = if ($this.WhereClauses.Count -gt 0) { " WHERE " + [string]::Join(" AND ", $this.WhereClauses) } else { "" }
-                $subqueries = [System.Collections.Generic.List[string]]::new()
-                $queryParams = [System.Collections.Generic.List[object]]::new()
-                foreach ($tbl in $this.GroupTables) {
-                    $subqueries.Add("SELECT key FROM [$tbl]$wherePart")
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $innerSql = [string]::Join(" UNION ALL ", $subqueries)
-                $pagedSql = $innerSql
-                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        $pagedSql = "$innerSql LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
-                    } else {
-                        $pagedSql = "$innerSql LIMIT $($this.LimitValue)"
-                    }
-                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    $pagedSql = "$innerSql LIMIT -1 OFFSET $($this.SkipValue)"
-                }
-                $sql = "SELECT COUNT(*) FROM ($pagedSql);"
-                $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
-                if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
-                    return [int]$rows[0][0]
-                }
-                return 0
-            } finally {
+            $rows = $this._ExecuteBoundQuery("SELECT COUNT(*) FROM ($innerSql$($this._PagingSql()));", $queryParams.ToArray())
+            if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
+                return [int]$rows[0][0]
             }
+            return 0
         }
 
         if ($null -ne $this.UnionQuery) {
@@ -1997,44 +2075,32 @@ class PSLocalBase : System.IDisposable {
             if ($null -ne $this.UnionQuery.PopulateClauses -and $this.UnionQuery.PopulateClauses.Count -gt 0) {
                 throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
             }
-            try {
-                $q1Exists = $this._CollectionExists($this.CurrentCollection)
-                $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
-                if (-not $q1Exists -and -not $q2Exists) {
-                    return 0
-                }
-                $queryParams = [System.Collections.Generic.List[object]]::new()
-                $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
-                $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
-
-                $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
-                $innerUnion = "SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql)"
-                $pagedSql = "SELECT key, doc FROM ($innerUnion)"
-                if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
-                    $pagedSql += " WHERE key = ?"
-                    $queryParams.Add($this.CurrentKey)
-                } elseif ($this.WhereClauses.Count -gt 0) {
-                    $pagedSql += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
-                    $queryParams.AddRange($this.WhereParameters)
-                }
-                if (-not [string]::IsNullOrEmpty($this.OrderByClause)) { $pagedSql += " " + $this.OrderByClause }
-                if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
-                    if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                        $pagedSql += " LIMIT $($this.LimitValue) OFFSET $($this.SkipValue)"
-                    } else {
-                        $pagedSql += " LIMIT $($this.LimitValue)"
-                    }
-                } elseif ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
-                    $pagedSql += " LIMIT -1 OFFSET $($this.SkipValue)"
-                }
-                $sql = "SELECT COUNT(*) FROM ($pagedSql);"
-                $rows = $this._ExecuteBoundQuery($sql, $queryParams.ToArray())
-                if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
-                    return [int]$rows[0][0]
-                }
+            $q1Exists = $this._CollectionExists($this.CurrentCollection)
+            $q2Exists = $this._CollectionExists($this.UnionQuery.CurrentCollection)
+            if (-not $q1Exists -and -not $q2Exists) {
                 return 0
-            } finally {
             }
+            $queryParams = [System.Collections.Generic.List[object]]::new()
+            $q1Sql = $this._BuildBranchSelect($this.UnionLeftQuery, $queryParams)
+            $q2Sql = $this._BuildBranchSelect($this.UnionQuery, $queryParams)
+
+            $uType = if ($this.UnionType) { $this.UnionType } else { "UNION" }
+            $innerUnion = "SELECT key, doc FROM ($q1Sql) $uType SELECT key, doc FROM ($q2Sql)"
+            $pagedSql = "SELECT key, doc FROM ($innerUnion)"
+            if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+                $pagedSql += " WHERE key = ?"
+                $queryParams.Add($this.CurrentKey)
+            } elseif ($this.WhereClauses.Count -gt 0) {
+                $pagedSql += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+                $queryParams.AddRange($this.WhereParameters)
+            }
+            if (-not [string]::IsNullOrEmpty($this.OrderByClause)) { $pagedSql += " " + $this.OrderByClause }
+            $pagedSql += $this._PagingSql()
+            $rows = $this._ExecuteBoundQuery("SELECT COUNT(*) FROM ($pagedSql);", $queryParams.ToArray())
+            if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
+                return [int]$rows[0][0]
+            }
+            return 0
         }
 
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
@@ -2045,47 +2111,20 @@ class PSLocalBase : System.IDisposable {
             return 0
         }
 
-        try {
-            # Point lookup count by key
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                $sql = "SELECT COUNT(*) FROM [$($this.CurrentCollection)] WHERE key = ?;"
-                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-                if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
-                    return [int]$rows[0][0]
-                }
-                return 0
-            }
-
-            # Multi-document count with optional where filters and limits
-            $sqlBuilder = [System.Text.StringBuilder]::new()
-            
-            if (($null -ne $this.LimitValue -and $this.LimitValue -ge 0) -or ($null -ne $this.SkipValue -and $this.SkipValue -gt 0)) {
-                # Subquery count when limit and/or skip are applied to source documents
-                $limitClause = if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) { "LIMIT $($this.LimitValue)" } else { "LIMIT -1" }
-                $offsetClause = if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) { "OFFSET $($this.SkipValue)" } else { "" }
-                [void]$sqlBuilder.Append("SELECT COUNT(*) FROM (SELECT 1 FROM [$($this.CurrentCollection)]")
-                if ($this.WhereClauses.Count -gt 0) {
-                    [void]$sqlBuilder.Append(" WHERE ")
-                    [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                }
-                [void]$sqlBuilder.Append(" $limitClause $offsetClause);")
-            } else {
-                [void]$sqlBuilder.Append("SELECT COUNT(*) FROM [$($this.CurrentCollection)]")
-                if ($this.WhereClauses.Count -gt 0) {
-                    [void]$sqlBuilder.Append(" WHERE ")
-                    [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                }
-            }
-
-            $querySql = $sqlBuilder.ToString()
-            $rows = $this._ExecuteBoundQuery($querySql, $this.WhereParameters.ToArray())
-
-            if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
-                return [int]$rows[0][0]
-            }
-            return 0
-        } finally {
+        $source = "SELECT 1 FROM [$($this.CurrentCollection)]"
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+        if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
+            $source += " WHERE key = ?"
+            $queryParams.Add($this.CurrentKey)
+        } elseif ($this.WhereClauses.Count -gt 0) {
+            $source += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+            $queryParams.AddRange($this.WhereParameters)
         }
+        $rows = $this._ExecuteBoundQuery("SELECT COUNT(*) FROM ($source$($this._PagingSql()));", $queryParams.ToArray())
+        if ($rows.Count -gt 0 -and $rows[0].Count -gt 0) {
+            return [int]$rows[0][0]
+        }
+        return 0
     }
 
     # -----------------------------------------------------------------------
@@ -2104,14 +2143,22 @@ class PSLocalBase : System.IDisposable {
         if ($this.config -and $this.config["debug"] -eq $true) {
             Write-Host "[PSLocalBase Custom SQL] $sql" -ForegroundColor DarkCyan
         }
+        return $this._ExecuteTypedQuery($sql, $parameters)
+    }
 
+    hidden [PSCustomObject[]] _ExecuteTypedQuery([string]$sql, [object[]]$parameters) {
+        $this._EnsureOpen()
         $results = [System.Collections.Generic.List[PSCustomObject]]::new()
         $stmt = [IntPtr]::Zero
         try {
-            $prepRc = [WinSqlite3]::Prepare($this.DbHandle, $sql, -1, [ref]$stmt, [IntPtr]::Zero)
+            $hasTrailing = $false
+            $prepRc = [WinSqlite3]::PrepareSingle($this.DbHandle, $sql, [ref]$stmt, [ref]$hasTrailing)
             if ($prepRc -ne [WinSqlite3]::SQLITE_OK) {
                 $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                throw [System.InvalidOperationException]::new("Failed to prepare query: $msg (Code: $prepRc, Query: $sql)")
+                throw [System.InvalidOperationException]::new("Failed to prepare query: $msg (Code: $prepRc$($this._SqlContext($sql)))")
+            }
+            if ($hasTrailing) {
+                throw [System.InvalidOperationException]::new("query() executes exactly one SQL statement; remove the statements after the first ';'.")
             }
 
             # Validate parameter count against statement placeholders and bind with typed affinities
@@ -2124,37 +2171,29 @@ class PSLocalBase : System.IDisposable {
                 $colNames[$c] = [WinSqlite3]::GetString($namePtr)
             }
 
-            $typeMethod = [WinSqlite3].GetMethod('ColumnType')
-
             while (($stepRc = [WinSqlite3]::Step($stmt)) -eq [WinSqlite3]::SQLITE_ROW) {
                 $rowObj = [ordered]@{}
                 for ($c = 0; $c -lt $colCount; $c++) {
                     $colName = $colNames[$c]
                     $val = $null
-
-                    if ($null -ne $typeMethod) {
-                        $typeCode = [WinSqlite3]::ColumnType($stmt, $c)
-                        # 1 = SQLITE_INTEGER, 2 = SQLITE_FLOAT, 3 = SQLITE_TEXT, 4 = SQLITE_BLOB, 5 = SQLITE_NULL
-                        switch ($typeCode) {
-                            1 { $val = [WinSqlite3]::ColumnInt64($stmt, $c) }
-                            2 { $val = [WinSqlite3]::ColumnDouble($stmt, $c) }
-                            3 { 
-                                $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
-                                $byteLen = [WinSqlite3]::ColumnBytes16($stmt, $c)
-                                $val = [WinSqlite3]::GetString($colPtr, [int]($byteLen / 2))
-                            }
-                            4 {
-                                throw [System.NotSupportedException]::new("BLOB columns are not supported in query(). PSLocalBase stores documents as JSON text.")
-                            }
-                            5 { $val = $null }
-                            default {
-                                $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
-                                $val = [WinSqlite3]::GetString($colPtr)
-                            }
+                    $typeCode = [WinSqlite3]::ColumnType($stmt, $c)
+                    # 1 = SQLITE_INTEGER, 2 = SQLITE_FLOAT, 3 = SQLITE_TEXT, 4 = SQLITE_BLOB, 5 = SQLITE_NULL
+                    switch ($typeCode) {
+                        1 { $val = [WinSqlite3]::ColumnInt64($stmt, $c) }
+                        2 { $val = [WinSqlite3]::ColumnDouble($stmt, $c) }
+                        3 {
+                            $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
+                            $byteLen = [WinSqlite3]::ColumnBytes16($stmt, $c)
+                            $val = [WinSqlite3]::GetString($colPtr, [int]($byteLen / 2))
                         }
-                    } else {
-                        $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
-                        $val = [WinSqlite3]::GetString($colPtr)
+                        4 {
+                            throw [System.NotSupportedException]::new("BLOB columns are not supported in query(). PSLocalBase stores documents as JSON text.")
+                        }
+                        5 { $val = $null }
+                        default {
+                            $colPtr = [WinSqlite3]::ColumnText($stmt, $c)
+                            $val = [WinSqlite3]::GetString($colPtr)
+                        }
                     }
 
                     $rowObj[$colName] = $val
@@ -2164,7 +2203,7 @@ class PSLocalBase : System.IDisposable {
 
             if ($stepRc -ne [WinSqlite3]::SQLITE_DONE) {
                 $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                throw [System.InvalidOperationException]::new("Query execution interrupted: $msg (Code: $stepRc, Query: $sql)")
+                throw [System.InvalidOperationException]::new("Query execution interrupted: $msg (Code: $stepRc$($this._SqlContext($sql)))")
             }
         } finally {
             [void][WinSqlite3]::Finalize($stmt)
@@ -2188,8 +2227,6 @@ class PSLocalBase : System.IDisposable {
             $sql = "DROP TABLE IF EXISTS [$($this.CurrentCollection)];"
             $this._ExecuteDirectSql($sql)
         }
-        $this.CurrentCollection = ""
-        $this._ResetQueryState()
     }
 
     [void] delete() {
@@ -2230,12 +2267,13 @@ class PSLocalBase : System.IDisposable {
         if ($this.IsChildInstance) {
             throw [System.InvalidOperationException]::new("deleteDatabase() cannot be executed from a collection instance. Call it on the root PSLocalBase instance.")
         }
-        $path = $this.FilePath
+        # The path comes from SQLite itself so a modified FilePath field cannot redirect the deletion.
+        $path = [WinSqlite3]::DbFilename($this.DbHandle)
         $this.close()
 
-        if (-not [string]::IsNullOrEmpty($path) -and $path -ne ":memory:") {
+        if (-not [string]::IsNullOrEmpty($path)) {
             $deletionErrors = [System.Collections.Generic.List[string]]::new()
-            foreach ($targetPath in @($path, "$path-wal", "$path-shm")) {
+            foreach ($targetPath in @($path, "$path-wal", "$path-shm", "$path-journal")) {
                 if ([System.IO.File]::Exists($targetPath)) {
                     try {
                         [System.IO.File]::Delete($targetPath)
@@ -2255,17 +2293,23 @@ class PSLocalBase : System.IDisposable {
     # -----------------------------------------------------------------------
     [bool] _GetInTransaction() {
         $this._EnsureOpen()
-        $method = [WinSqlite3].GetMethod('GetAutocommit')
-        if ($null -ne $method) {
-            return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
-        }
-        $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
-        return $root.InTransaction
+        return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
     }
 
     [void] beginTransaction() {
+        # IMMEDIATE takes the write lock up front, so busy_timeout applies instead of failing on lock upgrade.
+        $this.beginTransaction("immediate")
+    }
+
+    [void] beginTransaction([string]$mode) {
         $this._EnsureOpen()
-        $this._ExecuteDirectSql("BEGIN TRANSACTION;")
+        $keyword = switch (([string]$mode).Trim().ToLowerInvariant()) {
+            'immediate' { 'IMMEDIATE' }
+            'deferred'  { 'DEFERRED' }
+            'exclusive' { 'EXCLUSIVE' }
+            default { throw [System.ArgumentException]::new("Transaction mode must be 'immediate', 'deferred', or 'exclusive'. Provided: '$mode'") }
+        }
+        $this._ExecuteDirectSql("BEGIN $keyword TRANSACTION;")
         $this.InTransaction = $true
         if ($this.ParentDb) { $this.ParentDb.InTransaction = $true }
     }
@@ -2274,10 +2318,15 @@ class PSLocalBase : System.IDisposable {
         $this._EnsureOpen()
         try {
             $this._ExecuteDirectSql("COMMIT;")
-        } finally {
-            $this.InTransaction = $false
-            if ($this.ParentDb) { $this.ParentDb.InTransaction = $false }
+        } catch {
+            # A failed COMMIT (for example SQLITE_BUSY) leaves the transaction open.
+            $stillOpen = $this._GetInTransaction()
+            $this.InTransaction = $stillOpen
+            if ($this.ParentDb) { $this.ParentDb.InTransaction = $stillOpen }
+            throw
         }
+        $this.InTransaction = $false
+        if ($this.ParentDb) { $this.ParentDb.InTransaction = $false }
     }
 
     [void] rollback() {
@@ -2295,16 +2344,20 @@ class PSLocalBase : System.IDisposable {
     # -----------------------------------------------------------------------
     [void] close() {
         if (-not $this.IsChildInstance) {
+            $owner = $this.ConnectionOwner
+            $this.ConnectionOwner = $null
             if ($this.DbHandle -ne [IntPtr]::Zero) {
-                $rc = [WinSqlite3]::Close($this.DbHandle)
-                if ($rc -eq [WinSqlite3]::SQLITE_BUSY) {
+                if ($null -ne $owner -and -not $owner.IsClosed -and $owner.DangerousGetHandle() -eq $this.DbHandle) {
+                    $owner.Dispose()
+                    $owner = $null
+                } else {
                     [void][WinSqlite3]::CloseV2($this.DbHandle)
                 }
-                $this.DbHandle = [IntPtr]::Zero
             }
-        } else {
-            $this.DbHandle = [IntPtr]::Zero
+            if ($null -ne $owner) { $owner.Dispose() }
+            if ($this.DbHandle -ne [IntPtr]::Zero) { $this.HandleGeneration++ }
         }
+        $this.DbHandle = [IntPtr]::Zero
         $this.InTransaction = $false
     }
 
@@ -2316,20 +2369,75 @@ class PSLocalBase : System.IDisposable {
     # Internal Engine Helpers
     # -----------------------------------------------------------------------
     [void] _EnsureOpen() {
-        if ($this.IsChildInstance -and ($null -eq $this.ParentDb -or $this.ParentDb.DbHandle -eq [IntPtr]::Zero)) {
-            $this.DbHandle = [IntPtr]::Zero
+        if ($this.IsChildInstance) {
+            $root = $this.ParentDb
+            # A generation mismatch means the root closed; a reused native address must not be trusted.
+            if ($null -eq $root -or $root.DbHandle -eq [IntPtr]::Zero -or $root.DbHandle -ne $this.DbHandle -or $root.HandleGeneration -ne $this.HandleGeneration) {
+                $this.DbHandle = [IntPtr]::Zero
+            }
         }
         if ($this.DbHandle -eq [IntPtr]::Zero) {
             throw [System.InvalidOperationException]::new("Database connection is closed.")
         }
+        # Collection names are interpolated into SQL, so they are re-validated on every operation.
+        if (-not [string]::IsNullOrEmpty($this.CurrentCollection)) {
+            $pattern = if ($this.IsCollectionGroup) { [PSLocalBase]::GroupPatternPattern } else { [PSLocalBase]::IdentifierPattern }
+            if ($this.CurrentCollection -notmatch $pattern) {
+                throw [System.InvalidOperationException]::new("Collection name '$($this.CurrentCollection)' is invalid.")
+            }
+        }
+    }
+
+    hidden [string] _PagingSql() {
+        if ($null -ne $this.LimitValue -and $this.LimitValue -ge 0) {
+            if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+                return " LIMIT $([int]$this.LimitValue) OFFSET $([int]$this.SkipValue)"
+            }
+            return " LIMIT $([int]$this.LimitValue)"
+        }
+        if ($null -ne $this.SkipValue -and $this.SkipValue -gt 0) {
+            return " LIMIT -1 OFFSET $([int]$this.SkipValue)"
+        }
+        return ""
+    }
+
+    # Filtered rows of every table matching the group pattern, resolved when the query runs.
+    hidden [string] _BuildGroupSource([System.Collections.Generic.List[object]]$queryParams) {
+        $tables = $this._ResolveGroupTables()
+        if ($tables.Count -eq 0) { return "" }
+        $subqueries = [System.Collections.Generic.List[string]]::new()
+        foreach ($tbl in $tables) {
+            $subqueries.Add("SELECT key, json_set(doc, '$._collection', '$tbl') AS doc FROM [$tbl]")
+        }
+        $source = "SELECT key, doc FROM (" + [string]::Join(" UNION ALL ", $subqueries) + ")"
+        if ($this.WhereClauses.Count -gt 0) {
+            $source += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+            if ($null -ne $this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
+        }
+        return $source
+    }
+
+    hidden [string[]] _ResolveGroupTables() {
+        $allTables = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", @())
+        $patternRegex = '\A' + [regex]::Escape($this.CurrentCollection).Replace('\*', '.*').Replace('\?', '.') + '\z'
+        $matched = [System.Collections.Generic.List[string]]::new()
+        foreach ($row in $allTables) {
+            $tableName = $row[0]
+            if ($tableName -match $patternRegex -and $tableName -match [PSLocalBase]::IdentifierPattern) {
+                $matched.Add($tableName)
+            }
+        }
+        return [string[]]$matched.ToArray()
+    }
+
+    hidden [string] _SqlContext([string]$sql) {
+        # SQL text can contain literals copied from user data, so it is only exposed when debugging.
+        if ($this.config -and $this.config["debug"] -eq $true) { return ", Query: $sql" }
+        return ""
     }
 
     [void] _BindStatementParameters([IntPtr]$stmt, [object[]]$parameters, [string]$sql) {
-        $expectedCount = 0
-        $bindCountMethod = [WinSqlite3].GetMethod('BindParameterCount')
-        if ($null -ne $bindCountMethod) {
-            $expectedCount = [WinSqlite3]::BindParameterCount($stmt)
-        }
+        $expectedCount = [WinSqlite3]::BindParameterCount($stmt)
         $actualCount = if ($null -ne $parameters) { $parameters.Count } else { 0 }
         if ($expectedCount -ne $actualCount) {
             throw [System.InvalidOperationException]::new("Parameter count mismatch: query expects $expectedCount parameters, but $actualCount were provided.")
@@ -2341,11 +2449,12 @@ class PSLocalBase : System.IDisposable {
                 $val = $parameters[$i]
                 $bindRc = [WinSqlite3]::SQLITE_OK
 
+                $val = [PSLocalBase]::_NormalizeScalar($val)
                 if ($null -eq $val) {
                     $bindRc = [WinSqlite3]::BindNull($stmt, $paramIdx)
-                } elseif ($val -is [byte] -or $val -is [sbyte] -or $val -is [int16] -or $val -is [uint16] -or $val -is [int32] -or $val -is [uint32] -or $val -is [int64]) {
+                } elseif ($val -is [byte] -or $val -is [sbyte] -or $val -is [int16] -or $val -is [uint16] -or $val -is [int32] -or $val -is [uint32] -or $val -is [int64] -or ($val -is [uint64] -and [uint64]$val -le [uint64][long]::MaxValue)) {
                     $bindRc = [WinSqlite3]::BindInt64($stmt, $paramIdx, [long]$val)
-                } elseif ($val -is [single] -or $val -is [double] -or $val -is [decimal]) {
+                } elseif ($val -is [single] -or $val -is [double] -or $val -is [decimal] -or $val -is [uint64]) {
                     $bindRc = [WinSqlite3]::BindDouble($stmt, $paramIdx, [double]$val)
                 } elseif ($val -is [bool]) {
                     $boolVal = if ($val) { 1L } else { 0L }
@@ -2358,7 +2467,7 @@ class PSLocalBase : System.IDisposable {
 
                 if ($bindRc -ne [WinSqlite3]::SQLITE_OK) {
                     $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                    throw [System.InvalidOperationException]::new("Failed to bind parameter at index ${paramIdx}: $msg (Code: $bindRc, Query: $sql)")
+                    throw [System.InvalidOperationException]::new("Failed to bind parameter at index ${paramIdx}: $msg (Code: $bindRc$($this._SqlContext($sql)))")
                 }
             }
         }
@@ -2378,7 +2487,7 @@ class PSLocalBase : System.IDisposable {
                 if ([string]::IsNullOrEmpty($msg)) {
                     $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
                 }
-                throw [System.InvalidOperationException]::new("SQLite execution error: $msg (Code: $rc, Query: $sql)")
+                throw [System.InvalidOperationException]::new("SQLite execution error: $msg (Code: $rc$($this._SqlContext($sql)))")
             }
         } finally {
             if ($errPtr -ne [IntPtr]::Zero) {
@@ -2397,7 +2506,7 @@ class PSLocalBase : System.IDisposable {
         $prepRc = [WinSqlite3]::Prepare($this.DbHandle, $sql, -1, [ref]$stmt, [IntPtr]::Zero)
         if ($prepRc -ne [WinSqlite3]::SQLITE_OK) {
             $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-            throw [System.InvalidOperationException]::new("Failed to prepare statement: $msg (Code: $prepRc, Query: $sql)")
+            throw [System.InvalidOperationException]::new("Failed to prepare statement: $msg (Code: $prepRc$($this._SqlContext($sql)))")
         }
 
         try {
@@ -2406,7 +2515,7 @@ class PSLocalBase : System.IDisposable {
             $stepRc = [WinSqlite3]::Step($stmt)
             if ($stepRc -ne [WinSqlite3]::SQLITE_DONE -and $stepRc -ne [WinSqlite3]::SQLITE_ROW) {
                 $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-                throw [System.InvalidOperationException]::new("Failed to execute statement: $msg (Code: $stepRc, Query: $sql)")
+                throw [System.InvalidOperationException]::new("Failed to execute statement: $msg (Code: $stepRc$($this._SqlContext($sql)))")
             }
         } finally {
             [void][WinSqlite3]::Finalize($stmt)
@@ -2424,7 +2533,7 @@ class PSLocalBase : System.IDisposable {
         $prepRc = [WinSqlite3]::Prepare($this.DbHandle, $sql, -1, [ref]$stmt, [IntPtr]::Zero)
         if ($prepRc -ne [WinSqlite3]::SQLITE_OK) {
             $msg = [WinSqlite3]::GetErrorMessage($this.DbHandle)
-            throw [System.InvalidOperationException]::new("Failed to prepare query: $msg (Code: $prepRc, Query: $sql)")
+            throw [System.InvalidOperationException]::new("Failed to prepare query: $msg (Code: $prepRc$($this._SqlContext($sql)))")
         }
 
         try {
@@ -2549,7 +2658,7 @@ class PSLocalBase : System.IDisposable {
                             $fBackR = [double]::Parse($fDecR.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
                             if ($fBackR -eq $fVal) { return $true }
                         }
-                    } catch {}
+                    } catch { Write-Verbose "Round-trip ('R') comparison not representable as Decimal." }
                     try {
                         $fStrG = $fVal.ToString("G17", [System.Globalization.CultureInfo]::InvariantCulture)
                         $fDecG = [decimal]::Parse($fStrG, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture)
@@ -2557,7 +2666,7 @@ class PSLocalBase : System.IDisposable {
                             $fBackG = [double]::Parse($fDecG.ToString([System.Globalization.CultureInfo]::InvariantCulture), [System.Globalization.CultureInfo]::InvariantCulture)
                             if ($fBackG -eq $fVal) { return $true }
                         }
-                    } catch {}
+                    } catch { Write-Verbose "Round-trip ('G17') comparison not representable as Decimal." }
                     return $false
                 }
             }
@@ -2737,9 +2846,17 @@ function New-LocalBase {
         Creates or connects to a PSLocalBase database instance.
     .PARAMETER Path
         Path to the SQLite database file, or ':memory:' for an in-memory database.
+    .PARAMETER Options
+        Connection options: wal (bool, default true), synchronous (EXTRA|FULL|NORMAL|OFF),
+        busyTimeout (ms, default 5000), cacheSizeMB (default 16), depth (1-100, default 20),
+        maxDocumentBytes (default 16MB), maxReadDepth (default 100), debug (bool, default false).
     .EXAMPLE
         $db = New-LocalBase -Path .\app.db
+    .EXAMPLE
+        $db = New-LocalBase -Path .\app.db -Options @{ busyTimeout = 10000; cacheSizeMB = 32 }
     #>
+    # Opening a connection is not a confirmable state change; database files are created on demand by SQLite.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     [CmdletBinding()]
     [OutputType([PSLocalBase])]
     param(
@@ -2763,398 +2880,21 @@ try {
         [void]$typeAcceleratorsClass::Add('PSLocalBase', [PSLocalBase])
     }
 } catch {
-    # Non-fatal fallback
+    # The [PSLocalBase] shorthand is a convenience; the class remains usable without it.
+    Write-Verbose "PSLocalBase type accelerator not registered: $($_.Exception.Message)"
 }
 
 # ---------------------------------------------------------------------------
-# 4b. Dynamic Method Fallbacks (Ensures hot-reload parity in warm sessions)
+# 4b. InTransaction reflects the native autocommit state
 # ---------------------------------------------------------------------------
-try {
-    Update-TypeData -TypeName PSLocalBase -MemberType ScriptProperty -MemberName InTransaction -Value {
-        if ($this.IsChildInstance -and ($null -eq $this.ParentDb -or $this.ParentDb.DbHandle -eq [IntPtr]::Zero)) {
-            $this.DbHandle = [IntPtr]::Zero
-        }
-        if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
-        $m = [WinSqlite3].GetMethod('GetAutocommit')
-        if ($null -ne $m) {
-            return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
-        }
-        $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
-        return $root.InTransaction
-    } -SecondValue {
-        param($val)
-    } -Force
-    if ($null -eq ([PSLocalBase].GetMethod('drop'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName drop -Value {
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified to drop.")
-            }
-            if ($this.IsCollectionGroup -or $null -ne $this.UnionQuery) {
-                throw [System.InvalidOperationException]::new("Cannot drop collection from a composite query (union/collectionGroup). Collection groups are read-only.")
-            }
-            $this._ExecuteDirectSql("DROP TABLE IF EXISTS [$($this.CurrentCollection)];")
-            $this.CurrentCollection = ""
-            $this._ResetQueryState()
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('_CollectionExists'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _CollectionExists -Value {
-            param([string]$name)
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($name)) { return $false }
-            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE LIMIT 1;", @($name))
-            return ($rows.Count -gt 0)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('_EnsureCollectionTable'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName _EnsureCollectionTable -Value {
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified.")
-            }
-            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (json_valid(doc)));"
-            $this._ExecuteDirectSql($createSql)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('create'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName create -Value {
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified to create. Call .collection('name').create()")
-            }
-            $createSql = "CREATE TABLE IF NOT EXISTS [$($this.CurrentCollection)] (key TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (json_valid(doc)));"
-            $this._ExecuteDirectSql($createSql)
-            return $this
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('createCollection'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName createCollection -Value {
-            param([string]$name)
-            return $this.collection($name).create()
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('collectionExists'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionExists -Value {
-            param([string]$name)
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($name)) { return $false }
-            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE LIMIT 1;", @($name))
-            return ($rows.Count -gt 0)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('createIndex', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName createIndex -Value {
-            param([string]$field, [hashtable]$options = @{})
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified to create index. Call .collection('name').createIndex('field')")
-            }
-            if ([string]::IsNullOrWhiteSpace($field)) {
-                throw [System.ArgumentException]::new("Field name cannot be null or empty in createIndex.")
-            }
-            $trimmedField = $field.Trim()
-            $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-            if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
-                throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
-            }
-            $this._EnsureCollectionTable()
-            $cleanField = $fieldToCheck.Replace(".", "_")
-            $indexName = "idx_$($this.CurrentCollection)_$cleanField"
-            $uniqueStr = if ($null -ne $options -and $options["unique"] -eq $true) { "UNIQUE" } else { "" }
-            $orderStr = if ($null -ne $options -and [string]$options["order"] -match '^(?i)desc$') { "DESC" } else { "ASC" }
-            $indexSql = "CREATE $uniqueStr INDEX IF NOT EXISTS [$indexName] ON [$($this.CurrentCollection)] ((json_extract(doc, '`$.$fieldToCheck')) $orderStr);"
-            $this._ExecuteDirectSql($indexSql)
-            return $this
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('dropIndex', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName dropIndex -Value {
-            param([string]$field)
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified to drop index. Call .collection('name').dropIndex('field')")
-            }
-            if ([string]::IsNullOrWhiteSpace($field)) {
-                throw [System.ArgumentException]::new("Field name cannot be null or empty in dropIndex.")
-            }
-            $trimmedField = $field.Trim()
-            $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-            if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
-                throw [System.ArgumentException]::new("Field name '$field' is invalid for index. Only alphanumeric characters, underscores, and dots are allowed.")
-            }
-            $cleanField = $fieldToCheck.Replace(".", "_")
-            $indexName = "idx_$($this.CurrentCollection)_$cleanField"
-            $dropSql = "DROP INDEX IF EXISTS [$indexName];"
-            $this._ExecuteDirectSql($dropSql)
-            return $this
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('populate', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName populate -Value {
-            param([string]$foreignField, [object]$optionsOrCollection = $null, [string]$asProperty = "")
-            $this._EnsureOpen()
-            if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
-                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
-            }
-            if ([string]::IsNullOrWhiteSpace($foreignField)) {
-                throw [System.ArgumentException]::new("Foreign field cannot be null or empty in populate.")
-            }
-            $foreignCol = $foreignField
-            $asProp = ""
-            if ($optionsOrCollection -is [System.Collections.IDictionary]) {
-                if ($optionsOrCollection.ContainsKey("from")) { $foreignCol = [string]$optionsOrCollection["from"] }
-                if ($optionsOrCollection.ContainsKey("as")) { $asProp = [string]$optionsOrCollection["as"] }
-            } elseif ($optionsOrCollection -is [string] -and -not [string]::IsNullOrWhiteSpace($optionsOrCollection)) {
-                $foreignCol = [string]$optionsOrCollection
-                $asProp = $asProperty
-            }
-            $cleanFField = $foreignField.Trim()
-            if ($cleanFField.StartsWith("$.")) { $cleanFField = $cleanFField.Substring(2) }
-            if ($cleanFField -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
-                throw [System.ArgumentException]::new("Foreign field '$foreignField' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
-            }
-            $cleanFCol = $foreignCol.Trim()
-            if ([string]::IsNullOrWhiteSpace($cleanFCol)) {
-                throw [System.ArgumentException]::new("Foreign collection cannot be null or empty in populate.")
-            }
-            if ($cleanFCol -notmatch '^[a-zA-Z0-9_]+$') {
-                throw [System.ArgumentException]::new("Foreign collection name '$cleanFCol' is invalid. Only alphanumeric characters and underscores are allowed.")
-            }
-            $cleanAs = if (-not [string]::IsNullOrWhiteSpace($asProp)) { $asProp.Trim() } else { $cleanFField }
-            if ($cleanAs.StartsWith("$.")) { $cleanAs = $cleanAs.Substring(2) }
-            if ($cleanAs -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
-                throw [System.ArgumentException]::new("Target property name '$cleanAs' is invalid. Only alphanumeric characters, underscores, and dots are allowed.")
-            }
-            if ($null -eq $this.PopulateClauses) { $this.PopulateClauses = [System.Collections.Generic.List[hashtable]]::new() }
-            $this.PopulateClauses.Add(@{
-                foreignField      = $cleanFField
-                foreignCollection = $cleanFCol
-                asProperty        = $cleanAs
-            })
-            return $this
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('union', [type[]]@([PSLocalBase])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName union -Value {
-            param([PSLocalBase]$otherQuery)
-            if ($null -eq $otherQuery) {
-                throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in union.")
-            }
-            if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
-                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
-            }
-            if ($otherQuery.DbHandle -ne $this.DbHandle) {
-                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
-            }
-            if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
-                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
-            }
-            $target = $this.clone()
-            $target._ResetQueryState()
-            $target.UnionLeftQuery = $this.clone()
-            $target.UnionQuery = $otherQuery.clone()
-            $target.UnionQuery.IsComposedInUnion = $true
-            $target.IsComposedInUnion = $true
-            $target.UnionType = "UNION"
-            return $target
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('unionAll', [type[]]@([PSLocalBase])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName unionAll -Value {
-            param([PSLocalBase]$otherQuery)
-            if ($null -eq $otherQuery) {
-                throw [System.ArgumentNullException]::new("otherQuery", "otherQuery cannot be null in unionAll.")
-            }
-            if ($null -ne $this.UnionQuery -or $null -ne $otherQuery.UnionQuery) {
-                throw [System.InvalidOperationException]::new("Nested composite queries (nested union/unionAll) are not supported.")
-            }
-            if ($otherQuery.DbHandle -ne $this.DbHandle) {
-                throw [System.InvalidOperationException]::new("Cannot execute composite union across different database connections.")
-            }
-            if (($null -ne $this.PopulateClauses -and $this.PopulateClauses.Count -gt 0) -or ($null -ne $otherQuery.PopulateClauses -and $otherQuery.PopulateClauses.Count -gt 0)) {
-                throw [System.InvalidOperationException]::new("populate() is not supported on composite queries (union/collectionGroup).")
-            }
-            $target = $this.clone()
-            $target._ResetQueryState()
-            $target.UnionLeftQuery = $this.clone()
-            $target.UnionQuery = $otherQuery.clone()
-            $target.UnionQuery.IsComposedInUnion = $true
-            $target.IsComposedInUnion = $true
-            $target.UnionType = "UNION ALL"
-            return $target
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('collectionGroup', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName collectionGroup -Value {
-            param([string]$pattern)
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($pattern)) {
-                throw [System.ArgumentException]::new("Collection pattern cannot be null or whitespace.")
-            }
-            $trimmedPattern = $pattern.Trim()
-            if ($trimmedPattern -notmatch '^[a-zA-Z0-9_*?]+$') {
-                throw [System.ArgumentException]::new("Collection group pattern '$pattern' is invalid. Only alphanumeric characters, underscores, and wildcard * ? are allowed.")
-            }
-            $allTables = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", @())
-            $patternRegex = '^' + [regex]::Escape($trimmedPattern).Replace('\*', '.*').Replace('\?', '.') + '$'
-            $matchedTables = [System.Collections.Generic.List[string]]::new()
-            foreach ($row in $allTables) {
-                $tableName = $row[0]
-                if ($tableName -match $patternRegex -and $tableName -match '^[a-zA-Z0-9_]+$') {
-                    $matchedTables.Add($tableName)
-                }
-            }
-            $root = if ($this.ParentDb) { $this.ParentDb } else { $this }
-            $child = [PSLocalBase]::new($this.DbHandle, $this.FilePath, $this.config, $root)
-            $child.CurrentCollection = $trimmedPattern
-            $child.IsCollectionGroup = $true
-            $child.GroupTables = $matchedTables.ToArray()
-            $child._ResetQueryState()
-            return $child
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('validate'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName validate -Value {
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified to validate. Call .collection('name').validate()")
-            }
-            if (-not $this._CollectionExists($this.CurrentCollection)) {
-                return $true
-            }
-            $rows = $this._ExecuteBoundQuery("SELECT 1 FROM [$($this.CurrentCollection)] WHERE doc IS NULL OR json_valid(doc) = 0 LIMIT 1;", @())
-            return ($rows.Count -eq 0)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('first', [type[]]@()))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName first -Value {
-            param([hashtable]$options = @{})
-            $clone = $this.clone()
-            $clone.LimitValue = 1
-            $res = $clone.get($options)
-            if ($null -eq $res) { return $null }
-            if ($res -is [System.Array]) {
-                if ($res.Length -gt 0) { return $res[0] }
-                return $null
-            }
-            return $res
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('exists'))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName exists -Value {
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .exists().")
-            }
-            if (-not $this._CollectionExists($this.CurrentCollection)) {
-                return $false
-            }
-            if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-                $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
-                $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-                return ($rows.Count -gt 0)
-            }
-            $sqlBuilder = [System.Text.StringBuilder]::new()
-            [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
-            $queryParams = [System.Collections.Generic.List[object]]::new()
-            if ($this.WhereClauses.Count -gt 0) {
-                [void]$sqlBuilder.Append(" WHERE ")
-                [void]$sqlBuilder.Append([string]::Join(" AND ", $this.WhereClauses))
-                if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-            }
-            [void]$sqlBuilder.Append(" LIMIT 1;")
-            $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
-            return ($rows.Count -gt 0)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('distinct', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName distinct -Value {
-            param([string]$field)
-            $this._EnsureOpen()
-            if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
-                throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .distinct().")
-            }
-            if ([string]::IsNullOrWhiteSpace($field)) {
-                throw [System.ArgumentException]::new("Field name cannot be null or empty in distinct().")
-            }
-            $trimmedField = $field.Trim()
-            $fieldToCheck = if ($trimmedField.StartsWith("$.")) { $trimmedField.Substring(2) } else { $trimmedField }
-            if ($fieldToCheck -notmatch '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$') {
-                throw [System.ArgumentException]::new("Field name '$field' is invalid in distinct(). Only alphanumeric characters, underscores, and dots are allowed.")
-            }
-            if ($null -ne $this.UnionQuery -or $this.IsCollectionGroup) {
-                throw [System.InvalidOperationException]::new("distinct() is not supported on composite queries (union) or collection groups.")
-            }
-            if (-not $this._CollectionExists($this.CurrentCollection)) {
-                return @()
-            }
-                $sqlBuilder = [System.Text.StringBuilder]::new()
-                $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
-                [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract FROM [$($this.CurrentCollection)]")
-                $queryParams = [System.Collections.Generic.List[object]]::new()
-                $whereList = [System.Collections.Generic.List[string]]::new()
-                if ($this.WhereClauses.Count -gt 0) {
-                    $whereList.AddRange($this.WhereClauses)
-                    if ($this.WhereParameters) { $queryParams.AddRange($this.WhereParameters) }
-                }
-                $whereList.Add("$jsonExtract IS NOT NULL")
-                [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $whereList))
-                [void]$sqlBuilder.Append(" ORDER BY $jsonExtract ASC;")
-                $rows = $this._ExecuteBoundQuery($sqlBuilder.ToString(), $queryParams.ToArray())
-                $distinctList = [System.Collections.Generic.List[object]]::new()
-                foreach ($row in $rows) {
-                    if ($row.Count -gt 0 -and $null -ne $row[0]) {
-                        $distinctList.Add($row[0])
-                    }
-                }
-                return [object[]]$distinctList.ToArray()
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('sum', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName sum -Value {
-            param([string]$field)
-            return [double]$this._ExecuteAggregate("SUM", $field)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('avg', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName avg -Value {
-            param([string]$field)
-            return [double]$this._ExecuteAggregate("AVG", $field)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('min', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName min -Value {
-            param([string]$field)
-            return $this._ExecuteAggregate("MIN", $field)
-        } -Force
-    }
-
-    if ($null -eq ([PSLocalBase].GetMethod('max', [type[]]@([string])))) {
-        Update-TypeData -TypeName PSLocalBase -MemberType ScriptMethod -MemberName max -Value {
-            param([string]$field)
-            return $this._ExecuteAggregate("MAX", $field)
-        } -Force
-    }
-} catch { }
+# Raw SQL (for example query('BEGIN')) can open a transaction without beginTransaction().
+Update-TypeData -TypeName PSLocalBase -MemberType ScriptProperty -MemberName InTransaction -Value {
+    if ($this.IsChildInstance -and ($null -eq $this.ParentDb -or $this.ParentDb.DbHandle -eq [IntPtr]::Zero)) { return $false }
+    if ($this.DbHandle -eq [IntPtr]::Zero) { return $false }
+    return ([WinSqlite3]::GetAutocommit($this.DbHandle) -eq 0)
+} -SecondValue {
+    # Assignments are ignored: the value always comes from sqlite3_get_autocommit.
+} -Force
 
 # ---------------------------------------------------------------------------
 # 5. Clean Module Unload
@@ -3165,7 +2905,9 @@ $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
         if ($typeAcceleratorsClass -and $typeAcceleratorsClass::Get.ContainsKey('PSLocalBase')) {
             [void]$typeAcceleratorsClass::Remove('PSLocalBase')
         }
-    } catch { }
+    } catch {
+        Write-Verbose "PSLocalBase type accelerator not removed: $($_.Exception.Message)"
+    }
 }
 
 Export-ModuleMember -Function New-LocalBase
