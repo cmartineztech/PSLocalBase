@@ -457,6 +457,8 @@ $db.collection("orders").where("shipping.address.city", "==", "Seattle").get()
 
 `IN` with a `$null` member also matches documents where the field is null or missing. `not-in` only matches documents where the field is present and not null (an empty list therefore returns every document that has the field); `$null` members are ignored.
 
+Scalar null comparisons follow SQLite JSON semantics: `.where("field", "=", $null)` matches both explicit JSON nulls and missing fields; `.where("field", "!=", $null)` matches only present, non-null values. `.whereType("field", "null")` matches explicit JSON nulls only. These rules also apply to deep dot paths.
+
 ### Array Membership & Intersection (`array-contains`, `array-contains-any`)
 ```powershell
 # Check if array contains a specific item

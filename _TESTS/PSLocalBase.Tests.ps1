@@ -2147,6 +2147,40 @@ Assert-Test "TC-61: Polymorphic Type Filtering (whereType & type operators)" {
         if ($nums.Count -ne 1 -or $nums[0].id -ne 4) {
             throw "Expected id 4 for number type, got $($nums.Count)."
         }
+
+        # Scalar null equality includes missing fields, while type filtering distinguishes them.
+        $nullCol = $db.collection("null_filter_test")
+        [void]$nullCol.doc("null-doc").set(@{
+            id = "null-doc"; value = $null; profile = @{ settings = @{ theme = $null } }
+        })
+        [void]$nullCol.doc("missing-doc").set(@{
+            id = "missing-doc"; other = "val"; profile = @{ settings = @{ other = "val" } }
+        })
+        [void]$nullCol.doc("data-doc").set(@{
+            id = "data-doc"; value = "hello"; profile = @{ settings = @{ theme = "dark" } }
+        })
+
+        $nullEquals = @($nullCol.where("value", "=", $null).get())
+        if ((($nullEquals.id | Sort-Object) -join ",") -ne "missing-doc,null-doc") {
+            throw "Scalar null equality should match explicit null and missing fields."
+        }
+        $nullNotEquals = @($nullCol.where("value", "!=", $null).get())
+        if (($nullNotEquals.id -join ",") -ne "data-doc") {
+            throw "Scalar null inequality should match only present, non-null values."
+        }
+        $explicitNulls = @($nullCol.whereType("value", "null").get())
+        if (($explicitNulls.id -join ",") -ne "null-doc") {
+            throw "whereType(null) should match only explicit JSON nulls."
+        }
+
+        $deepNullEquals = @($nullCol.where("profile.settings.theme", "=", $null).get())
+        if ((($deepNullEquals.id | Sort-Object) -join ",") -ne "missing-doc,null-doc") {
+            throw "Deep-path scalar null equality should include missing fields."
+        }
+        $deepExplicitNulls = @($nullCol.whereType("profile.settings.theme", "null").get())
+        if (($deepExplicitNulls.id -join ",") -ne "null-doc") {
+            throw "Deep-path whereType(null) should match only explicit JSON nulls."
+        }
     } finally {
         $db.close()
     }
