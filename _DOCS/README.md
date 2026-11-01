@@ -40,6 +40,7 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
   - [Array Membership & Intersection (`array-contains`, `array-contains-any`)](#array-membership--intersection-array-contains-array-contains-any)
   - [Array Length Filtering (`whereLength`, `length`)](#array-length-filtering-wherelength-length)
   - [Data Type Filtering (`whereType`, `type`)](#data-type-filtering-wheretype-type)
+  - [Field Existence Filtering (`whereExists`, `whereMissing`, `exists`)](#field-existence-filtering-whereexists-wheremissing-exists)
   - [Array Index Filtering](#array-index-filtering)
   - [Counting Records (`count`)](#counting-records-count)
   - [Mathematical Aggregations (`sum`, `avg`, `min`, `max`)](#mathematical-aggregations-sum-avg-min-max)
@@ -493,6 +494,18 @@ $db.collection("flags").whereType("enabled", "boolean").get()
 $db.collection("metrics").where("value", "type", "integer").get()
 ```
 
+### Field Existence Filtering (`whereExists`, `whereMissing`, `exists`)
+Query whether a document possesses or omits a field regardless of its value:
+```powershell
+# Shorthand helper methods:
+$missingEmail = $db.collection("users").whereMissing("email").get()
+$hasPhone = $db.collection("users").whereExists("contact.phone").get()
+
+# Operator syntax inside where():
+$activeConfig = $db.collection("configs").where("featureFlags.beta", "exists", $true).get()
+$unmigrated = $db.collection("records").where("schemaVersion", "missing", $true).get()
+```
+
 ### Array Index Filtering
 Target specific array offsets using standard JSONPath indexing:
 ```powershell
@@ -539,7 +552,7 @@ foreach ($r in $records) {
 
 ### Query Immutability, Reusability & Branch Forking (`clone`, `fork`)
 
-Query modifiers (`where()`, `whereLength()`, `whereType()`, `orderBy()`, `limit()`, `skip()`, `select()`, `populate()`) are strictly **immutable**: each call returns a new isolated child query instance without modifying the parent.
+Query modifiers (`where()`, `whereLength()`, `whereType()`, `whereExists()`, `whereMissing()`, `orderBy()`, `limit()`, `skip()`, `select()`, `populate()`) are strictly **immutable**: each call returns a new isolated child query instance without modifying the parent.
 
 Furthermore, terminal methods (`get()`, `count()`, `exists()`, `distinct()`, `sum()`, `avg()`, `min()`, `max()`) are **non-destructive** and do not wipe filters:
 

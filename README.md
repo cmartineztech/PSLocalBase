@@ -381,6 +381,7 @@ Supported Operators:
 - Array Intersection: `array-contains-any` (matches if document array contains ANY of the given values)
 - Exclusion: `not-in`, `-notin` (matches documents where the field is present, not null, and not in the set; `$null` members are ignored)
 - Array length and JSON type: `length`, `length>`, ... and `type` (`null`, `integer`, `real`, `number`, `text`, `array`, `object`, `true`, `false`, `boolean`), also available as `whereLength()` and `whereType()`
+- Field Existence: `exists`, `-exists`, `missing`, `-missing` (checks field presence; `$true` matches explicit null and non-null values, `$false` matches missing fields), also available as `whereExists()` and `whereMissing()`
 
 ```powershell
 # Boolean filter
@@ -406,6 +407,10 @@ $result = $db.collection("products") `
     .where("category", "=", "Electronics") `
     .where("price", "<", 500) `
     .get()
+
+# Field existence & missing checks
+$unassigned = $db.collection("tasks").whereMissing("assignee").get()
+$hasSettings = $db.collection("users").whereExists("profile.settings").get()
 ```
 
 #### `orderBy([string]$field, [string]$direction = "asc")`
@@ -473,7 +478,7 @@ $activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM u
 
 `query()` executes exactly one statement; text after the first `;` other than whitespace or comments is rejected. It is a trusted-code escape hatch: never build its SQL from user input, pass values through the parameter array.
 
-> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type queries (`whereLength()`, `whereType()`), see the [Full Documentation (`_DOCS/`)](_DOCS/#4-querying--filtering).
+> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type/existence queries (`whereLength()`, `whereType()`, `whereExists()`, `whereMissing()`), see the [Full Documentation (`_DOCS/`)](_DOCS/#4-querying--filtering).
 
 ---
 

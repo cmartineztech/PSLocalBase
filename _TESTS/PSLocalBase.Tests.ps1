@@ -3105,6 +3105,116 @@ Assert-Test "TC-83: Query Builder Immutability, Bifurcation & Explicit Fork (Iss
     }
 }
 # ---------------------------------------------------------------------------
+# TC-84: Field Existence & Missing Operators ('exists', 'missing', whereExists, whereMissing) (Issue #36)
+# ---------------------------------------------------------------------------
+Assert-Test "TC-84: Field Existence & Missing Operators ('exists', 'missing', whereExists, whereMissing) (Issue #36)" {
+    $db = [PSLocalBase]::new(":memory:")
+    try {
+        $items = $db.collection("items")
+        [void]$items.doc("null-doc").set(@{
+            id = "null-doc"; value = $null; profile = @{ settings = @{ theme = $null } }; arr = @("alpha")
+        })
+        [void]$items.doc("missing-doc").set(@{
+            id = "missing-doc"; other = "val"; profile = @{ settings = @{ other = "val" } }; arr = @()
+        })
+        [void]$items.doc("data-doc").set(@{
+            id = "data-doc"; value = "hello"; profile = @{ settings = @{ theme = "dark" } }; arr = @("alpha", "beta")
+        })
+
+        # 1. where("value", "exists", $true) matches both explicit null and present values (excludes missing)
+        $existsTrue = @($items.where("value", "exists", $true).get(@{ keys = $true }))
+        $existsTrueKeys = @($existsTrue | ForEach-Object { $_.key }) | Sort-Object
+        if ($existsTrue.Count -ne 2 -or ($existsTrueKeys -join ",") -ne "data-doc,null-doc") {
+            throw "where(exists, `$true) expected [data-doc, null-doc], got: $($existsTrueKeys -join ',')"
+        }
+
+        # 2. whereExists("value") shorthand matches both explicit null and present values
+        $whereExists = @($items.whereExists("value").get(@{ keys = $true }))
+        $whereExistsKeys = @($whereExists | ForEach-Object { $_.key }) | Sort-Object
+        if ($whereExists.Count -ne 2 -or ($whereExistsKeys -join ",") -ne "data-doc,null-doc") {
+            throw "whereExists expected [data-doc, null-doc], got: $($whereExistsKeys -join ',')"
+        }
+
+        # 3. where("value", "exists", $false) matches strictly missing fields
+        $existsFalse = @($items.where("value", "exists", $false).get(@{ keys = $true }))
+        if ($existsFalse.Count -ne 1 -or $existsFalse[0].key -ne "missing-doc") {
+            throw "where(exists, `$false) expected [missing-doc], got: $($existsFalse.key -join ',')"
+        }
+
+        # 4. whereMissing("value") shorthand matches strictly missing fields
+        $whereMissing = @($items.whereMissing("value").get(@{ keys = $true }))
+        if ($whereMissing.Count -ne 1 -or $whereMissing[0].key -ne "missing-doc") {
+            throw "whereMissing expected [missing-doc], got: $($whereMissing.key -join ',')"
+        }
+
+        # 5. 'missing' operator parity ($true matches missing, $false matches exists)
+        $missingTrue = @($items.where("value", "missing", $true).get(@{ keys = $true }))
+        if ($missingTrue.Count -ne 1 -or $missingTrue[0].key -ne "missing-doc") {
+            throw "where(missing, `$true) expected [missing-doc], got: $($missingTrue.key -join ',')"
+        }
+        $missingFalse = @($items.where("value", "missing", $false).get(@{ keys = $true }))
+        $missingFalseKeys = @($missingFalse | ForEach-Object { $_.key }) | Sort-Object
+        if ($missingFalse.Count -ne 2 -or ($missingFalseKeys -join ",") -ne "data-doc,null-doc") {
+            throw "where(missing, `$false) expected [data-doc, null-doc], got: $($missingFalseKeys -join ',')"
+        }
+
+        # 6. Deep dot-path existence checks
+        $deepExists = @($items.whereExists("profile.settings.theme").get(@{ keys = $true }))
+        $deepExistsKeys = @($deepExists | ForEach-Object { $_.key }) | Sort-Object
+        if ($deepExists.Count -ne 2 -or ($deepExistsKeys -join ",") -ne "data-doc,null-doc") {
+            throw "Deep-path whereExists expected [data-doc, null-doc], got: $($deepExistsKeys -join ',')"
+        }
+        $deepMissing = @($items.whereMissing("profile.settings.theme").get(@{ keys = $true }))
+        if ($deepMissing.Count -ne 1 -or $deepMissing[0].key -ne "missing-doc") {
+            throw "Deep-path whereMissing expected [missing-doc], got: $($deepMissing.key -join ',')"
+        }
+
+        # 7. Array element path existence checks
+        $arrExists = @($items.whereExists("arr[1]").get(@{ keys = $true }))
+        if ($arrExists.Count -ne 1 -or $arrExists[0].key -ne "data-doc") {
+            throw "Array index whereExists('arr[1]') expected [data-doc], got: $($arrExists.key -join ',')"
+        }
+        $arrMissing = @($items.whereMissing("arr[1]").get(@{ keys = $true }))
+        $arrMissingKeys = @($arrMissing | ForEach-Object { $_.key }) | Sort-Object
+        if ($arrMissing.Count -ne 2 -or ($arrMissingKeys -join ",") -ne "missing-doc,null-doc") {
+            throw "Array index whereMissing('arr[1]') expected [missing-doc, null-doc], got: $($arrMissingKeys -join ',')"
+        }
+
+        # 8. Type validation: non-boolean value for 'exists' or 'missing' must throw ArgumentException
+        $threwStr = $false
+        try { [void]$items.where("value", "exists", "true").get() } catch [System.ArgumentException] { $threwStr = $true }
+        if (-not $threwStr) { throw "where(exists, 'true') string did not throw ArgumentException!" }
+
+        $threwNum = $false
+        try { [void]$items.where("value", "exists", 1).get() } catch [System.ArgumentException] { $threwNum = $true }
+        if (-not $threwNum) { throw "where(exists, 1) number did not throw ArgumentException!" }
+
+        $threwNull = $false
+        try { [void]$items.where("value", "exists", $null).get() } catch [System.ArgumentException] { $threwNull = $true }
+        if (-not $threwNull) { throw "where(exists, `$null) did not throw ArgumentException!" }
+
+        # 9. Query Immutability: whereExists() returns an isolated clone
+        $baseQuery = $items.where("id", "==", "null-doc")
+        $forkedQuery = $baseQuery.whereExists("value")
+        if ([object]::ReferenceEquals($baseQuery, $forkedQuery)) {
+            throw "whereExists() must return a cloned instance, not the same reference!"
+        }
+        if ($baseQuery.WhereClauses.Count -ne 1 -or $forkedQuery.WhereClauses.Count -ne 2) {
+            throw "whereExists() mutated base query WhereClauses!"
+        }
+
+        # 10. Chaining with count() and first()
+        $cnt = $items.whereMissing("value").count()
+        if ($cnt -ne 1) { throw "whereMissing.count() expected 1, got $cnt" }
+        $first = $items.whereMissing("value").first()
+        if ($null -eq $first -or $first.id -ne "missing-doc") {
+            throw "whereMissing.first() expected missing-doc, got $($first.id)"
+        }
+    } finally {
+        $db.close()
+    }
+}
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Host "==========================================================" -ForegroundColor Cyan

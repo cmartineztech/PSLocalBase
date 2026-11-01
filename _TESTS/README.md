@@ -26,7 +26,7 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ### Complete Multi-Suite Runner Overview (19 Suites)
 
 The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including `PSLocalBase.Review-v2-de8801d.Tests.ps1` (5 checks) and `PSLocalBase.PointBridge.Tests.ps1` (36 point-lookup cases and 3 isolated bridge scenarios). Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
-1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (83 test cases).
+1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (84 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
 4. `PSLocalBase.NativeStress.Tests.ps1` - P/Invoke statement cleanup, finalizer release of undisposed connections, and shared-memory lock contention between runspaces (5 checks plus observations).
@@ -51,7 +51,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including
 
 ---
 
-## Verified Acceptance Criteria (83/83 Passed)
+## Verified Acceptance Criteria (84/84 Passed)
 
 | Test ID | Test Category | Validation Criteria | Status |
 | :--- | :--- | :--- | :--- |
@@ -138,3 +138,4 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including
 | **TC-81** | **Double/Decimal Boundary Quantization & Array Mutation Isolation** | Guards Doubles below Decimal resolution (\|x\| < 1e-28) so they never equal a non-zero Decimal in ArrayUnion/ArrayRemove | **PASSED** |
 | **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
 | **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |
+| **TC-84** | **Field Existence & Missing Operators** | Evaluates document field presence via native SQLite json_type() IS NOT NULL / IS NULL (whereExists, whereMissing, exists, missing); matches explicit nulls and excludes missing keys | **PASSED** |

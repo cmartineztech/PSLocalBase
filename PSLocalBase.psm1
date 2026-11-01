@@ -1358,6 +1358,8 @@ class PSLocalBase : System.IDisposable {
             '^(LENGTH<=|LENGTH-LE|SIZE<=)$'      { 'LENGTH<=' }
             '^(LENGTH!=|LENGTH-NE|SIZE!=)$'      { 'LENGTH!=' }
             '^(TYPE|JSON-TYPE)$'                 { 'TYPE' }
+            '^(EXISTS|EXIST|-EXISTS)$'           { 'EXISTS' }
+            '^(MISSING|-MISSING)$'               { 'MISSING' }
             default {
                 throw [System.ArgumentException]::new("Unsupported operator '$operator' in where clause.")
             }
@@ -1498,6 +1500,20 @@ class PSLocalBase : System.IDisposable {
             return $target
         }
 
+        # Case A6: exists / missing operator
+        if ($sqlOp -eq 'EXISTS' -or $sqlOp -eq 'MISSING') {
+            if ($null -eq $value -or -not ($value -is [bool])) {
+                throw [System.ArgumentException]::new("Value for '$($trimmedOp.ToLowerInvariant())' operator must be a boolean (`$true or `$false).")
+            }
+            $shouldExist = if ($sqlOp -eq 'EXISTS') { [bool]$value } else { -not [bool]$value }
+            if ($shouldExist) {
+                $target.WhereClauses.Add("json_type(doc, '$jsonField') IS NOT NULL")
+            } else {
+                $target.WhereClauses.Add("json_type(doc, '$jsonField') IS NULL")
+            }
+            return $target
+        }
+
         # Case B: Null comparisons
         if ($null -eq $value) {
             if ($sqlOp -eq '=') {
@@ -1574,6 +1590,14 @@ class PSLocalBase : System.IDisposable {
 
     [PSLocalBase] whereType([string]$field, [string]$expectedType) {
         return $this.where($field, "type", $expectedType)
+    }
+
+    [PSLocalBase] whereExists([string]$field) {
+        return $this.where($field, "exists", $true)
+    }
+
+    [PSLocalBase] whereMissing([string]$field) {
+        return $this.where($field, "exists", $false)
     }
 
     [PSLocalBase] _ApplySelect([string[]]$fields) {
