@@ -3,7 +3,7 @@
     RootModule           = 'PSLocalBase.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '2.0.0'
+    ModuleVersion        = '2.0.1'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -47,7 +47,7 @@
             Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
-            ReleaseNotes = '2.0.0: data-safety, query-semantics and connection-lifecycle hardening with breaking changes. See CHANGELOG.md.'
+            ReleaseNotes = '2.0.1: Added whereExists() and whereMissing() field existence operators, formalized SQLite JSON null filter contract, and updated test suite to 84 passing criteria. See CHANGELOG.md.'
         }
     }
 }
