@@ -375,7 +375,7 @@ Supported Operators:
 - Comparisons: `>`, `<`, `>=`, `<=`, `-gt`, `-lt`, `-ge`, `-le`
 - Pattern Matching: `LIKE`, `-like`, `NOT LIKE`, `-notlike`
 
-`LIKE`/`NOT LIKE` use SQLite patterns. `-like`/`-notlike` use PowerShell's case-insensitive wildcard matcher inside a registered SQLite function, preserving complete strings including embedded NUL and Unicode. Bracket classes remain explicitly unsupported. SQL NULL values retain SQL predicate behavior. After upgrading the native bridge, start a fresh PowerShell session.
+`LIKE`/`NOT LIKE` use SQLite patterns. `-like`/`-notlike` use PowerShell's case-insensitive wildcard matcher inside a registered SQLite function, preserving complete strings including embedded NUL and Unicode. Bracket classes remain explicitly unsupported. Scalar null comparisons use SQLite JSON semantics: `.where("field", "=", $null)` matches both explicit JSON nulls and missing fields; `.where("field", "!=", $null)` matches only present, non-null values. `.whereType("field", "null")` matches explicit JSON nulls only, not missing fields. After upgrading the native bridge, start a fresh PowerShell session.
 - Membership: `IN`, `-in` (a `$null` member also matches documents where the field is null or missing)
 - Array Membership: `array-contains`, `-contains` (matches if document array contains the scalar value)
 - Array Intersection: `array-contains-any` (matches if document array contains ANY of the given values)
