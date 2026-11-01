@@ -230,11 +230,11 @@ Writes never modify the query instance they are called on.
   * Sanitizes the (trimmed) field path via `\A[a-zA-Z0-9_]+(\[\d+\])*(\.[a-zA-Z0-9_]+(\[\d+\])*)*\z`, supporting dot navigation and array indexing (`tags[0]`, `roles[1].title`).
   * Accepts the operators `=`, `==`, `-eq`, `!=`, `<>`, `-ne`, `>`, `-gt`, `<`, `-lt`, `>=`, `-ge`, `<=`, `-le`, `LIKE`, `NOT LIKE`, `-like`, `-notlike`, `IN`, `-in`, `not-in`/`not in`/`not_in`/`-notin`, `array-contains`/`-contains`, `array-contains-any`, `length`/`array-length`/`size` (and `length>`, `length>=`, `length<`, `length<=`, `length!=` with `size` aliases), `type`/`json-type`. Anything else throws `ArgumentException`.
   * Binds every value as a parameter (`?`); `DateTime`/`DateTimeOffset` values are converted to ISO-8601 UTC text first. `IN` with a `$null` member adds `IS NULL`; `not-in` requires the field to be present and not null.
-  * Extracts JSON fields using SQLite's native `json_extract(doc, '$.field')`.
+  * Extracts JSON fields using SQLite's native `json_extract(doc, '$.field')`. For scalar equality, `json_extract(...) IS NULL` matches both explicit JSON nulls and missing fields; inequality with `$null` matches only present, non-null values. `whereType(field, 'null')` uses `json_type(...) = 'null'` and matches explicit JSON nulls only.
 * **`[PSLocalBase] whereLength([string]$field, [string]$op, [int]$expected)` / `whereLength([string]$field, [int]$count)`**
   * Returns a cloned query instance filtering documents by array size directly in SQLite C engine via `json_array_length(doc, '$.field')`. Operators: `=`, `==`, `-eq`, `!=`, `-ne`, `>`, `-gt`, `>=`, `-ge`, `<`, `-lt`, `<=`, `-le`; others throw.
 * **`[PSLocalBase] whereType([string]$field, [string]$expectedType)`**
-  * Returns a cloned query instance filtering documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `true`, `false`, plus the groups `number` and `boolean`) via SQLite's `json_type(doc, '$.field')`.
+  * Returns a cloned query instance filtering documents by dynamic data type (`null`, `integer`, `real`, `text`, `array`, `object`, `true`, `false`, plus the groups `number` and `boolean`) via SQLite's `json_type(doc, '$.field')`; the `null` type matches an explicit JSON null and excludes a missing field.
 * **`[PSLocalBase] select([string[]]$fields)`**
   * Returns a cloned query instance projecting only requested fields directly in SQLite using `json_object('field', json_extract(doc, '$.field'))`, drastically reducing PowerShell deserialization overhead and memory allocation.
 * **`[PSLocalBase] orderBy([string]$field, [string]$direction = "asc")`**
