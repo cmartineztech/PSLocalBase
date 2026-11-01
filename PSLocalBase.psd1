@@ -1,4 +1,4 @@
-﻿@{
+@{
     # Script module or binary module file associated with this manifest.
     RootModule           = 'PSLocalBase.psm1'
 
@@ -33,6 +33,7 @@
     FileList             = @(
         'PSLocalBase.psd1',
         'PSLocalBase.psm1',
+        'PSLocalBase.Cmdlets.ps1',
         'InitWinSqlite3Native.ps1',
         'LICENSE',
         'README.md',
@@ -40,7 +41,30 @@
     )
 
     # Functions to export from this module
-    FunctionsToExport    = @('New-LocalBase')
+    FunctionsToExport    = @(
+        'New-LocalBase',
+        'Connect-LocalBase',
+        'Disconnect-LocalBase',
+        'Get-LocalBaseConnection',
+        'Backup-LocalBaseDatabase',
+        'Remove-LocalBaseDatabase',
+        'Get-LocalBaseCollection',
+        'New-LocalBaseCollection',
+        'Remove-LocalBaseCollection',
+        'Clear-LocalBaseCollection',
+        'New-LocalBaseIndex',
+        'Remove-LocalBaseIndex',
+        'Get-LocalBaseDocument',
+        'Add-LocalBaseDocument',
+        'Set-LocalBaseDocument',
+        'Update-LocalBaseDocument',
+        'Remove-LocalBaseDocument',
+        'Measure-LocalBaseDocument',
+        'Start-LocalBaseTransaction',
+        'Complete-LocalBaseTransaction',
+        'Undo-LocalBaseTransaction',
+        'Invoke-LocalBaseTransaction'
+    )
 
     # Cmdlets to export from this module
     CmdletsToExport      = @()
@@ -49,7 +73,7 @@
     VariablesToExport    = @()
 
     # Aliases to export from this module
-    AliasesToExport      = @()
+    AliasesToExport      = @('gld', 'ald', 'sld', 'uld', 'rld', 'Open-LocalBase', 'Close-LocalBase')
 
     # Private data to pass to the module specified in RootModule
     PrivateData          = @{

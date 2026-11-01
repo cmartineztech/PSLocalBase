@@ -53,6 +53,7 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 - [8. Atomic ACID Transactions](#8-atomic-acid-transactions)
 - [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
 - [10. PowerShell Pipeline Integration & Object Standard](#10-powershell-pipeline-integration--object-standard)
+  - [Native Cmdlets & Pipeline Guide (CMDLETS.md)](CMDLETS.md)
 - [11. Reading Over SMB / Network Shares](#11-reading-over-smb--network-shares)
   - [Why Direct SMB Access is Blocked](#why-direct-smb-access-is-blocked)
   - [Writer Pattern: Publishing Consistent Snapshots via VACUUM INTO](#writer-pattern-publishing-consistent-snapshots-via-vacuum-into)
@@ -724,6 +725,15 @@ $db.collectionGroup("logs_2026_*").get() |
     Group-Object _collection |
     Select-Object Name, Count
 ```
+
+### 🛠️ Native PowerShell Cmdlets (`PSLocalBase.Cmdlets.ps1`)
+
+> [!NOTE]
+> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+
+In addition to the Fluent API, PSLocalBase includes a 100% native PowerShell Cmdlet adapter with full pipeline streaming (`Add-LocalBaseDocument`, `Get-LocalBaseDocument`, `Update-LocalBaseDocument`, `Remove-LocalBaseDocument`), `-WhatIf` safety, and short interactive aliases (`gld`, `ald`, `uld`, `rld`).
+
+👉 **Complete Cmdlet Documentation:** For the full reference, parameter matrices, and automation scripts, see [CMDLETS.md](CMDLETS.md).
 
 ---
 

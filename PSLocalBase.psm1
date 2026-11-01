@@ -2934,4 +2934,55 @@ $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     }
 }
 
-Export-ModuleMember -Function New-LocalBase
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 6. Native Cmdlets & Pipeline Adapter
+# ---------------------------------------------------------------------------
+$cmdletsFile = Join-Path $PSScriptRoot 'PSLocalBase.Cmdlets.ps1'
+if (Test-Path -LiteralPath $cmdletsFile) {
+    . $cmdletsFile
+}
+
+$exportedFunctions = @('New-LocalBase')
+$cmdletNames = @(
+    'Connect-LocalBase',
+    'Disconnect-LocalBase',
+    'Get-LocalBaseConnection',
+    'Backup-LocalBaseDatabase',
+    'Remove-LocalBaseDatabase',
+    'Get-LocalBaseCollection',
+    'New-LocalBaseCollection',
+    'Remove-LocalBaseCollection',
+    'Clear-LocalBaseCollection',
+    'New-LocalBaseIndex',
+    'Remove-LocalBaseIndex',
+    'Get-LocalBaseDocument',
+    'Add-LocalBaseDocument',
+    'Set-LocalBaseDocument',
+    'Update-LocalBaseDocument',
+    'Remove-LocalBaseDocument',
+    'Measure-LocalBaseDocument',
+    'Start-LocalBaseTransaction',
+    'Complete-LocalBaseTransaction',
+    'Undo-LocalBaseTransaction',
+    'Invoke-LocalBaseTransaction'
+)
+foreach ($cmdletName in $cmdletNames) {
+    if (Get-Command -Name $cmdletName -ErrorAction SilentlyContinue) {
+        $exportedFunctions += $cmdletName
+    }
+}
+
+$exportedAliases = @()
+foreach ($aliasName in @('gld', 'ald', 'sld', 'uld', 'rld', 'Open-LocalBase', 'Close-LocalBase')) {
+    if (Get-Alias -Name $aliasName -ErrorAction SilentlyContinue) {
+        $exportedAliases += $aliasName
+    }
+}
+
+if ($exportedAliases.Count -gt 0) {
+    Export-ModuleMember -Function $exportedFunctions -Alias $exportedAliases
+} else {
+    Export-ModuleMember -Function $exportedFunctions
+}

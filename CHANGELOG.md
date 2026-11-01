@@ -2,6 +2,13 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Native PowerShell Cmdlets & Pipeline Adapter (`PSLocalBase.Cmdlets.ps1`)**: Added 22 native cmdlets and 7 short interactive aliases (`gld`, `ald`, `sld`, `uld`, `rld`, `Open-LocalBase`, `Close-LocalBase`) providing full pipeline streaming (`|`), ambient session management (`Connect-LocalBase` / `Disconnect-LocalBase`), and `-WhatIf` / `-Confirm` safety over the native engine.
+- **Dedicated Cmdlets Test Suite (`_TESTS/PSLocalBase.Cmdlets.Tests.ps1`)**: 18 comprehensive test cases (C01–C18) verifying connection lifecycles, pipeline streaming, deep recursive merging, array mutations, atomic transactions, multi-database routing, and cross-edition parity.
+- **Comprehensive Documentation (`_DOCS/CMDLETS.md`)**: Complete reference guide covering pipeline architecture, property binding, safety mechanics, cmdlet syntax, parity matrices, and operational automation scripts.
+
 ## [2.0.2] - 2026-10-31
 
 ### Packaging & Distribution

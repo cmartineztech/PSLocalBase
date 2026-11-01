@@ -643,11 +643,47 @@ try {
 * **Why Direct SMB Access is Blocked:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB. Direct UNC and mapped paths are rejected to prevent file corruption.
 * **Writer Snapshot Export (`VACUUM INTO`):** To share data over SMB without downtime, the writer process exports a consistent snapshot via `$db.query("VACUUM INTO 'snapshot.db';")` and publishes the completed file to the share.
 * **Client Consumption (Local Temp):** Readers copy the published snapshot to a unique `$env:TEMP` path and query at full local NVMe speed with zero network lock contention. See [Section 11 in Full Documentation](_DOCS/#11-reading-over-smb--network-shares).
+
+---
+
+## 🛠️ Native PowerShell Cmdlets & Pipeline (DevOps Mode)
+
+> [!NOTE]
+> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+
+Prefer idiomatic PowerShell cmdlets with pipeline streaming (`|`), `-WhatIf`, `-Confirm`, and native `Get-Help`?
+
+In addition to the primary Fluent API (`$db.collection().where().get()`), PSLocalBase includes a **100% native PowerShell Cmdlet adapter** (`PSLocalBase.Cmdlets.ps1`). Both styles share the exact same C# SQLite engine and can even be mixed:
+
+```powershell
+# 1. Connect to session
+Connect-LocalBase -Path "./infrastructure.db"
+
+# 2. Ingest objects directly from PowerShell pipeline!
+Get-Process | Select-Object -First 10 ProcessName, Id, CPU | 
+    Add-LocalBaseDocument -Collection "processes"
+
+# 3. Query documents with parameters or hashtable filters
+$procs = Get-LocalBaseDocument -Collection "processes" -Filter @{ ProcessName = 'powershell' }
+
+# 4. Pipeline chaining with safety (-WhatIf / -Confirm)
+Get-LocalBaseDocument -Collection "processes" -Field "CPU" -Operator ">=" -Value 50 | 
+    Remove-LocalBaseDocument -WhatIf
+
+# 5. Fast mathematical aggregations
+Measure-LocalBaseDocument -Collection "processes" -Field "CPU" -Average -Maximum
+
+# 6. Disconnect
+Disconnect-LocalBase
+```
+
+> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for the complete reference of all 24 cmdlets, parameter sets, installation from the GitHub `dev` branch, short interactive aliases (`gld`, `ald`, `uld`, `rld`), and operational automation scripts.
+
 ---
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 19 suites, each in its own process: 83 core acceptance cases (TC-01 to TC-83), the historical regression suites, the 2.0 hardening regressions, point-pagination and bridge-upgrade regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
+PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 20 suites, each in its own process: 84 core acceptance cases (TC-01 to TC-84), the native Cmdlets test suite, the historical regression suites, the 2.0 hardening regressions, point-pagination and bridge-upgrade regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
 
 ### Running the Tests
 ```powershell
