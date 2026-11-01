@@ -1,7 +1,7 @@
 # PSLocalBase
 
-[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PSLocalBase.svg?style=flat&logo=powershell&label=PowerShell%20Gallery)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0)
-[![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/PSLocalBase.svg?label=Downloads)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0)
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PSLocalBase.svg?style=flat&logo=powershell&label=PowerShell%20Gallery)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1)
+[![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/PSLocalBase.svg?label=Downloads)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1)
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
@@ -97,7 +97,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 ### Option A: Install from PowerShell Gallery (Recommended)
 
-PSLocalBase is published as an official module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/PSLocalBase/2.0.0). Install and import it in PowerShell 7+ or Windows PowerShell 5.1:
+PSLocalBase is published as an official module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1). Install and import it in PowerShell 7+ or Windows PowerShell 5.1:
 
 ```powershell
 # Install for current user (no admin rights required):

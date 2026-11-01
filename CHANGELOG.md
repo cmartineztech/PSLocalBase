@@ -2,7 +2,7 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.1] - 2026-10-31
 
 ### Added
 - **Field Existence Filtering (`whereExists`, `whereMissing`)**: Added fluent query builder methods and operator support for `exists`, `-exists`, `missing`, and `-missing`. Evaluated natively in SQLite via `json_type(doc, '$.field') IS NOT NULL` / `IS NULL` without PowerShell deserialization overhead (resolves #36).
