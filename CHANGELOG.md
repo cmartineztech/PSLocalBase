@@ -2,6 +2,12 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-10-31
+
+### Packaging & Distribution
+- **Pure Engine Packaging for PowerShell Gallery**: Restored automated staging pipeline (`Publish-PSLocalBase.ps1`) and declared explicit `FileList` in module manifest (`PSLocalBase.psd1`) to guarantee that `Install-Module PSLocalBase` distributes exclusively the 6 core runtime engine files (`PSLocalBase.psd1`, `PSLocalBase.psm1`, `InitWinSqlite3Native.ps1`, `LICENSE`, `README.md`, `CHANGELOG.md`). Excludes repository companion tools (`Playground/`), test suites (`_TESTS/`), extended documentation (`_DOCS/`), and CI workflows (`.github/`).
+- **Automatic Documentation Link Normalization**: Staging pipeline converts relative repository markdown links and image embeds to absolute GitHub raw/blob URLs to prevent broken links on the PowerShell Gallery package view.
+
 ## [2.0.1] - 2026-10-31
 
 ### Added

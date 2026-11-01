@@ -3,7 +3,7 @@
     RootModule           = 'PSLocalBase.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '2.0.1'
+    ModuleVersion        = '2.0.2'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -29,6 +29,16 @@
     # Script files (.ps1) that are run in the caller's environment prior to importing this module.
     ScriptsToProcess     = @('InitWinSqlite3Native.ps1')
 
+    # List of all files packaged with this module
+    FileList             = @(
+        'PSLocalBase.psd1',
+        'PSLocalBase.psm1',
+        'InitWinSqlite3Native.ps1',
+        'LICENSE',
+        'README.md',
+        'CHANGELOG.md'
+    )
+
     # Functions to export from this module
     FunctionsToExport    = @('New-LocalBase')
 
@@ -47,7 +57,7 @@
             Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
-            ReleaseNotes = '2.0.1: Added whereExists() and whereMissing() field existence operators, formalized SQLite JSON null filter contract, and updated test suite to 84 passing criteria. See CHANGELOG.md.'
+            ReleaseNotes = '2.0.2: Clean engine package distribution for PowerShell Gallery (excludes test suites, docs, and companion tools); added whereExists() and whereMissing() field existence operators, formalized SQLite JSON null filter contract, and updated test suite to 84 passing criteria. See CHANGELOG.md.'
         }
     }
 }
