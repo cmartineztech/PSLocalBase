@@ -53,6 +53,7 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
 - [8. Atomic ACID Transactions](#8-atomic-acid-transactions)
 - [9. Production Best Practice: `try / finally`](#9-production-best-practice-try--finally)
 - [10. PowerShell Pipeline Integration & Object Standard](#10-powershell-pipeline-integration--object-standard)
+  - [Native Cmdlets & Pipeline Guide (CMDLETS.md)](CMDLETS.md)
 - [11. Reading Over SMB / Network Shares](#11-reading-over-smb--network-shares)
   - [Why Direct SMB Access is Blocked](#why-direct-smb-access-is-blocked)
   - [Writer Pattern: Publishing Consistent Snapshots via VACUUM INTO](#writer-pattern-publishing-consistent-snapshots-via-vacuum-into)
@@ -149,7 +150,7 @@ Import-Module PSLocalBase
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 * **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows; importing on Linux or macOS throws `PlatformNotSupportedException`.
-* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 19-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
+* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 22-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
 * **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -424,6 +425,8 @@ $users = $db.collection("users").select("name", "department").get()
 ```
 
 ### Distinct Values (`distinct`)
+
+`distinct()` rejects limit, skip and orderBy modifiers rather than ignoring them; point keys and filters are respected. See the [numeric comparison domain](SPECIFICATION.md#numeric-comparison-domain) for precision limits.
 Retrieves deduplicated unique values leveraging SQLite B-Tree index scans:
 ```powershell
 $roles = $db.collection("users").distinct("role")
@@ -724,6 +727,15 @@ $db.collectionGroup("logs_2026_*").get() |
     Group-Object _collection |
     Select-Object Name, Count
 ```
+
+### 🛠️ Native PowerShell Cmdlets (`PSLocalBase.Cmdlets.ps1`)
+
+> [!NOTE]
+> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+
+In addition to the Fluent API, PSLocalBase includes a 100% native PowerShell Cmdlet adapter with pipeline integration (`Add-LocalBaseDocument`, `Get-LocalBaseDocument`, `Update-LocalBaseDocument`, `Remove-LocalBaseDocument`), `-WhatIf` safety, and short interactive aliases (`gld`, `ald`, `uld`, `rld`).
+
+👉 **Complete Cmdlet Documentation:** For the full reference, parameter matrices, and automation scripts, see [CMDLETS.md](CMDLETS.md).
 
 ---
 

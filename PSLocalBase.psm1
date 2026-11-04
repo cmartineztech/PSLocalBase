@@ -219,7 +219,7 @@ class PSLocalBase : System.IDisposable {
 
         try {
             $bridgeVersion = [WinSqlite3].GetField('BridgeVersion')
-            if ($null -eq $bridgeVersion -or [int]$bridgeVersion.GetValue($null) -lt 4) {
+            if ($null -eq $bridgeVersion -or [int]$bridgeVersion.GetValue($null) -lt 5) {
                 throw [System.InvalidOperationException]::new("Restart PowerShell to load the updated PSLocalBase native bridge.")
             }
             $this.ConnectionOwner = ('PSLocalBaseConnectionHandle' -as [type])::new($handle)
@@ -277,22 +277,25 @@ class PSLocalBase : System.IDisposable {
     # -----------------------------------------------------------------------
     # Fluent Navigation Methods
     # -----------------------------------------------------------------------
+    hidden [bool] _IsDocumentTable([string]$tableName) {
+        if ($tableName -notmatch [PSLocalBase]::IdentifierPattern) { return $false }
+        $cols = $this._ExecuteBoundQuery("SELECT name FROM pragma_table_info(?);", @($tableName))
+        $hasKey = $false
+        $hasDoc = $false
+        foreach ($c in $cols) {
+            if ($c[0] -eq "key") { $hasKey = $true }
+            if ($c[0] -eq "doc") { $hasDoc = $true }
+        }
+        return ($hasKey -and $hasDoc)
+    }
+
     [string[]] getCollections() {
         $this._EnsureOpen()
         $rows = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", @())
         $names = [System.Collections.Generic.List[string]]::new()
         foreach ($r in $rows) {
             $tableName = $r[0]
-            # Names come from the database file, which may be untrusted.
-            if ($tableName -notmatch [PSLocalBase]::IdentifierPattern) { continue }
-            $cols = $this._ExecuteBoundQuery("SELECT name FROM pragma_table_info(?);", @($tableName))
-            $hasKey = $false
-            $hasDoc = $false
-            foreach ($c in $cols) {
-                if ($c[0] -eq "key") { $hasKey = $true }
-                if ($c[0] -eq "doc") { $hasDoc = $true }
-            }
-            if ($hasKey -and $hasDoc) {
+            if ($this._IsDocumentTable($tableName)) {
                 $names.Add($tableName)
             }
         }
@@ -410,6 +413,9 @@ class PSLocalBase : System.IDisposable {
 
         $this._EnsureCollectionTable()
 
+        foreach ($numericRow in $this._ExecuteBoundQuery("SELECT doc FROM [$($this.CurrentCollection)];", @())) {
+            [WinSqlite3]::ValidateNumericJson($numericRow[0])
+        }
         $canonicalCol = $this._ResolveCanonicalCollectionName($this.CurrentCollection)
         $pathHex = [PSLocalBase]::_PathHash($canonicalCol, $fieldToCheck)
         $pathHash = $pathHex.Substring(0, 16)
@@ -845,8 +851,6 @@ class PSLocalBase : System.IDisposable {
 
         $target = $this.clone()
         $target.CurrentKey = $resolvedKey
-        $target.WhereClauses.Clear()
-        $target.WhereParameters.Clear()
         return $target
     }
 
@@ -928,7 +932,7 @@ class PSLocalBase : System.IDisposable {
         $target[$name] = $this._NormalizeForJson($value)
     }
 
-    hidden [object] _DeserializeDoc([string]$key, [string]$json) {
+    hidden [void] _ValidateDocumentJson([string]$key, [string]$json) {
         $maxBytes = [long]$this.config['maxDocumentBytes']
         $maxDepth = [long]$this.config['maxReadDepth']
         if (([long]$json.Length * 2) -gt $maxBytes) {
@@ -937,15 +941,21 @@ class PSLocalBase : System.IDisposable {
         if ([WinSqlite3]::JsonNestingDepth($json) -gt $maxDepth) {
             throw [System.IO.InvalidDataException]::new("Document '$key' exceeds maxReadDepth ($maxDepth).")
         }
+    }
+
+    hidden [object] _DeserializeDoc([string]$key, [string]$json) {
+        $this._ValidateDocumentJson($key, $json)
         if ($null -eq [PSLocalBase]::SupportsDateKind) {
             [PSLocalBase]::SupportsDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')
         }
         try {
             # DateKind String keeps stored date text unchanged across editions.
+            # A property wrapper avoids ConvertFrom-Json pipeline enumeration on both
+            # PS5.1 and PS7, preserving empty/singleton/nested top-level arrays.
             if ([PSLocalBase]::SupportsDateKind) {
-                return (ConvertFrom-Json -InputObject $json -DateKind String)
+                return (ConvertFrom-Json -InputObject ('{"value":' + $json + '}') -DateKind String).value
             }
-            return (ConvertFrom-Json -InputObject $json)
+            return (ConvertFrom-Json -InputObject ('{"value":' + $json + '}')).value
         } catch {
             throw [System.IO.InvalidDataException]::new("Document '$key' could not be deserialized.")
         }
@@ -965,9 +975,14 @@ class PSLocalBase : System.IDisposable {
         $normalized = $this._NormalizeForJson($data)
         $jsonWarn = $null
         $json = ConvertTo-Json -InputObject $normalized -Compress -Depth $depth -WarningVariable jsonWarn -WarningAction SilentlyContinue
+        if ($null -eq $normalized) { $json = 'null' }
         if ($jsonWarn -and $jsonWarn.Count -gt 0) {
             throw [System.InvalidOperationException]::new("Object serialization exceeded configured maximum depth ($depth). Increase 'depth' in configuration options to serialize deeply nested structures.")
         }
+        $this._ValidateDocumentJson($this.CurrentKey, $json)
+        # Expression indexes use SQLite numeric values; never feed them unsupported JSON.
+        $numericIndexes = $this._ExecuteBoundQuery("SELECT 1 FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE AND sql LIKE '%json_extract%';", @($this.CurrentCollection))
+        if ($numericIndexes.Count -gt 0) { [WinSqlite3]::ValidateNumericJson($json) }
         return $json
     }
 
@@ -980,6 +995,9 @@ class PSLocalBase : System.IDisposable {
 
     [void] set([object]$data, [hashtable]$options) {
         $this._EnsureOpen()
+        if ($this.WhereClauses.Count -gt 0) {
+            throw [System.InvalidOperationException]::new("set(), update(), and upsert() do not support filters. Select an unfiltered document explicitly.")
+        }
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .set().")
         }
@@ -1148,6 +1166,9 @@ class PSLocalBase : System.IDisposable {
 
     [string] upsert([object]$data, [string]$customKey) {
         $this._EnsureOpen()
+        if ($this.WhereClauses.Count -gt 0) {
+            throw [System.InvalidOperationException]::new("set(), update(), and upsert() do not support filters. Select an unfiltered document explicitly.")
+        }
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .upsert().")
         }
@@ -1183,6 +1204,9 @@ class PSLocalBase : System.IDisposable {
 
     [void] update([object]$partialData) {
         $this._EnsureOpen()
+        if ($this.WhereClauses.Count -gt 0) {
+            throw [System.InvalidOperationException]::new("set(), update(), and upsert() do not support filters. Select an unfiltered document explicitly.")
+        }
         if ([string]::IsNullOrEmpty($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .update().")
         }
@@ -1288,7 +1312,7 @@ class PSLocalBase : System.IDisposable {
             $selectPairs = [System.Collections.Generic.List[string]]::new()
             foreach ($f in $q.SelectedFields) {
                 $cleanField = $f.Trim().Replace("'", "''")
-                $selectPairs.Add("'$cleanField', CASE WHEN json_type(doc, '$.$cleanField') IN ('array', 'object') THEN json(json_extract(doc, '$.$cleanField')) WHEN json_type(doc, '$.$cleanField') = 'true' THEN json('true') WHEN json_type(doc, '$.$cleanField') = 'false' THEN json('false') ELSE json_extract(doc, '$.$cleanField') END")
+                $selectPairs.Add("'$cleanField', CASE WHEN json_type(doc, '$.$cleanField') IN ('array', 'object') THEN json(json_extract(pslocalbase_numeric(doc), '$.$cleanField')) WHEN json_type(doc, '$.$cleanField') = 'true' THEN json('true') WHEN json_type(doc, '$.$cleanField') = 'false' THEN json('false') ELSE json_extract(pslocalbase_numeric(doc), '$.$cleanField') END")
             }
             $branchDocExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
         }
@@ -1332,7 +1356,6 @@ class PSLocalBase : System.IDisposable {
 
         # Work on an isolated clone to ensure query immutability
         $target = $this.clone()
-        $target.CurrentKey = ""
         return $this._CompileFilter($target, "`$.$fieldToCheck", $sqlOp, $trimmedOp, [PSLocalBase]::_NormalizeScalar($value))
     }
 
@@ -1346,7 +1369,7 @@ class PSLocalBase : System.IDisposable {
             '^(>=|-GE)$'                   { '>=' }
             '^(<=|-LE)$'                   { '<=' }
             '^(LIKE|-LIKE)$'               { 'LIKE' }
-            '^(NOT LIKE|-NOTLIKE)$'        { 'NOT LIKE' }
+            '^(NOT[\s_-]?LIKE|-NOTLIKE)$'  { 'NOT LIKE' }
             '^(IN|-IN)$'                   { 'IN' }
             '^(NOT[\s_-]?IN|-NOTIN)$'            { 'NOT IN' }
             '^(ARRAY-CONTAINS|-CONTAINS)$' { 'ARRAY-CONTAINS' }
@@ -1391,7 +1414,7 @@ class PSLocalBase : System.IDisposable {
                     $target.WhereParameters.Add([string]$elem)
                 }
             }
-            $extract = "json_extract(doc, '$jsonField')"
+            $extract = "json_extract(pslocalbase_numeric(doc), '$jsonField')"
             $list = [string]::Join(", ", $placeholders)
             # SQL NULL never satisfies IN/NOT IN, so null members are matched with IS NULL.
             if ($sqlOp -eq 'IN') {
@@ -1416,12 +1439,12 @@ class PSLocalBase : System.IDisposable {
             }
             if ($value -is [bool]) {
                 $boolLit = if ($value) { "1" } else { "0" }
-                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = $boolLit))")
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(pslocalbase_numeric(doc), '$jsonField') WHERE value = $boolLit))")
             } elseif ([PSLocalBase]::_IsNumber($value)) {
-                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(pslocalbase_numeric(doc), '$jsonField') WHERE value = ?))")
                 $target.WhereParameters.Add($value)
             } else {
-                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value = ?))")
+                $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(pslocalbase_numeric(doc), '$jsonField') WHERE value = ?))")
                 $target.WhereParameters.Add([string]$value)
             }
             return $target
@@ -1442,7 +1465,7 @@ class PSLocalBase : System.IDisposable {
                 return $target
             }
             $jsonArray = ConvertTo-Json -InputObject $items -Compress
-            $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(doc, '$jsonField') WHERE value IN (SELECT value FROM json_each(?))))")
+            $target.WhereClauses.Add("(json_type(doc, '$jsonField') = 'array' AND EXISTS (SELECT 1 FROM json_each(pslocalbase_numeric(doc), '$jsonField') WHERE value IN (SELECT value FROM json_each(pslocalbase_numeric(?)))))")
             $target.WhereParameters.Add($jsonArray)
             return $target
         }
@@ -1517,13 +1540,13 @@ class PSLocalBase : System.IDisposable {
         # Case B: Null comparisons
         if ($null -eq $value) {
             if ($sqlOp -eq '=') {
-                $target.WhereClauses.Add("json_extract(doc, '$jsonField') IS NULL")
+                $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') IS NULL")
                 return $target
             } elseif ($sqlOp -eq '!=') {
-                $target.WhereClauses.Add("json_extract(doc, '$jsonField') IS NOT NULL")
+                $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') IS NOT NULL")
                 return $target
             } else {
-                $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp NULL")
+                $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') $sqlOp NULL")
                 return $target
             }
         }
@@ -1533,7 +1556,7 @@ class PSLocalBase : System.IDisposable {
             [void][PSLocalBase]::_ConvertPsWildcardToSqlLike([string]$value)
             $matchResult = if ($trimmedOp -eq '-LIKE') { 1 } else { 0 }
             $patternValue = if ($value -is [bool]) { [int]$value } else { $value }
-            $target.WhereClauses.Add("pslocalbase_like(json_extract(doc, '$jsonField'), ?) = $matchResult")
+            $target.WhereClauses.Add("pslocalbase_like(json_extract(pslocalbase_numeric(doc), '$jsonField'), ?) = $matchResult")
             $target.WhereParameters.Add($patternValue)
             return $target
         }
@@ -1541,20 +1564,20 @@ class PSLocalBase : System.IDisposable {
         # Case C: Strongly-typed Boolean
         if ($value -is [bool]) {
             $boolLit = if ($value) { "1" } else { "0" }
-            $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp $boolLit")
+            $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') $sqlOp $boolLit")
             return $target
         }
 
         # Case D: Strongly-typed Numbers
         if ([PSLocalBase]::_IsNumber($value)) {
-            $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
+            $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') $sqlOp ?")
             $target.WhereParameters.Add($value)
             return $target
         }
 
         # Case E: String values and native SQL LIKE patterns
         $paramVal = [string]$value
-        $target.WhereClauses.Add("json_extract(doc, '$jsonField') $sqlOp ?")
+        $target.WhereClauses.Add("json_extract(pslocalbase_numeric(doc), '$jsonField') $sqlOp ?")
         $target.WhereParameters.Add($paramVal)
 
         return $target
@@ -1670,7 +1693,7 @@ class PSLocalBase : System.IDisposable {
 
         $target = $this.clone()
         $jsonField = "`$.$fieldToCheck"
-        $target.OrderByClause = "ORDER BY json_extract(doc, '$jsonField') $dir"
+        $target.OrderByClause = "ORDER BY json_extract(pslocalbase_numeric(doc), '$jsonField') $dir"
         return $target
     }
 
@@ -1731,7 +1754,7 @@ class PSLocalBase : System.IDisposable {
                     $docExpr = "json_set($docExpr, '`$.$asP', NULL)"
                     continue
                 }
-                [void]$joinsBuilder.Append(" LEFT JOIN [$fCol] f$i ON f$i.key = json_extract(m.doc, '`$.$fKey')")
+                [void]$joinsBuilder.Append(" LEFT JOIN [$fCol] f$i ON f$i.key = json_extract(pslocalbase_numeric(m.doc), '`$.$fKey')")
                 $docExpr = "json_set($docExpr, '`$.$asP', CASE WHEN f$i.key IS NULL THEN NULL ELSE json(f$i.doc) END)"
             }
         }
@@ -1740,7 +1763,7 @@ class PSLocalBase : System.IDisposable {
         if ($hasSelect) {
             $selectPairs = [System.Collections.Generic.List[string]]::new()
             foreach ($f in $this.SelectedFields) {
-                $selectPairs.Add("'$f', CASE WHEN json_type($docExpr, '`$.$f') IN ('array', 'object') THEN json(json_extract($docExpr, '`$.$f')) WHEN json_type($docExpr, '`$.$f') = 'true' THEN json('true') WHEN json_type($docExpr, '`$.$f') = 'false' THEN json('false') ELSE json_extract($docExpr, '`$.$f') END")
+                $selectPairs.Add("'$f', CASE WHEN json_type($docExpr, '`$.$f') IN ('array', 'object') THEN json(json_extract(pslocalbase_numeric($docExpr), '`$.$f')) WHEN json_type($docExpr, '`$.$f') = 'true' THEN json('true') WHEN json_type($docExpr, '`$.$f') = 'false' THEN json('false') ELSE json_extract(pslocalbase_numeric($docExpr), '`$.$f') END")
             }
             $docExpr = "json_object(" + [string]::Join(", ", $selectPairs) + ")"
         }
@@ -1754,8 +1777,17 @@ class PSLocalBase : System.IDisposable {
             } else {
                 "SELECT key, doc FROM [$($this.CurrentCollection)] WHERE key = ?;"
             }
-            $sql = $sql.TrimEnd(';') + $this._PagingSql() + ';'
-            $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
+            $pointParams = [System.Collections.Generic.List[object]]::new()
+            $pointParams.Add($this.CurrentKey)
+            $sql = $sql.TrimEnd(';')
+            if ($this.WhereClauses.Count -gt 0) {
+                $filterSql = [string]::Join(" AND ", $this.WhereClauses)
+                if ($hasPopulate) { $filterSql = $filterSql -replace '(?<![a-zA-Z0-9_\.])\bdoc\b', 'm.doc' }
+                $sql += " AND $filterSql"
+                $pointParams.AddRange($this.WhereParameters)
+            }
+            $sql += $this._PagingSql() + ';'
+            $rows = $this._ExecuteBoundQuery($sql, $pointParams.ToArray())
             if ($rows.Count -eq 0) {
                 return $null
             }
@@ -1821,8 +1853,10 @@ class PSLocalBase : System.IDisposable {
             if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
                 [void]$sqlBuilder.Append(" WHERE key = ?")
                 $queryParams.Add($this.CurrentKey)
-            } elseif ($this.WhereClauses.Count -gt 0) {
-                [void]$sqlBuilder.Append(" WHERE " + [string]::Join(" AND ", $this.WhereClauses))
+            }
+            if ($this.WhereClauses.Count -gt 0) {
+                $joiner = if ($this.CurrentKey) { " AND " } else { " WHERE " }
+                [void]$sqlBuilder.Append($joiner + [string]::Join(" AND ", $this.WhereClauses))
                 $queryParams.AddRange($this.WhereParameters)
             }
             if (-not [string]::IsNullOrEmpty($this.OrderByClause)) {
@@ -1935,9 +1969,7 @@ class PSLocalBase : System.IDisposable {
             return $false
         }
         if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-            $sql = "SELECT 1 FROM [$($this.CurrentCollection)] WHERE key = ? LIMIT 1;"
-            $rows = $this._ExecuteBoundQuery($sql, @($this.CurrentKey))
-            return ($rows.Count -gt 0)
+            return ($this.count() -gt 0)
         }
         $sqlBuilder = [System.Text.StringBuilder]::new()
         [void]$sqlBuilder.Append("SELECT 1 FROM [$($this.CurrentCollection)]")
@@ -1954,6 +1986,9 @@ class PSLocalBase : System.IDisposable {
 
     [object[]] distinct([string]$field) {
         $this._EnsureOpen()
+        if ($null -ne $this.LimitValue -or $null -ne $this.SkipValue -or $this.OrderByClause) {
+            throw [System.NotSupportedException]::new('distinct() does not support limit, skip, or orderBy. Remove these modifiers explicitly.')
+        }
         if ([string]::IsNullOrWhiteSpace($this.CurrentCollection)) {
             throw [System.InvalidOperationException]::new("No collection specified. Call .collection('name') before .distinct().")
         }
@@ -1972,7 +2007,7 @@ class PSLocalBase : System.IDisposable {
             return @()
         }
         $sqlBuilder = [System.Text.StringBuilder]::new()
-        $jsonExtract = "json_extract(doc, '`$.$fieldToCheck')"
+        $jsonExtract = "json_extract(pslocalbase_numeric(doc), '`$.$fieldToCheck')"
         [void]$sqlBuilder.Append("SELECT DISTINCT $jsonExtract AS v FROM [$($this.CurrentCollection)]")
         $queryParams = [System.Collections.Generic.List[object]]::new()
         $whereList = [System.Collections.Generic.List[string]]::new()
@@ -2042,7 +2077,7 @@ class PSLocalBase : System.IDisposable {
             return $null
         }
         $isNumericAgg = ($aggFunc -eq "SUM" -or $aggFunc -eq "AVG")
-        $extract = "json_extract(doc, '`$.$fieldToCheck')"
+        $extract = "json_extract(pslocalbase_numeric(doc), '`$.$fieldToCheck')"
         $numericFilter = "json_type(doc, '`$.$fieldToCheck') IN ('integer', 'real')"
         if ($isNumericAgg) {
             $value = $this._AggregateValue("COALESCE($aggFunc($extract), 0.0)", $numericFilter)
@@ -2114,8 +2149,10 @@ class PSLocalBase : System.IDisposable {
             if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
                 $pagedSql += " WHERE key = ?"
                 $queryParams.Add($this.CurrentKey)
-            } elseif ($this.WhereClauses.Count -gt 0) {
-                $pagedSql += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+            }
+            if ($this.WhereClauses.Count -gt 0) {
+                $joiner = if ($this.CurrentKey) { " AND " } else { " WHERE " }
+                $pagedSql += $joiner + [string]::Join(" AND ", $this.WhereClauses)
                 $queryParams.AddRange($this.WhereParameters)
             }
             if (-not [string]::IsNullOrEmpty($this.OrderByClause)) { $pagedSql += " " + $this.OrderByClause }
@@ -2140,8 +2177,10 @@ class PSLocalBase : System.IDisposable {
         if (-not [string]::IsNullOrEmpty($this.CurrentKey)) {
             $source += " WHERE key = ?"
             $queryParams.Add($this.CurrentKey)
-        } elseif ($this.WhereClauses.Count -gt 0) {
-            $source += " WHERE " + [string]::Join(" AND ", $this.WhereClauses)
+        }
+        if ($this.WhereClauses.Count -gt 0) {
+            $joiner = if ($this.CurrentKey) { " AND " } else { " WHERE " }
+            $source += $joiner + [string]::Join(" AND ", $this.WhereClauses)
             $queryParams.AddRange($this.WhereParameters)
         }
         $rows = $this._ExecuteBoundQuery("SELECT COUNT(*) FROM ($source$($this._PagingSql()));", $queryParams.ToArray())
@@ -2270,20 +2309,17 @@ class PSLocalBase : System.IDisposable {
             return
         }
 
-        if (-not [string]::IsNullOrEmpty($this.CurrentKey) -and $null -eq $this.UnionQuery -and -not $this.IsCollectionGroup) {
-            # Delete single document
-            $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE key = ?;"
-            $this._ExecuteBoundSql($sql, @($this.CurrentKey))
-        } elseif ($this.WhereClauses.Count -gt 0) {
-            # Delete filtered documents
-            $whereStr = [string]::Join(" AND ", $this.WhereClauses)
-            $sql = "DELETE FROM [$($this.CurrentCollection)] WHERE $whereStr;"
-            $this._ExecuteBoundSql($sql, $this.WhereParameters.ToArray())
-        } else {
-            # Truncate collection records while preserving table schema and secondary indexes
-            $sql = "DELETE FROM [$($this.CurrentCollection)];"
-            $this._ExecuteDirectSql($sql)
+        $conditions = [System.Collections.Generic.List[string]]::new()
+        $queryParams = [System.Collections.Generic.List[object]]::new()
+        if ($this.CurrentKey) {
+            $conditions.Add("key = ?")
+            $queryParams.Add($this.CurrentKey)
         }
+        $conditions.AddRange($this.WhereClauses)
+        $queryParams.AddRange($this.WhereParameters)
+        $sql = "DELETE FROM [$($this.CurrentCollection)]"
+        if ($conditions.Count -gt 0) { $sql += " WHERE " + [string]::Join(" AND ", $conditions) }
+        $this._ExecuteBoundSql($sql + ';', $queryParams.ToArray())
     }
 
     [void] deleteDatabase() {
@@ -2447,7 +2483,7 @@ class PSLocalBase : System.IDisposable {
         $matched = [System.Collections.Generic.List[string]]::new()
         foreach ($row in $allTables) {
             $tableName = $row[0]
-            if ($tableName -match $patternRegex -and $tableName -match [PSLocalBase]::IdentifierPattern) {
+            if ($tableName -match $patternRegex -and $this._IsDocumentTable($tableName)) {
                 $matched.Add($tableName)
             }
         }
@@ -2474,11 +2510,20 @@ class PSLocalBase : System.IDisposable {
                 $bindRc = [WinSqlite3]::SQLITE_OK
 
                 $val = [PSLocalBase]::_NormalizeScalar($val)
+                if ($val -is [decimal] -and [decimal]::Truncate($val) -eq $val -and $val -ge [decimal][long]::MinValue -and $val -le [decimal][long]::MaxValue) {
+                    $val = [long]$val
+                }
+                if ([PSLocalBase]::_IsNumber($val)) {
+                    [WinSqlite3]::ValidateNumericJson((ConvertTo-Json -InputObject $val -Compress))
+                    if (($val -is [double] -or $val -is [single]) -and ([double]::IsNaN([double]$val) -or [double]::IsInfinity([double]$val) -or [Math]::Abs([double]$val) -ge 9007199254740992.0)) {
+                        throw [System.ArgumentException]::new('Numeric precision unsupported for floating parameter.')
+                    }
+                }
                 if ($null -eq $val) {
                     $bindRc = [WinSqlite3]::BindNull($stmt, $paramIdx)
                 } elseif ($val -is [byte] -or $val -is [sbyte] -or $val -is [int16] -or $val -is [uint16] -or $val -is [int32] -or $val -is [uint32] -or $val -is [int64] -or ($val -is [uint64] -and [uint64]$val -le [uint64][long]::MaxValue)) {
                     $bindRc = [WinSqlite3]::BindInt64($stmt, $paramIdx, [long]$val)
-                } elseif ($val -is [single] -or $val -is [double] -or $val -is [decimal] -or $val -is [uint64]) {
+                } elseif ($val -is [single] -or $val -is [double] -or $val -is [decimal]) {
                     $bindRc = [WinSqlite3]::BindDouble($stmt, $paramIdx, [double]$val)
                 } elseif ($val -is [bool]) {
                     $boolVal = if ($val) { 1L } else { 0L }
@@ -2934,4 +2979,55 @@ $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
     }
 }
 
-Export-ModuleMember -Function New-LocalBase
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 6. Native Cmdlets & Pipeline Adapter
+# ---------------------------------------------------------------------------
+$cmdletsFile = Join-Path $PSScriptRoot 'PSLocalBase.Cmdlets.ps1'
+if (Test-Path -LiteralPath $cmdletsFile) {
+    . $cmdletsFile
+}
+
+$exportedFunctions = @('New-LocalBase')
+$cmdletNames = @(
+    'Connect-LocalBase',
+    'Disconnect-LocalBase',
+    'Get-LocalBaseConnection',
+    'Backup-LocalBaseDatabase',
+    'Remove-LocalBaseDatabase',
+    'Get-LocalBaseCollection',
+    'New-LocalBaseCollection',
+    'Remove-LocalBaseCollection',
+    'Clear-LocalBaseCollection',
+    'New-LocalBaseIndex',
+    'Remove-LocalBaseIndex',
+    'Get-LocalBaseDocument',
+    'Add-LocalBaseDocument',
+    'Set-LocalBaseDocument',
+    'Update-LocalBaseDocument',
+    'Remove-LocalBaseDocument',
+    'Measure-LocalBaseDocument',
+    'Start-LocalBaseTransaction',
+    'Complete-LocalBaseTransaction',
+    'Undo-LocalBaseTransaction',
+    'Invoke-LocalBaseTransaction'
+)
+foreach ($cmdletName in $cmdletNames) {
+    if (Get-Command -Name $cmdletName -ErrorAction SilentlyContinue) {
+        $exportedFunctions += $cmdletName
+    }
+}
+
+$exportedAliases = @()
+foreach ($aliasName in @('gld', 'ald', 'sld', 'uld', 'rld', 'Open-LocalBase', 'Close-LocalBase')) {
+    if (Get-Alias -Name $aliasName -ErrorAction SilentlyContinue) {
+        $exportedAliases += $aliasName
+    }
+}
+
+if ($exportedAliases.Count -gt 0) {
+    Export-ModuleMember -Function $exportedFunctions -Alias $exportedAliases
+} else {
+    Export-ModuleMember -Function $exportedFunctions
+}

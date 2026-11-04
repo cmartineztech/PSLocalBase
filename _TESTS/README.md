@@ -23,9 +23,9 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (19 Suites)
+### Complete Multi-Suite Runner Overview (22 Suites)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including `PSLocalBase.Review-v2-de8801d.Tests.ps1` (5 checks) and `PSLocalBase.PointBridge.Tests.ps1` (36 point-lookup cases and 3 isolated bridge scenarios). Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
+The automated test runner (`_TESTS/run-tests.ps1`) executes 22 suites, including the cmdlet suite and `PSLocalBase.Contracts.Tests.ps1` (7 regression groups covering the nine reviewed findings). Contracts tests use in-memory databases or unique temporary paths and cover payload/metadata collisions, explicit identity overrides, multi-item pipelines, key/filter intersections, transaction rollback and scope restoration, duplicate insertion, write-size/depth limits, journal readback and protected file removal. Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
 1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (84 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
@@ -42,10 +42,12 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including
 14. `PSLocalBase.Hardening-v2.Tests.ps1` - 2.0 regressions: filtered bulk replace, query immutability across writes, collectionGroup unions, NULL membership, typed aggregates, ISO dates, immediate transactions, zero-valued filters, stale handles, untrusted schemas, bounded deserialization, single-statement `query()`, `deleteDatabase()` path, strict options, session hygiene (17 checks; all fail on 1.0.x).
 15. `PSLocalBase.Property.Tests.ps1` - Seeded randomized comparison of `where()` operators, pagination and `union`/`unionAll` against an independent PowerShell model (3 checks, 160 randomized rounds).
 16. `PSLocalBase.WalMultiProcess.Tests.ps1` - A Windows PowerShell 5.1 process and a PowerShell 7 process write `add()`, array unions and transactional read-modify-write increments to one WAL file at the same time; verifies no lost writes, no lock errors, and `integrity_check = ok` (1 check).
-
 17. `PSLocalBase.Review-v2-de8801d.Tests.ps1` - Point pagination and existing composite controls (5 checks).
 18. `PSLocalBase.PointBridge.Tests.ps1` - Point pagination parity and isolated native bridge upgrade scenarios (39 checks).
 19. `PSLocalBase.PrepareIsolation.Tests.ps1` - Compound SQL rejection before preparation, PRAGMA state preservation, CHECK enforcement, valid SQL/triggers and resource cleanup.
+20. `PSLocalBase.Cmdlets.Tests.ps1` - Native PowerShell Cmdlets adapter tests, pipeline binding, `-WhatIf`, `-Confirm`, transactional blocks and short aliases.
+21. `PSLocalBase.Contracts.Tests.ps1` - Engine contracts, payload/metadata collision safety, explicit identity overrides, transaction rollback, and journal cleanup (7 regression groups).
+22. `PSLocalBase.SecondReview.Tests.ps1` - Second review hardening regressions and edge condition verification.
 
 *(Note: Check counts are distinct functional scenarios and regression groups, not line or branch coverage percentages. NativeStress also exercises complete-string pattern callbacks in its 500 statement-cleanup cycles. The WPF Playground verification script `Playground/verify-playground.ps1` executes GUI checks separately.)*
 
@@ -139,3 +141,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including
 | **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
 | **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |
 | **TC-84** | **Field Existence & Missing Operators** | Evaluates document field presence via native SQLite json_type() IS NOT NULL / IS NULL (whereExists, whereMissing, exists, missing); matches explicit nulls and excludes missing keys | **PASSED** |
+
+## Second-review regression suite
+
+`PSLocalBase.SecondReview.Tests.ps1` runs in the standard runner on both PowerShell editions. It covers unsafe stored UInt64/decimal numbers (including old expression indexes), comparison/membership rollback, supported numeric boundaries, transactional reconnect failures, same/different temporary files, point/query JSON shape preservation through Set/Add/Remove, distinct modifier rejection, and WhatIf. All database files use unique temporary paths; no user databases are tested.

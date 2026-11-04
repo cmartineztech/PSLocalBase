@@ -731,9 +731,9 @@ Assert-Test "TC-22: Custom Query Step & Parameter Binding Validation" {
 }
 
 # ---------------------------------------------------------------------------
-# TC-23: Fluent State Isolation & CurrentKey Reset
+# TC-23: Fluent State Isolation & Key/Filter Intersection
 # ---------------------------------------------------------------------------
-Assert-Test "TC-23: Fluent State Isolation & CurrentKey Reset" {
+Assert-Test "TC-23: Fluent State Isolation & Key/Filter Intersection" {
     $db = [PSLocalBase]::new(":memory:")
     try {
         $col = $db.collection("tasks")
@@ -742,7 +742,7 @@ Assert-Test "TC-23: Fluent State Isolation & CurrentKey Reset" {
         $col.doc("t3").set(@{ title = "Task 3"; done = $true })
 
         if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
-            throw "CurrentKey was not cleared after .set()!"
+            throw "Point .set() changed the parent collection key!"
         }
 
         # Point get followed by collection get on the same reference must return all documents
@@ -751,7 +751,7 @@ Assert-Test "TC-23: Fluent State Isolation & CurrentKey Reset" {
             throw "Point lookup for t1 failed."
         }
         if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
-            throw "CurrentKey was not cleared after .get()!"
+            throw "Point .get() changed the parent collection key!"
         }
 
         $allAfterGet = $col.get()
@@ -762,14 +762,20 @@ Assert-Test "TC-23: Fluent State Isolation & CurrentKey Reset" {
         # Point update followed by filtered delete must not delete the updated key
         $col.doc("t1").update(@{ title = "Task 1 Updated" })
         if (-not [string]::IsNullOrEmpty($col.CurrentKey)) {
-            throw "CurrentKey was not cleared after .update()!"
+            throw "Point .update() changed the parent collection key!"
         }
 
-        # Even if .doc() is called before .where(), .where() must clear CurrentKey
+        # Key and filter intersect: t1 is not done, so no document may be deleted.
         $col.doc("t1").where("done", "=", $true).delete()
         $remaining = $col.get()
+        if ($remaining.Count -ne 3 -or $col.doc('t1').get().title -ne 'Task 1 Updated') {
+            throw "Key/filter intersection deleted a nonmatching document."
+        }
+        # A collection filter without doc() still deletes all matching documents.
+        $col.where("done", "=", $true).delete()
+        $remaining = $col.get()
         if ($remaining.Count -ne 1 -or $remaining[0].title -ne "Task 1 Updated") {
-            throw "Filtered delete polluted by CurrentKey! Remaining count: $($remaining.Count)"
+            throw "Collection filter delete failed! Remaining count: $($remaining.Count)"
         }
     } finally {
         $db.close()

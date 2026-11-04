@@ -1,9 +1,9 @@
-﻿@{
+@{
     # Script module or binary module file associated with this manifest.
     RootModule           = 'PSLocalBase.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '2.0.2'
+    ModuleVersion        = '2.0.3'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -33,6 +33,7 @@
     FileList             = @(
         'PSLocalBase.psd1',
         'PSLocalBase.psm1',
+        'PSLocalBase.Cmdlets.ps1',
         'InitWinSqlite3Native.ps1',
         'LICENSE',
         'README.md',
@@ -40,7 +41,30 @@
     )
 
     # Functions to export from this module
-    FunctionsToExport    = @('New-LocalBase')
+    FunctionsToExport    = @(
+        'New-LocalBase',
+        'Connect-LocalBase',
+        'Disconnect-LocalBase',
+        'Get-LocalBaseConnection',
+        'Backup-LocalBaseDatabase',
+        'Remove-LocalBaseDatabase',
+        'Get-LocalBaseCollection',
+        'New-LocalBaseCollection',
+        'Remove-LocalBaseCollection',
+        'Clear-LocalBaseCollection',
+        'New-LocalBaseIndex',
+        'Remove-LocalBaseIndex',
+        'Get-LocalBaseDocument',
+        'Add-LocalBaseDocument',
+        'Set-LocalBaseDocument',
+        'Update-LocalBaseDocument',
+        'Remove-LocalBaseDocument',
+        'Measure-LocalBaseDocument',
+        'Start-LocalBaseTransaction',
+        'Complete-LocalBaseTransaction',
+        'Undo-LocalBaseTransaction',
+        'Invoke-LocalBaseTransaction'
+    )
 
     # Cmdlets to export from this module
     CmdletsToExport      = @()
@@ -49,7 +73,7 @@
     VariablesToExport    = @()
 
     # Aliases to export from this module
-    AliasesToExport      = @()
+    AliasesToExport      = @('gld', 'ald', 'sld', 'uld', 'rld', 'Open-LocalBase', 'Close-LocalBase')
 
     # Private data to pass to the module specified in RootModule
     PrivateData          = @{
@@ -57,7 +81,7 @@
             Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
-            ReleaseNotes = '2.0.2: Clean engine package distribution for PowerShell Gallery (excludes test suites, docs, and companion tools); added whereExists() and whereMissing() field existence operators, formalized SQLite JSON null filter contract, and updated test suite to 84 passing criteria. See CHANGELOG.md.'
+            ReleaseNotes = '2.0.3: Engine hardening (Bridge v5 with pslocalbase_numeric native numeric guard, doc()/where() AND intersection, serialization size/depth limits, not-like normalization), complete native Cmdlets pipeline integration (22 cmdlets, 7 aliases), and 22 isolated test suites (100% pass in PS 5.1 & PS 7+).'
         }
     }
 }

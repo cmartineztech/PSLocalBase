@@ -1,7 +1,7 @@
 # PSLocalBase
 
-[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PSLocalBase.svg?style=flat&logo=powershell&label=PowerShell%20Gallery)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1)
-[![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/PSLocalBase.svg?label=Downloads)](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1)
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PSLocalBase.svg?style=flat&logo=powershell&label=PowerShell%20Gallery)](https://www.powershellgallery.com/packages/PSLocalBase)
+[![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/PSLocalBase.svg?label=Downloads)](https://www.powershellgallery.com/packages/PSLocalBase)
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-blue.svg)](https://microsoft.com/powershell)
 [![PowerShell 7+](https://img.shields.io/badge/PowerShell-7%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
@@ -88,7 +88,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
-- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 19-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
+- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 22-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
 - **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -97,7 +97,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 ### Option A: Install from PowerShell Gallery (Recommended)
 
-PSLocalBase is published as an official module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/PSLocalBase/2.0.1). Install and import it in PowerShell 7+ or Windows PowerShell 5.1:
+PSLocalBase is published as an official module on the [PowerShell Gallery](https://www.powershellgallery.com/packages/PSLocalBase). Install and import it in PowerShell 7+ or Windows PowerShell 5.1:
 
 ```powershell
 # Install for current user (no admin rights required):
@@ -129,7 +129,7 @@ cd PSLocalBase
 # 2. Import directly from the local manifest:
 Import-Module .\PSLocalBase.psd1 -Force
 
-# 3. (Optional) Run the complete 19-suite test runner:
+# 3. (Optional) Run the complete 22-suite test runner:
 .\_TESTS\run-tests.ps1
 
 # 4. (Optional) Launch the visual GUI Playground:
@@ -199,8 +199,8 @@ $db = New-LocalBase -Path "C:\Data\app.db" -Options @{ busyTimeout = 10000; cach
 | `busyTimeout` | `5000` | Milliseconds to wait for a lock held by another connection. |
 | `cacheSizeMB` | `16` | SQLite page cache size. |
 | `depth` | `20` | Maximum nesting when writing documents (1-100, validated at construction). |
-| `maxDocumentBytes` | `16MB` | Documents larger than this fail to read with an error naming only the key. |
-| `maxReadDepth` | `100` | Documents nested deeper than this fail to read with an error naming only the key. |
+| `maxDocumentBytes` | `16MB` | Maximum serialized JSON size in UTF-16 bytes (`json.Length * 2`), enforced before writes and on reads. Errors name only the key. |
+| `maxReadDepth` | `100` | Maximum JSON object/array nesting, enforced before writes and on reads. Errors name only the key. |
 | `debug` | `$false` | Prints SQL text (never bound values) and includes SQL in error messages. |
 
 A closed instance cannot be reopened; create a new one.
@@ -643,11 +643,47 @@ try {
 * **Why Direct SMB Access is Blocked:** SQLite WAL mode relies on shared memory (`.db-shm`), which cannot coordinate across separate machines over SMB. Direct UNC and mapped paths are rejected to prevent file corruption.
 * **Writer Snapshot Export (`VACUUM INTO`):** To share data over SMB without downtime, the writer process exports a consistent snapshot via `$db.query("VACUUM INTO 'snapshot.db';")` and publishes the completed file to the share.
 * **Client Consumption (Local Temp):** Readers copy the published snapshot to a unique `$env:TEMP` path and query at full local NVMe speed with zero network lock contention. See [Section 11 in Full Documentation](_DOCS/#11-reading-over-smb--network-shares).
+
+---
+
+## 🛠️ Native PowerShell Cmdlets & Pipeline (DevOps Mode)
+
+> [!NOTE]
+> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+
+Prefer idiomatic PowerShell cmdlets with pipeline integration (`|`), `-WhatIf`, `-Confirm`, and native `Get-Help`?
+
+In addition to the primary Fluent API (`$db.collection().where().get()`), PSLocalBase includes a **100% native PowerShell Cmdlet adapter** (`PSLocalBase.Cmdlets.ps1`). Both styles share the exact same C# SQLite engine and can even be mixed:
+
+```powershell
+# 1. Connect to session
+Connect-LocalBase -Path "./infrastructure.db"
+
+# 2. Ingest objects directly from PowerShell pipeline!
+Get-Process | Select-Object -First 10 ProcessName, Id, CPU | 
+    Add-LocalBaseDocument -Collection "processes"
+
+# 3. Query documents with parameters or hashtable filters
+$procs = Get-LocalBaseDocument -Collection "processes" -Filter @{ ProcessName = 'powershell' }
+
+# 4. Pipeline chaining with safety (-WhatIf / -Confirm)
+Get-LocalBaseDocument -Collection "processes" -Field "CPU" -Operator ">=" -Value 50 | 
+    Remove-LocalBaseDocument -WhatIf
+
+# 5. Fast mathematical aggregations
+Measure-LocalBaseDocument -Collection "processes" -Field "CPU" -Average -Maximum
+
+# 6. Disconnect
+Disconnect-LocalBase
+```
+
+> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for the complete reference of all 22 cmdlets, parameter sets, installation from the GitHub `dev` branch, short interactive aliases (`gld`, `ald`, `sld`, `uld`, `rld`), and operational automation scripts.
+
 ---
 
 ## Test Suite & Quality Verification
 
-PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 19 suites, each in its own process: 83 core acceptance cases (TC-01 to TC-83), the historical regression suites, the 2.0 hardening regressions, point-pagination and bridge-upgrade regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
+PSLocalBase includes an automated test runner, `_TESTS/run-tests.ps1`, that executes 22 suites, each in its own process: 84 core acceptance cases (TC-01 to TC-84), the native Cmdlets test suite, contracts regression checks, second-review hardening regressions, point-pagination and bridge-upgrade regressions, a seeded randomized comparison against a PowerShell model, native resource stress checks, and a multi-process WAL test in which Windows PowerShell 5.1 and PowerShell 7 write to the same file concurrently. All suites pass on both editions.
 
 ### Running the Tests
 ```powershell
@@ -660,19 +696,35 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
 For the complete breakdown of all 84 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
-### Independent Security & Quality Audit (2.0.0 Hardened Release)
+### Independent Security & Quality Audit (Multi-Agent Evaluations)
 
-PSLocalBase 2.0.0 on branch `hardening/v2` underwent an exhaustive audit across security, data integrity, concurrency, memory safety, and documentation, achieving a **96.7/100 (Production Ready)** rating with 19 out of 19 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For full details and defect resolution matrices, see the [Final Verification Report](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
+> ℹ️ **Multi-Agent Cross-Model Validation:** The evaluation scorecards below reflect independent multi-agent audits conducted on the `dev` branch using both **Gemini High** and **ChatGPT Sol (GPT-6.1 Sol)** with 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For detailed defect resolution and historical matrices, see [_DOCS/FINAL-VERIFICATION-REPORT-v2.md](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
 
-| Category | Score | Status |
-|---|:---:|:---:|
-| **Security** | **98/100** | ✅ Exceptional (0 critical/high vulnerabilities, pre-compilation compound SQL isolation) |
-| **Code Quality** | **94/100** | ✅ Very High (Zero PSScriptAnalyzer warnings, SafeHandle lifecycle, defensive query cloning) |
-| **Functionality** | **98/100** | ✅ High (Full NoSQL API, terminal parity, atomic array mutations, field existence operators) |
-| **Architecture** | **93/100** | ✅ Solid (Zero dependencies, direct winsqlite3.dll integration, native json_type pushdown) |
-| **Documentation** | **98/100** | ✅ Excellent (17-vector security policy, full specifications, formalized null contract) |
-| **Test Coverage** | **99/100** | ✅ Exceptional (19 suites, 280+ tests, multi-process WAL concurrency, 84/84 acceptance criteria) |
-| **Overall Score** | **96.7/100** | ✅ **Production Ready (Release Candidate 2.0.0)** |
+#### 1. Gemini High Multi-Agent Evaluation (Overall: 99.4 / 100 — Grade A+ Certified)
+
+| Category | Score | Status | Highlights |
+|---|:---:|:---:|---|
+| **Security** | **100/100** | ✅ Exceptional | 0 vulnerabilities, SQL injection immunity, single-statement isolation, empty filter rejection |
+| **Code Quality** | **99/100** | ✅ Exceptional | Zero PSScriptAnalyzer warnings/errors, SafeHandle lifecycle, C# P/Invoke interop |
+| **Functionality** | **100/100** | ✅ Exceptional | Full 22 native cmdlets pipeline & 7 aliases, atomic array mutations, AND query intersections |
+| **Architecture** | **98/100** | ✅ Solid & Resilient | Clean 3-tier modular separation, immutable Query Builder, ConditionalWeakTable |
+| **Documentation** | **99.5/100** | ✅ Comprehensive | Synchronized suite/cmdlet metrics, executable service management and audit workflows |
+| **Test Coverage** | **100/100** | ✅ Flawless | 22/22 suites PASS on PS 7 & PS 5.1, 320+ test scenarios, multi-process WAL concurrency |
+| **Overall Score** | **99.4/100** | ✅ **Certified** | **Enterprise / Production Ready** |
+
+#### 2. ChatGPT Sol (GPT-6.1 Sol Medium) Multi-Agent Evaluation (Overall: 94 / 100)
+
+Final review dated November 4, 2026, of commit `e93d1ac33137522380d26ee355ac92bc75a9ae9b`: three specialist agents reviewed security, code and documentation, while the coordinating agent verified functionality and ran the full validation. The four areas have equal weight: `(96 + 90 + 96 + 93) / 4 = 93.75`, rounded to **94/100**. These are review judgments, not coverage percentages or a security certification. Architecture and test coverage were not assigned separate scores in this evaluation.
+
+| Category | Score | Status | Highlights |
+|---|:---:|:---:|---|
+| **Security** | **96/100** | ✅ Verified | Empty-filter rejection, ID/filter intersection and pipeline identity verified in both editions; no new confirmed security defects in the reviewed changes |
+| **Code Quality** | **90/100** | ✅ High Quality | Defensive P/Invoke, SafeHandle determinism, SessionState path handling |
+| **Functionality** | **96/100** | ✅ Robust | Solid document engine, strict `-Filter @{}` guard, explicit key pipeline flow |
+| **Documentation** | **93/100** | ✅ Verified | Corrected service enums, explicit fluent keys, alias command, suite counts and bridge requirement; a minor historical score discrepancy remained at the reviewed commit |
+| **Overall Score** | **94/100** | ✅ **Technical review closed** | **93.75/100 before rounding; equal weight across the four areas** |
+
+Validation for this review: **22/22 suites passed in PowerShell 7.6.9 and 22/22 in Windows PowerShell 5.1.26100.9843**, without retries; Playground verification passed in both editions, PSScriptAnalyzer 1.25.0 reported zero errors/warnings, and additional SQLite integrity checks returned `ok`. The documented secondary-index performance tradeoff remains accepted. No critical defects or data corruption were observed in the checks performed; the review does not establish universal absence of defects or exhaustive API parity.
 
 ---
 
@@ -729,3 +781,9 @@ Created and maintained by **Carlos Martinez** ([@cmartineztech](https://github.c
 ## License
 
 This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for details.
+
+### Query precision and pipeline bounds
+
+Numeric SQL operations reject unsupported stored numbers and parameters instead of silently rounding them into matches. Int64 integers are exact; supported reals use conservative binary64 semantics, not arbitrary decimal precision. See [numeric comparison limits and index tradeoffs](_DOCS/SPECIFICATION.md#numeric-comparison-domain).
+
+Get materializes the selected result before pipeline output. Use `-First`/`-Skip` or fluent `limit`/`skip` for bounded reads; downstream `Select-Object -First` does not reduce reads. Array/scalar/null documents from Get use a `.Value` envelope that Set/Add unwrap using private identity. `distinct()` rejects pagination and ordering modifiers. See [cmdlet contracts](_DOCS/CMDLETS.md#second-review-contracts).

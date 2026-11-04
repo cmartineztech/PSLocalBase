@@ -2,6 +2,46 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.3] - 2026-11-04
+
+The numeric guard requires native bridge version 5. Restart PowerShell after upgrading an already loaded module.
+
+### Fixed
+- Reject an empty `Remove-LocalBaseDocument -Filter` without a document ID before deleting any data; direct intentional collection-wide deletion to `Clear-LocalBaseCollection`.
+- Apply logical AND when `Remove-LocalBaseDocument` receives both a document ID (explicitly or through pipeline identity) and a filter.
+- Resolve relative `Backup-LocalBaseDatabase` destinations against the current PowerShell location before executing the backup.
+- Exclude matching SQLite auxiliary tables without `key` and `doc` columns from `collectionGroup()` queries.
+- Normalize `not-like` operator syntax in `where()` to accept hyphen, underscore, and space (`'not-like'`, `'not_like'`, `'not like'`, `'-notlike'`) for full syntax symmetry with `not-in`.
+- Guard numeric SQL extraction against unsupported stored values as well as parameters; reject ambiguous comparisons atomically, including membership/deletion with legacy indexes. Preserve Int64 binding and document conservative binary64 limits and index-performance tradeoffs.
+- Open/validate replacement ambient connections before closing the original; failed paths/options preserve pending transactions.
+- Preserve top-level arrays, scalars and null across Get/Set/Add/Remove with trusted `.Value` envelopes; prevent ConvertFrom-Json array enumeration and explicitly serialize null on PS5.1.
+- Reject distinct combined with limit/skip/orderBy instead of ignoring scope.
+- Correct materialization/streaming claims and recommend bounded paging.
+- Include Cmdlets in CI static analysis; implement ShouldProcess on New collection/index, Set and Start transaction without warning suppressions.
+- Pipeline Set/Update/Remove now prioritize explicit arguments, then Get's object identity, then content fallback. Collection/id collisions cannot redirect mutations; adapter decorations are not persisted and colliding payload metadata is preserved.
+- `doc()` and `where()` preserve each other's constraints. Reads and deletion combine key and filters with AND; filtered set/update/upsert now throw instead of ignoring filters.
+- Transaction blocks use the selected database as their scoped ambient connection and treat ordinary non-terminating errors as failures. Context and error preference are restored on success/failure; same-connection nesting is rejected before entering the inner block.
+- `Add-LocalBaseDocument -Id` inserts and rejects duplicates instead of overwriting them.
+- Serialization enforces the same UTF-16 byte and JSON nesting limits as reads, preserving previous data on failed targeted or bulk writes.
+- `Connect-LocalBase -JournalMode` accepts only the implemented WAL/DELETE modes; unsupported modes are rejected before changing the connection.
+- Database removal reports filesystem failures, rejects active files and directories, and requires explicit disconnection. Force permits read-only removal while respecting WhatIf/Confirm.
+
+### Tests
+- Add regression coverage for empty-filter rejection with document preservation, conditional ID-and-filter deletion, relative backup paths and collection groups containing auxiliary tables.
+- Final review of `e93d1ac`: all 22 suites passed on both PowerShell 7.6.9 and Windows PowerShell 5.1; Playground verification passed on both editions, and PSScriptAnalyzer reported no errors or warnings.
+- Added second-review regressions for numeric collisions and atomic failures, reconnects, all top-level JSON shapes, distinct scope and WhatIf.
+- Added the contracts regression suite to the runner for identity collisions, query intersections, scoped transactions, duplicate inserts, write limits, real journal readback, and safe temporary-file removal.
+
+### Documentation
+- Correct service examples by serializing enum properties as strings and passing explicit collection/storage keys when updating fluent query results through cmdlets.
+- Make the service-audit example clear its previous snapshot before ingesting another, and use a valid command to list module aliases.
+- Synchronize current references to 22 functions, 7 aliases, 22 test suites and native bridge version 5; label the earlier audit scorecard as historical.
+
+### Added
+- **Native PowerShell Cmdlets & Pipeline Adapter (`PSLocalBase.Cmdlets.ps1`)**: Added 22 native cmdlets and 7 short interactive aliases (`gld`, `ald`, `sld`, `uld`, `rld`, `Open-LocalBase`, `Close-LocalBase`) providing pipeline integration (`|`), ambient session management (`Connect-LocalBase` / `Disconnect-LocalBase`), and `-WhatIf` / `-Confirm` safety over the native engine.
+- **Dedicated Cmdlets Test Suite (`_TESTS/PSLocalBase.Cmdlets.Tests.ps1`)**: 18 comprehensive test cases (C01–C18) verifying connection lifecycles, pipeline streaming, deep recursive merging, array mutations, atomic transactions, multi-database routing, and cross-edition parity.
+- **Comprehensive Documentation (`_DOCS/CMDLETS.md`)**: Complete reference guide covering pipeline architecture, property binding, safety mechanics, cmdlet syntax, parity matrices, and operational automation scripts.
+
 ## [2.0.2] - 2026-10-31
 
 ### Packaging & Distribution
