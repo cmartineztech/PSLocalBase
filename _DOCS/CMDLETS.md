@@ -34,11 +34,20 @@ Both styles execute on the exact same high-speed, zero-dependency C# native SQLi
 
 ---
 
-## Installation & Setup (from GitHub `dev` Branch)
+## Installation & Setup
 
-The native Cmdlet adapter is actively developed in the GitHub repository. To install and use the latest features directly from the `dev` branch before an official PowerShell Gallery release, clone the repository and import the module from the downloaded location:
+### Option A: Install from PowerShell Gallery (Recommended)
+PSLocalBase 2.1.0 includes all 22 native cmdlets and 7 aliases directly on the official PowerShell Gallery:
 
-### Option A: Clone into User Module Directory (Global Access)
+```powershell
+# Install for current user:
+Install-Module -Name PSLocalBase -Repository PSGallery -Scope CurrentUser
+
+# Import and start using:
+Import-Module PSLocalBase -Force
+```
+
+### Option B: Clone into User Module Directory from GitHub `dev` Branch
 Cloning directly into your PowerShell `$env:PSModulePath` allows you to run `Import-Module PSLocalBase` from **any** terminal or script without specifying file paths:
 
 ```powershell
@@ -56,7 +65,7 @@ git clone -b dev https://github.com/cmartineztech/PSLocalBase.git $moduleDir
 Import-Module PSLocalBase -Force
 ```
 
-### Option B: Clone into Local Workspace
+### Option C: Clone into Local Workspace
 If you prefer to keep the repository in a development or working directory:
 
 ```powershell

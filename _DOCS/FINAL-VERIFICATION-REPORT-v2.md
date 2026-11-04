@@ -68,7 +68,7 @@ The multi-suite automated runner (`_TESTS/run-tests.ps1`) executes each suite in
 
 ---
 
-## 4. Key Defects Resolved and Validated in 2.0.3
+## 4. Key Defects Resolved and Validated in 2.1.0
 
 ### 4.1 Empty Delete Filter Rejection (`Remove-LocalBaseDocument`)
 * **Defect:** In PowerShell, `-Filter @{}` without `-Id` evaluated truthy, executing an unconstrained collection delete.
@@ -133,7 +133,7 @@ Final review dated November 4, 2026, of commit `e93d1ac33137522380d26ee355ac92bc
 - Windows PowerShell 5.1.26100.9843: 22/22 suites passed, exit 0, run after the PowerShell 7 runner. No suite retries or timeouts were needed.
 - NativeStress and multi-process WAL tests passed in both runners.
 - Playground automated verification passed in both editions; this was not manual visual inspection of every screen.
-- PSScriptAnalyzer 1.25.0: zero Error/Warning findings in the four CI-analyzed module files; Test-ModuleManifest validated version 2.0.3.
+- PSScriptAnalyzer 1.25.0: zero Error/Warning findings in the four CI-analyzed module files; Test-ModuleManifest validated version 2.1.0.
 - Additional independent checks in both editions verified empty-filter rejection without data changes, ID/filter intersection, rollback and `PRAGMA integrity_check = ok`.
 
 **Scope and limits:** The agreed functional corrections were closed. No new material regressions, critical defects or data corruption were observed in the checks performed. The documented secondary-index performance tradeoff was accepted and was not a new requirement for closure. The documentation score records the state at `e93d1ac`; later documentation edits do not retroactively change it. Passing all executed tests does not establish exhaustive API parity, universal absence of vulnerabilities or guaranteed memory safety. No external penetration test, fuzzing campaign or production performance benchmark was performed. The broader Gemini verdicts elsewhere in this report are not claims made by this review.
