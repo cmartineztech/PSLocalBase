@@ -7,6 +7,10 @@ All notable changes to PSLocalBase are documented here. The project follows [Sem
 The numeric guard requires native bridge version 5. Restart PowerShell after upgrading an already loaded module.
 
 ### Fixed
+- Reject an empty `Remove-LocalBaseDocument -Filter` without a document ID before deleting any data; direct intentional collection-wide deletion to `Clear-LocalBaseCollection`.
+- Apply logical AND when `Remove-LocalBaseDocument` receives both a document ID (explicitly or through pipeline identity) and a filter.
+- Resolve relative `Backup-LocalBaseDatabase` destinations against the current PowerShell location before executing the backup.
+- Exclude matching SQLite auxiliary tables without `key` and `doc` columns from `collectionGroup()` queries.
 - Normalize `not-like` operator syntax in `where()` to accept hyphen, underscore, and space (`'not-like'`, `'not_like'`, `'not like'`, `'-notlike'`) for full syntax symmetry with `not-in`.
 - Guard numeric SQL extraction against unsupported stored values as well as parameters; reject ambiguous comparisons atomically, including membership/deletion with legacy indexes. Preserve Int64 binding and document conservative binary64 limits and index-performance tradeoffs.
 - Open/validate replacement ambient connections before closing the original; failed paths/options preserve pending transactions.
@@ -23,8 +27,15 @@ The numeric guard requires native bridge version 5. Restart PowerShell after upg
 - Database removal reports filesystem failures, rejects active files and directories, and requires explicit disconnection. Force permits read-only removal while respecting WhatIf/Confirm.
 
 ### Tests
+- Add regression coverage for empty-filter rejection with document preservation, conditional ID-and-filter deletion, relative backup paths and collection groups containing auxiliary tables.
+- Final review of `e93d1ac`: all 22 suites passed on both PowerShell 7.6.9 and Windows PowerShell 5.1; Playground verification passed on both editions, and PSScriptAnalyzer reported no errors or warnings.
 - Added second-review regressions for numeric collisions and atomic failures, reconnects, all top-level JSON shapes, distinct scope and WhatIf.
 - Added the contracts regression suite to the runner for identity collisions, query intersections, scoped transactions, duplicate inserts, write limits, real journal readback, and safe temporary-file removal.
+
+### Documentation
+- Correct service examples by serializing enum properties as strings and passing explicit collection/storage keys when updating fluent query results through cmdlets.
+- Make the service-audit example clear its previous snapshot before ingesting another, and use a valid command to list module aliases.
+- Synchronize current references to 22 functions, 7 aliases, 22 test suites and native bridge version 5; label the earlier audit scorecard as historical.
 
 ### Added
 - **Native PowerShell Cmdlets & Pipeline Adapter (`PSLocalBase.Cmdlets.ps1`)**: Added 22 native cmdlets and 7 short interactive aliases (`gld`, `ald`, `sld`, `uld`, `rld`, `Open-LocalBase`, `Close-LocalBase`) providing pipeline integration (`|`), ambient session management (`Connect-LocalBase` / `Disconnect-LocalBase`), and `-WhatIf` / `-Confirm` safety over the native engine.
