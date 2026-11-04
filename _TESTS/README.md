@@ -23,9 +23,9 @@ To run individual test files directly:
 pwsh -ExecutionPolicy Bypass -File .\_TESTS\PSLocalBase.Tests.ps1
 ```
 
-### Complete Multi-Suite Runner Overview (19 Suites)
+### Complete Multi-Suite Runner Overview (21 Suites)
 
-The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including `PSLocalBase.Review-v2-de8801d.Tests.ps1` (5 checks) and `PSLocalBase.PointBridge.Tests.ps1` (36 point-lookup cases and 3 isolated bridge scenarios). Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
+The automated test runner (`_TESTS/run-tests.ps1`) executes 21 suites, including the cmdlet suite and `PSLocalBase.Contracts.Tests.ps1` (7 regression groups covering the nine reviewed findings). Contracts tests use in-memory databases or unique temporary paths and cover payload/metadata collisions, explicit identity overrides, multi-item pipelines, key/filter intersections, transaction rollback and scope restoration, duplicate insertion, write-size/depth limits, journal readback and protected file removal. Point tests assert `$null` for empty results rather than treating `@($null)` as zero elements.
 1. `PSLocalBase.Tests.ps1` - Core acceptance criteria & functional tests (84 test cases).
 2. `PSLocalBase.Audit.Tests.ps1` - Corner cases, boundary values, and corruption defenses (7 checks).
 3. `PSLocalBase.Reevaluation.Tests.ps1` - Query builder state isolation and transaction rollbacks (17 checks).
@@ -139,3 +139,7 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 19 suites, including
 | **TC-82** | **Composite Query Defensive Copy & Snapshot Isolation** | union() and unionAll() capture defensive clone snapshots; subsequent source branch mutations do not alter composed query | **PASSED** |
 | **TC-83** | **Query Builder Immutability, Bifurcation & Explicit Fork** | where() and query modifiers return cloned child queries; terminal methods are non-destructive and queries are reusable | **PASSED** |
 | **TC-84** | **Field Existence & Missing Operators** | Evaluates document field presence via native SQLite json_type() IS NOT NULL / IS NULL (whereExists, whereMissing, exists, missing); matches explicit nulls and excludes missing keys | **PASSED** |
+
+## Second-review regression suite
+
+`PSLocalBase.SecondReview.Tests.ps1` runs in the standard runner on both PowerShell editions. It covers unsafe stored UInt64/decimal numbers (including old expression indexes), comparison/membership rollback, supported numeric boundaries, transactional reconnect failures, same/different temporary files, point/query JSON shape preservation through Set/Add/Remove, distinct modifier rejection, and WhatIf. All database files use unique temporary paths; no user databases are tested.

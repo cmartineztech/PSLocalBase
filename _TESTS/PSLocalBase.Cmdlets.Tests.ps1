@@ -592,9 +592,9 @@ Test-CmdletCase 'C17 - Comprehensive -WhatIf Safety' {
 }
 
 # ---------------------------------------------------------------------------
-# C18: Nested Projections in Point Lookup & Active Connection Disconnect Check
+# C18: Nested Projections in Point Lookup & Explicit Connection Disconnect
 # ---------------------------------------------------------------------------
-Test-CmdletCase 'C18 - Nested Select Projection and Active Session Disconnect' {
+Test-CmdletCase 'C18 - Nested Select Projection and Explicit Session Disconnect' {
     param($dbPath)
 
     $null = Add-LocalBaseDocument -Collection 'profiles' -Id 'p1' -Data @{
@@ -607,12 +607,13 @@ Test-CmdletCase 'C18 - Nested Select Projection and Active Session Disconnect' {
     if ($p.name -ne 'Carlos') { throw "Expected projected name" }
     if ($p.PSObject.Properties['contact.city'].Value -ne 'Miami') { throw "Expected projected nested contact.city" }
 
-    # Remove-LocalBaseDatabase disconnects active session cleanly
+    # Close the active session explicitly before removing its files.
     $tempDb = Join-Path ([System.IO.Path]::GetTempPath()) "pslocalbase_removal_$([System.Guid]::NewGuid().ToString('N')).db"
     try {
         Connect-LocalBase -Path $tempDb
         $null = Add-LocalBaseDocument -Collection 'data' -Data @{ ok = $true }
 
+        Disconnect-LocalBase
         Remove-LocalBaseDatabase -Path $tempDb -Confirm:$false
 
         $conn = Get-LocalBaseConnection

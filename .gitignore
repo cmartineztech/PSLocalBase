@@ -17,6 +17,7 @@ scratch/
 # IDE and Editor configurations
 .vscode/
 .idea/
+.codegraph/
 
 # Windows OS metadata
 Thumbs.db

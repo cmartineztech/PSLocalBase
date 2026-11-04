@@ -29,7 +29,8 @@ jobs:
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -RequiredVersion 1.25.0
-          $findings = foreach ($file in 'PSLocalBase.psm1', 'InitWinSqlite3Native.ps1', 'PSLocalBase.psd1') {
+          . ./InitWinSqlite3Native.ps1
+          $findings = foreach ($file in 'PSLocalBase.psm1', 'PSLocalBase.Cmdlets.ps1', 'InitWinSqlite3Native.ps1', 'PSLocalBase.psd1') {
             Invoke-ScriptAnalyzer -Path "./$file" -Severity Error, Warning | Where-Object Severity -ne 'Information'
           }
           $findings | Format-Table ScriptName, Line, Severity, RuleName, Message -AutoSize -Wrap

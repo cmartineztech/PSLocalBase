@@ -30,7 +30,7 @@ public sealed class PSLocalBaseConnectionHandle : SafeHandle {
 }
 
 public class WinSqlite3 {
-    public const int BridgeVersion = 4;
+    public const int BridgeVersion = 5;
     public const int SQLITE_OK = 0;
     public const int SQLITE_BUSY = 5;
     public const int SQLITE_ROW = 100;
@@ -49,6 +49,7 @@ public class WinSqlite3 {
     private delegate void AuxDestructor(IntPtr data);
 
     // Static roots keep callbacks alive while any connection/statement uses them.
+    private static readonly ScalarFunction NumericCallback = EvaluateNumeric;
     private static readonly ScalarFunction PsLikeCallback = EvaluatePsLike;
     private static readonly AuxDestructor PatternDestructor = ReleasePattern;
 
@@ -76,7 +77,71 @@ public class WinSqlite3 {
 
     public static int RegisterPsLike(IntPtr db) {
         // DIRECTONLY keeps triggers and views stored in an untrusted database file from invoking the callback.
+        int rc = CreateFunction(db, "pslocalbase_numeric", 1, SQLITE_UTF16 | SQLITE_DIRECTONLY, IntPtr.Zero, NumericCallback, IntPtr.Zero, IntPtr.Zero);
+        if (rc != SQLITE_OK) return rc;
         return CreateFunction(db, "pslocalbase_like", 2, SQLITE_UTF16 | SQLITE_DIRECTONLY, IntPtr.Zero, PsLikeCallback, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    [DllImport("winsqlite3.dll", EntryPoint = "sqlite3_result_text16", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    private static extern void ResultText(IntPtr context, string text, int bytes, IntPtr destructor);
+
+    // Conservative comparison domain: Int64 integers; finite binary64 reals with
+    // a lossless decimal roundtrip through binary64. Strings are skipped.
+    public static void ValidateNumericJson(string json) {
+        if (json == null) return;
+        for (int i = 0; i < json.Length; i++) {
+            if (json[i] == '"') {
+                for (++i; i < json.Length; i++) {
+                    if (json[i] == '\\') i++;
+                    else if (json[i] == '"') break;
+                }
+            } else if (json[i] == '-' || char.IsDigit(json[i])) {
+                int start = i;
+                while (i < json.Length && (char.IsDigit(json[i]) || "-+.eE".IndexOf(json[i]) >= 0)) i++;
+                string token = json.Substring(start, i - start);
+                i--;
+                long integer;
+                if (token.IndexOfAny(new char[] { '.', 'e', 'E' }) < 0) {
+                    if (!long.TryParse(token, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out integer))
+                        throw new ArgumentException("Numeric precision unsupported: JSON integer exceeds Int64.");
+                } else {
+                    string mantissa = token.Split('e', 'E')[0].Replace("-", "").Replace(".", "").TrimStart('0').TrimEnd('0');
+                    double real;
+                    if (!double.TryParse(token, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out real)
+                        || double.IsInfinity(real) || double.IsNaN(real) || Math.Abs(real) >= 9007199254740992d || (real == 0 && mantissa.Length != 0)
+                        || NormalizeNumber(token) != NormalizeNumber(real.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))
+                        throw new ArgumentException("Numeric precision unsupported: real requires finite binary64, <2^53, and lossless decimal roundtrip.");
+                }
+            }
+        }
+    }
+
+    private static string NormalizeNumber(string token) {
+        string[] parts = token.ToLowerInvariant().Split('e');
+        long exponent = parts.Length == 2 ? long.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture) : 0;
+        string digits = parts[0];
+        bool negative = digits.StartsWith("-");
+        digits = digits.TrimStart('-', '+');
+        int point = digits.IndexOf('.');
+        if (point >= 0) { exponent -= digits.Length - point - 1; digits = digits.Replace(".", ""); }
+        digits = digits.TrimStart('0');
+        if (digits.Length == 0) return "0";
+        int length = digits.Length;
+        digits = digits.TrimEnd('0');
+        exponent += length - digits.Length;
+        return (negative ? "-" : "") + digits + "e" + exponent.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void EvaluateNumeric(IntPtr context, int argc, IntPtr argv) {
+        try {
+            IntPtr value = Marshal.ReadIntPtr(argv);
+            if (ValueType(value) == SQLITE_NULL) { ResultNull(context); return; }
+            string json = ReadValue(value);
+            ValidateNumericJson(json);
+            ResultText(context, json, checked(json.Length * 2), SQLITE_TRANSIENT);
+        } catch (Exception) {
+            ResultError(context, "Numeric precision unsupported in stored JSON; operation rejected.", -1);
+        }
     }
 
     // Returns the deepest object/array nesting level, ignoring brackets inside double-quoted strings.

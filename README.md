@@ -199,8 +199,8 @@ $db = New-LocalBase -Path "C:\Data\app.db" -Options @{ busyTimeout = 10000; cach
 | `busyTimeout` | `5000` | Milliseconds to wait for a lock held by another connection. |
 | `cacheSizeMB` | `16` | SQLite page cache size. |
 | `depth` | `20` | Maximum nesting when writing documents (1-100, validated at construction). |
-| `maxDocumentBytes` | `16MB` | Documents larger than this fail to read with an error naming only the key. |
-| `maxReadDepth` | `100` | Documents nested deeper than this fail to read with an error naming only the key. |
+| `maxDocumentBytes` | `16MB` | Maximum serialized JSON size in UTF-16 bytes (`json.Length * 2`), enforced before writes and on reads. Errors name only the key. |
+| `maxReadDepth` | `100` | Maximum JSON object/array nesting, enforced before writes and on reads. Errors name only the key. |
 | `debug` | `$false` | Prints SQL text (never bound values) and includes SQL in error messages. |
 
 A closed instance cannot be reopened; create a new one.
@@ -651,7 +651,7 @@ try {
 > [!NOTE]
 > **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
 
-Prefer idiomatic PowerShell cmdlets with pipeline streaming (`|`), `-WhatIf`, `-Confirm`, and native `Get-Help`?
+Prefer idiomatic PowerShell cmdlets with pipeline integration (`|`), `-WhatIf`, `-Confirm`, and native `Get-Help`?
 
 In addition to the primary Fluent API (`$db.collection().where().get()`), PSLocalBase includes a **100% native PowerShell Cmdlet adapter** (`PSLocalBase.Cmdlets.ps1`). Both styles share the exact same C# SQLite engine and can even be mixed:
 
@@ -765,3 +765,9 @@ Created and maintained by **Carlos Martinez** ([@cmartineztech](https://github.c
 ## License
 
 This project is licensed under the [MIT License](LICENSE) - see the [LICENSE](LICENSE) file for details.
+
+### Query precision and pipeline bounds
+
+Numeric SQL operations reject unsupported stored numbers and parameters instead of silently rounding them into matches. Int64 integers are exact; supported reals use conservative binary64 semantics, not arbitrary decimal precision. See [numeric comparison limits and index tradeoffs](_DOCS/SPECIFICATION.md#numeric-comparison-domain).
+
+Get materializes the selected result before pipeline output. Use `-First`/`-Skip` or fluent `limit`/`skip` for bounded reads; downstream `Select-Object -First` does not reduce reads. Array/scalar/null documents from Get use a `.Value` envelope that Set/Add unwrap using private identity. `distinct()` rejects pagination and ordering modifiers. See [cmdlet contracts](_DOCS/CMDLETS.md#second-review-contracts).

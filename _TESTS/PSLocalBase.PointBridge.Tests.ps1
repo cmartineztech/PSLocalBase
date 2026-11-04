@@ -29,7 +29,7 @@ $dir=Join-Path ([IO.Path]::GetTempPath()) ('pslb-bridge-'+[guid]::NewGuid().ToSt
 $null=New-Item -ItemType Directory -Path $dir
 $native=Get-Content (Join-Path $root 'InitWinSqlite3Native.ps1') -Raw
 $old=Join-Path $dir 'old.ps1'; $child=Join-Path $dir 'child.ps1'
-Set-Content -LiteralPath $old -Encoding UTF8 -Value ($native.Replace('BridgeVersion = 4','BridgeVersion = 3'))
+Set-Content -LiteralPath $old -Encoding UTF8 -Value ($native.Replace('BridgeVersion = 5','BridgeVersion = 4'))
 $childSource=@'
 param($modulePath,$bridgePath,$reject)
 $ErrorActionPreference='Stop'

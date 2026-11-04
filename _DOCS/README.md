@@ -425,6 +425,8 @@ $users = $db.collection("users").select("name", "department").get()
 ```
 
 ### Distinct Values (`distinct`)
+
+`distinct()` rejects limit, skip and orderBy modifiers rather than ignoring them; point keys and filters are respected. See the [numeric comparison domain](SPECIFICATION.md#numeric-comparison-domain) for precision limits.
 Retrieves deduplicated unique values leveraging SQLite B-Tree index scans:
 ```powershell
 $roles = $db.collection("users").distinct("role")
@@ -731,7 +733,7 @@ $db.collectionGroup("logs_2026_*").get() |
 > [!NOTE]
 > **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
 
-In addition to the Fluent API, PSLocalBase includes a 100% native PowerShell Cmdlet adapter with full pipeline streaming (`Add-LocalBaseDocument`, `Get-LocalBaseDocument`, `Update-LocalBaseDocument`, `Remove-LocalBaseDocument`), `-WhatIf` safety, and short interactive aliases (`gld`, `ald`, `uld`, `rld`).
+In addition to the Fluent API, PSLocalBase includes a 100% native PowerShell Cmdlet adapter with pipeline integration (`Add-LocalBaseDocument`, `Get-LocalBaseDocument`, `Update-LocalBaseDocument`, `Remove-LocalBaseDocument`), `-WhatIf` safety, and short interactive aliases (`gld`, `ald`, `uld`, `rld`).
 
 👉 **Complete Cmdlet Documentation:** For the full reference, parameter matrices, and automation scripts, see [CMDLETS.md](CMDLETS.md).
 

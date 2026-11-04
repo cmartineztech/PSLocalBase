@@ -19,7 +19,7 @@ Both styles execute on the exact same high-speed, zero-dependency C# native SQLi
   - [Verification & Get-Help](#verification--get-help)
 - [Core Concepts & Architecture](#core-concepts--architecture)
   - [Session Context Management](#session-context-management)
-  - [Pipeline Streaming & Low Memory Footprint](#pipeline-streaming--low-memory-footprint)
+  - [Pipeline Materialization and Bounded Reads](#pipeline-materialization-and-bounded-reads)
   - [Automatic Property Binding](#automatic-property-binding)
   - [Safety Mechanics: `-WhatIf` & `-Confirm`](#safety-mechanics--whatif--confirm)
   - [Short Interactive Aliases](#short-interactive-aliases)
@@ -110,9 +110,11 @@ Disconnect-LocalBase
 
 If you are working with multiple databases concurrently, simply pass `-Database $dbInstance` explicitly to any cmdlet.
 
-### Pipeline Streaming & Low Memory Footprint
+### Pipeline Materialization and Bounded Reads
 
-Unlike batch methods that load thousands of records into memory at once, cmdlets stream objects through PowerShell's `process { ... }` block:
+`Get-LocalBaseDocument`, fluent `get()`, and their query helpers materialize the selected rows before emitting results. Memory grows with the selected result size, including raw JSON and deserialized objects. A downstream `Select-Object -First` does **not** save database reads or this allocation. Use `Get-LocalBaseDocument -First 100 -Skip 0` (or fluent `limit(100).skip(0)`) and fetch bounded pages. Statements are finalized before pipeline delivery, including early downstream termination.
+
+Write cmdlets process incoming documents individually; for example:
 
 ```powershell
 # Streams 50,000 CSV lines directly into SQLite one by one with minimal RAM usage:
@@ -121,7 +123,9 @@ Import-Csv ./big_dataset.csv | Add-LocalBaseDocument -Collection "telemetry"
 
 ### Automatic Property Binding
 
-`Update-LocalBaseDocument` and `Remove-LocalBaseDocument` support `ValueFromPipelineByPropertyName`. When documents are emitted by `Get-LocalBaseDocument`, they carry metadata that allows downstream cmdlets to know their target collection and ID automatically:
+`Set-LocalBaseDocument`, `Update-LocalBaseDocument`, and `Remove-LocalBaseDocument` resolve identity separately for each pipeline object: explicit `-Collection`/`-Id` first, then the identity registered by `Get-LocalBaseDocument`, then content properties for ordinary objects (`Collection`, and `id`/`_key`/`key`). They intentionally do not bind Collection/Id by pipeline property name, which would confuse payload fields with explicit arguments.
+
+Get identity is held separately from editable properties for the lifetime of the returned object. A payload `id` or `Collection`, or even a collision with `_localbase_key`/`_localbase_collection`, cannot redirect a write. The adapter removes its own decorations and synthetic `id` before writing, restoring original colliding payload fields. This identity is in-process and object-specific: after copying, projecting into a new object, or serializing, supply explicit parameters. Ordinary objects may also use `_localbase_collection` and `_localbase_key` as fallback content; these are not authenticated identity.
 
 ```powershell
 # Chaining: Queries inactive users and updates them directly:
@@ -171,10 +175,12 @@ All subsequent pipeline cmdlets (`Get-LocalBaseDocument`, `Add-LocalBaseDocument
 ```powershell
 Connect-LocalBase [-Path] <string> `
     [-BusyTimeoutMs <int>] `
-    [-JournalMode <WAL|DELETE|TRUNCATE|PERSIST|MEMORY|OFF>] `
+    [-JournalMode <WAL|DELETE>] `
     [-Synchronous <NORMAL|FULL|OFF|EXTRA>] `
     [-PassThru]
 ```
+
+File-backed databases support WAL and DELETE. Unsupported journal modes are rejected before changing the ambient connection. In-memory databases use SQLite's MEMORY journal; inspect the returned connection's `JournalMode` for the effective mode.
 
 *Examples:*
 ```powershell
@@ -207,7 +213,7 @@ Backup-LocalBaseDatabase [-DestinationPath] <string> [[-Database] <PSLocalBase>]
 ```
 
 #### `Remove-LocalBaseDatabase`
-Disconnects active handles and permanently deletes the database file along with its `.db-wal` and `.db-shm` journals. Supports `-WhatIf` and `-Confirm`.
+Permanently deletes the database and its `-wal`, `-shm`, and `-journal` sidecars. Close all connections first (including explicit connections opened with `New-LocalBase`). Active or inaccessible files cause an actionable terminating error; the cmdlet does not disconnect them. `-Force` permits removing read-only files, but never bypasses active-file protection, `-WhatIf`, or confirmation. Missing files are a no-op; directories are rejected. Files are checked before removal, but multi-file deletion is not atomic: a later filesystem failure is reported and can leave some sidecars. Do not open new connections concurrently with removal.
 
 ```powershell
 Remove-LocalBaseDatabase [-Path] <string> [-Force] [-WhatIf] [-Confirm]
@@ -262,7 +268,7 @@ $total = Get-LocalBaseDocument -Collection "events" -Count
 ```
 
 #### `Add-LocalBaseDocument` (Alias: `ald`)
-Inserts one or more documents into a collection. Accepts objects via the PowerShell pipeline (`ValueFromPipeline = $true`). If `-Id` is omitted, an optimized GUID is generated.
+Inserts one or more documents into a collection. Accepts objects via the PowerShell pipeline (`ValueFromPipeline = $true`) and returns each inserted key. An explicit `-Id` must be new: duplicates throw and preserve the existing document. Use `Set-LocalBaseDocument` to replace/upsert. If `-Id` is omitted, a GUID is generated. Wrap a multi-item pipeline in `Invoke-LocalBaseTransaction` when the entire batch must be atomic.
 
 ```powershell
 Add-LocalBaseDocument [-Collection] <string> `
@@ -415,7 +421,9 @@ Remove-LocalBaseIndex [-Collection] <string> `
 ### 4. Transactions & Atomicity
 
 #### `Invoke-LocalBaseTransaction`
-Executes a scriptblock inside an atomic SQLite transaction (`BEGIN IMMEDIATE`). Automatically issues `COMMIT` upon success or `ROLLBACK` if an unhandled exception occurs.
+Executes a scriptblock inside an atomic SQLite transaction (`BEGIN IMMEDIATE`). Cmdlets without `-Database` inside the block use the selected transaction database. The previous ambient connection is restored in `finally`, without closing either connection. The block receives a scoped `ErrorActionPreference = 'Stop'`, so unhandled terminating errors and ordinary `Write-Error` both trigger rollback. The caller's preference is preserved. Explicitly suppressing or catching an error inside the block remains the caller's responsibility.
+
+Same-connection nesting is rejected before entering the inner block and does not roll back the outer transaction by itself. Nested blocks on different databases restore their respective contexts; they are independent transactions, not a distributed atomic commit. Successful pipeline output is returned only after commit.
 
 ```powershell
 Invoke-LocalBaseTransaction [-ScriptBlock] <scriptblock> [[-Database] <PSLocalBase>]
@@ -549,3 +557,11 @@ To explore the full documentation of the primary Fluent API, indexing strategies
 - [Main Repository Overview & Benchmarks (README.md)](../README.md)
 - [Core Architecture Specification (_DOCS/SPECIFICATION.md)](SPECIFICATION.md)
 - [PowerShell Pipeline Integration & Object Standard](README.md#10-powershell-pipeline-integration--object-standard)
+
+### Second-review contracts
+
+- A replacement `Connect-LocalBase` is opened and fully validated before the old ambient connection is closed. Failed paths/options leave its transaction, data and identity intact. Successful replacement closes the old connection (rolling back any uncommitted transaction).
+- Get emits each JSON document as one pipeline item. JSON objects retain their normal properties. Top-level arrays, scalars and JSON null use an adapter envelope with a `Value` property, plus identity decorations. Modify `.Value` to edit these documents. Set/Add unwrap only envelopes registered in the private identity table; an ordinary business object with a `Value` property remains an object. Remove resolves the same trusted identity. Missing point reads emit no item. Copying/serializing an envelope loses its trusted identity: pass its `.Value` explicitly with Collection/Id.
+- `-Distinct` rejects `-First`, `-Skip`, and `-OrderBy`, even zero values, rather than silently ignoring selection modifiers. Unmodified distinct respects filters and returns sorted non-null values.
+- New collection/index, Set document and Start transaction now implement ShouldProcess; `-WhatIf` has no database effects.
+- Numeric SQL filters obey the [comparison domain](SPECIFICATION.md#numeric-comparison-domain). Unsupported stored numbers can reject a query even when its parameter is safe.

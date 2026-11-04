@@ -30,7 +30,7 @@
 A static C# class is dynamically compiled using `Add-Type` utilizing Unicode UTF-16 (`CharSet.Unicode` and `*16` variants) to guarantee lossless round-trip handling of special characters, diacritics, and multi-byte emojis without memory corruption. `InitWinSqlite3Native.ps1` compiles it as `ScriptsToProcess` because PowerShell classes need the type at parse time; the script body runs inside a script block so it leaves no variables in the caller's session.
 
 The excerpt below shows the core binding surface. The full bridge in `InitWinSqlite3Native.ps1` additionally provides:
-* `BridgeVersion` (currently `4`). `Init()` refuses to open a connection when an older bridge is already loaded in the session and asks for a PowerShell restart.
+* `BridgeVersion` (currently `5`). `Init()` refuses to open a connection when an older bridge is already loaded in the session and asks for a PowerShell restart.
 * `PSLocalBaseConnectionHandle`, a `SafeHandle` that owns each root connection and calls `sqlite3_close_v2` from its finalizer if the instance is never disposed.
 * `RegisterPsLike`, which registers the `pslocalbase_like` scalar function with `SQLITE_DIRECTONLY`, so triggers and views cannot call it.
 * `PrepareSingle`, which validates single-statement completeness via `sqlite3_complete16` to reject compound SQL before preparation, preventing preparation-time PRAGMA side effects.
@@ -207,16 +207,21 @@ Public surface: `[hashtable]$config`, `[string]$JournalMode` and the `InTransact
   * Explicitly provisions the collection table in SQLite immediately.
 * **`[PSLocalBase] doc([object]$keyOrCriteria)`**
   * Resolves the key from a string or number, or from the `key`, `id` or `_key` property of a hashtable or object (other criteria throw `ArgumentException`). Creates no table.
+  * Preserves filters. `doc('a').where(...)` and `where(...).doc('a')` intersect key and filters with AND, including filter helpers, reads, counts, existence, aggregates, distinct, union branches and deletion. A point read with no match returns `$null`; delete with no match changes nothing.
 
 #### Writing & Mutations
 Writes never modify the query instance they are called on.
+`set()`, `update()`, and `upsert()` reject queries containing filters rather than silently ignoring them. Use an explicitly selected unfiltered document for replacement or merge. `add()` inserts a new document independently of query filters and preserves the query state.
+
+All serialized writes enforce `maxDocumentBytes` (default 16MB, UTF-16 code units times two) and `maxReadDepth` (default 100, JSON object/array nesting), using the same validation as reads. Invalid writes preserve existing documents; a failed bulk replacement rolls back its transaction/savepoint. Raw SQL can bypass serialization validation, so reads retain these guards.
+
 * **`[void] set([object]$data, [hashtable]$options)`**
   * On a targeted document: performs an atomic `INSERT INTO ... ON CONFLICT(key) DO UPDATE SET doc = excluded.doc;` using parameterized `?` bindings.
   * On a collection with an array: alias of `replaceAll()`.
 * **`[void] replaceAll([object]$items)` / `replaceAll([object]$items, [hashtable]$options)`**
   * Atomically deletes every document and inserts `$items` inside a transaction (or a savepoint within an outer transaction). Rejected with `InvalidOperationException` when the query has `where()`, `orderBy()`, `limit()`, `skip()` or a `doc()` target.
 * **`[string] add([object]$data, [string]$customKey = "")`**
-  * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes `.set()`, and returns the key.
+  * Assigns `$customKey` or generates a unique 32-character GUID (`[Guid]::NewGuid().ToString("N")`), executes an INSERT, and returns the key. Duplicate keys throw without replacing the existing document.
 * **`[void] update([object]$partialData)`**
   * Retrieves existing document, executes deep recursive merge (`_DeepMerge`), and persists the merged object. Supports atomic `ArrayUnion` and `ArrayRemove` with structural equality and tiny floating-point preservation below Decimal scale ($|Double| < 10^{-28}$). Upserts if document does not exist.
 * **`[string] upsert([object]$data, [string]$customKey = "")`**
@@ -436,3 +441,13 @@ try {
 ### Multi-Client Reading over SMB Network Shares
 
 SQLite's WAL mode relies on kernel shared memory (`.db-shm`), which cannot be coordinated across separate machines over SMB/CIFS. For distributed environments where multiple clients query a central database, refer to [Section 11 in the Full Documentation](README.md#11-reading-over-smb--network-shares) for the snapshot pattern: the writer exports with `VACUUM INTO`, and each reader copies the published snapshot to a local temporary path before opening it.
+
+## Numeric comparison domain
+
+SQL extraction used by fluent filters (including equality/inequality/ranges, IN/NOT IN, array-contains/array-contains-any), ordering, distinct, aggregates, projections and populate is guarded before SQLite can approximate a stored number. The guard scans the entire document, not just the requested field; an unsupported number elsewhere can therefore reject the operation. SQLite statement errors roll back the entire delete statement, including rows visited before an unsafe value. Existing expression indexes cannot bypass this guard because the guarded expression differs from their original `json_extract(doc, ...)` expression. This trades index-assisted extraction/filter performance for safety; key lookup indexes remain usable.
+
+Supported comparison values are JSON integers within signed Int64 (including UInt64 values within that range), and finite binary64 real tokens with magnitude below 2^53 whose normalized decimal spelling roundtrips through the runtime's `Double.ToString("R")` unchanged. This is a conservative binary64 contract, **not exact decimal arithmetic**: 0.1 is supported with binary64 semantics; 0.10000000000000001 is rejected. Adjacent supported doubles remain distinct. Real underflow, non-finite parameters, integers outside Int64 and non-roundtrippable decimal tokens are rejected. Runtime formatting differences may make rejection more conservative across editions. Integral Decimal parameters within Int64 bind as Int64; fractional Decimal parameters must satisfy the real-token rule. A Decimal stored as a JSON real token is subject to the real-token rule even if mathematically integral. SUM/AVG remain floating-point aggregates and may round or overflow; these guards do not make aggregation exact.
+
+Unindexed storage and direct point reads continue to accept larger JSON numbers; PowerShell deserialization types/roundtrip limits still apply. Creating an expression index first rejects documents outside the comparison domain. Managed writes into collections with JSON expression indexes validate their entire payload. Raw `query()` is an explicit SQL escape hatch: it retains native SQLite numeric semantics and can bypass managed write/index protections; do not use it for precision-sensitive comparisons or writes. Existing externally created indexes may need rebuilding after externally introduced unsupported values are repaired. No automatic data conversion or index removal is performed.
+
+`distinct()` rejects limit/skip/orderBy combinations explicitly, including limit(0); point keys and filters still intersect. Its unmodified results are sorted, unique, non-null SQLite values. Reads materialize selected rows and objects; use bounded paging, not downstream pipeline truncation, to limit allocation.

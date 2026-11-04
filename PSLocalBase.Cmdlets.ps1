@@ -3,8 +3,8 @@
     PSLocalBase.Cmdlets.ps1 - Native PowerShell Cmdlet & Pipeline Adapter for PSLocalBase.
 
 .DESCRIPTION
-    Provides an idiomatic PowerShell cmdlet interface (Verb-Noun, pipeline streaming,
-    -WhatIf, -Confirm, tab completion) built as a pure, zero-overhead adapter on top
+    Provides an idiomatic PowerShell cmdlet interface (Verb-Noun, pipeline integration,
+    -WhatIf, -Confirm, tab completion) built as a PowerShell adapter on top
     of the PSLocalBase fluent engine.
 
     Preserves 100% interoperability with the primary fluent API ($db.collection().get()).
@@ -14,6 +14,59 @@
 # Module Execution Context & Session Management
 # ---------------------------------------------------------------------------
 $script:CurrentLocalBaseConnection = $null
+# Identity is separate from payload properties, including colliding metadata names.
+$script:LocalBaseIdentity = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+
+function Register-LocalBaseDocumentIdentity {
+    param($Document, [string]$Collection, [string]$Id, [bool]$Wrapped = $false)
+    $original = @{}
+    foreach ($name in @('_localbase_collection', '_localbase_key')) {
+        if ($Document.PSObject.Properties[$name]) { $original[$name] = $Document.$name }
+    }
+    $syntheticId = -not $Document.PSObject.Properties['id']
+    $script:LocalBaseIdentity.Add($Document, @{ Collection = $Collection; Id = $Id; Original = $original; SyntheticId = $syntheticId; Wrapped = $Wrapped })
+    Add-Member -InputObject $Document -NotePropertyName '_localbase_collection' -NotePropertyValue $Collection -Force
+    Add-Member -InputObject $Document -NotePropertyName '_localbase_key' -NotePropertyValue $Id -Force
+    if ($syntheticId) { Add-Member -InputObject $Document -NotePropertyName 'id' -NotePropertyValue $Id }
+}
+
+function Resolve-LocalBaseDocumentIdentity {
+    param($Document, [string]$Collection, [string]$Id)
+    $identity = $null
+    if ($null -ne $Document) { $null = $script:LocalBaseIdentity.TryGetValue($Document, [ref]$identity) }
+    if (-not $Collection) {
+        if ($identity) { $Collection = $identity.Collection }
+        elseif ($Document.Collection) { $Collection = $Document.Collection }
+        elseif ($Document._localbase_collection) { $Collection = $Document._localbase_collection }
+    }
+    if (-not $Id) {
+        if ($identity) { $Id = $identity.Id }
+        else {
+            foreach ($name in @('id', '_key', 'key', '_localbase_key')) {
+                if ($Document.$name) { $Id = $Document.$name; break }
+            }
+        }
+    }
+    return @{ Collection = $Collection; Id = $Id }
+}
+
+function ConvertTo-LocalBasePayload {
+    param($Document)
+    $identity = $null
+    if ($null -ne $Document -and $script:LocalBaseIdentity.TryGetValue($Document, [ref]$identity)) {
+        if ($identity.Wrapped) { return ,$Document.Value }
+        $clean = $Document.PSObject.Copy()
+        foreach ($name in @('_localbase_collection', '_localbase_key')) {
+            $clean.PSObject.Properties.Remove($name)
+            if ($identity.Original.ContainsKey($name)) {
+                Add-Member -InputObject $clean -NotePropertyName $name -NotePropertyValue $identity.Original[$name]
+            }
+        }
+        if ($identity.SyntheticId) { $clean.PSObject.Properties.Remove('id') }
+        return ,$clean
+    }
+    return ,$Document
+}
 
 function Get-LocalBaseExecutionContext {
     [CmdletBinding()]
@@ -59,10 +112,11 @@ function Connect-LocalBase {
         [string]$Path,
 
         [Parameter()]
+        [ValidateRange(0, 2147483647)]
         [int]$BusyTimeoutMs = 5000,
 
         [Parameter()]
-        [ValidateSet('WAL', 'DELETE', 'TRUNCATE', 'PERSIST', 'MEMORY', 'OFF')]
+        [ValidateSet('WAL', 'DELETE')]
         [string]$JournalMode = 'WAL',
 
         [Parameter()]
@@ -79,11 +133,14 @@ function Connect-LocalBase {
         synchronous = $Synchronous
     }
 
-    if ($script:CurrentLocalBaseConnection) {
-        Disconnect-LocalBase
-    }
-
+    # Opening/validating may throw. Keep the original ambient connection and transaction intact.
     $db = New-LocalBase -Path $Path -Options $opts
+    try {
+        if ($script:CurrentLocalBaseConnection) { $script:CurrentLocalBaseConnection.close() }
+    } catch {
+        $db.close()
+        throw
+    }
     $script:CurrentLocalBaseConnection = $db
 
     if ($PassThru) {
@@ -162,26 +219,29 @@ function Remove-LocalBaseDatabase {
         [switch]$Force
     )
 
-    if ($PSCmdlet.ShouldProcess($Path, "Delete database file and SQLite journals")) {
-        $resolved = $Path
+    $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    if ($PSCmdlet.ShouldProcess($resolved, "Delete database file and SQLite journals")) {
+        $targets = @($resolved, "$resolved-wal", "$resolved-shm", "$resolved-journal")
+        $locks = [System.Collections.Generic.List[System.IDisposable]]::new()
         try {
-            $resolved = [System.IO.Path]::GetFullPath($Path)
-        } catch { }
-
-        $connPath = if ($script:CurrentLocalBaseConnection) { $script:CurrentLocalBaseConnection.FilePath } else { $null }
-        if ($connPath) {
-            try { $connPath = [System.IO.Path]::GetFullPath($connPath) } catch { }
-            if ($connPath -eq $resolved) {
-                Disconnect-LocalBase
+            # Check every file before removing any. Active SQLite handles prevent
+            # exclusive access, including connections outside the ambient context.
+            foreach ($target in $targets) {
+                if (Test-Path -LiteralPath $target -ErrorAction Stop) {
+                    $item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+                    if ($item.PSIsContainer) { throw "Database path is a directory: '$target'." }
+                    if ($item.IsReadOnly -and -not $Force) { throw "Database file '$target' is read-only. Use -Force to remove it." }
+                    $locks.Add([System.IO.File]::Open($target, 'Open', 'Read', 'None'))
+                }
             }
+        } catch {
+            throw [System.IO.IOException]::new("Cannot remove database '$resolved'. Close all connections and check file permissions. $($_.Exception.Message)", $_.Exception)
+        } finally {
+            foreach ($fileLock in $locks) { $fileLock.Dispose() }
         }
-
-        [System.GC]::Collect()
-        [System.GC]::WaitForPendingFinalizers()
-
-        foreach ($target in @($Path, "$Path-wal", "$Path-shm", "$Path-journal")) {
-            if (Test-Path -LiteralPath $target) {
-                Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        foreach ($target in $targets) {
+            if (Test-Path -LiteralPath $target -ErrorAction Stop) {
+                Remove-Item -LiteralPath $target -Force:$Force -ErrorAction Stop
             }
         }
     }
@@ -213,7 +273,7 @@ function New-LocalBaseCollection {
     .EXAMPLE
         New-LocalBaseCollection -Name "customers"
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true, Position = 0)]
         [string]$Name,
@@ -223,7 +283,7 @@ function New-LocalBaseCollection {
     )
 
     $ctx = Get-LocalBaseExecutionContext -Database $Database
-    $null = $ctx.createCollection($Name)
+    if ($PSCmdlet.ShouldProcess($Name, "Create collection")) { $null = $ctx.createCollection($Name) }
 }
 
 function Remove-LocalBaseCollection {
@@ -277,7 +337,7 @@ function New-LocalBaseIndex {
     .EXAMPLE
         New-LocalBaseIndex -Collection "users" -Field "email" -Unique
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true, Position = 0)]
         [string]$Collection,
@@ -293,7 +353,7 @@ function New-LocalBaseIndex {
     )
 
     $ctx = Get-LocalBaseExecutionContext -Database $Database
-    $null = $ctx.collection($Collection).createIndex($Field, [bool]$Unique)
+    if ($PSCmdlet.ShouldProcess("$Collection/$Field", "Create index")) { $null = $ctx.collection($Collection).createIndex($Field, [bool]$Unique) }
 }
 
 function Remove-LocalBaseIndex {
@@ -328,7 +388,13 @@ function Remove-LocalBaseIndex {
 function Get-LocalBaseDocument {
     <#
     .SYNOPSIS
-        Queries and retrieves documents from a collection with pipeline streaming.
+        Materializes selected documents, then emits each document to the pipeline.
+        Use -First/-Skip to bound reads; downstream Select-Object -First does not reduce database reading.
+    .DESCRIPTION
+        JSON objects expose their payload properties. Top-level arrays, scalars and null
+        expose the payload in Value. Set/Add unwrap these trusted envelopes; Remove uses
+        their private identity. Missing point reads emit no item. Distinct rejects paging
+        and ordering modifiers. Unsupported numeric comparisons throw instead of rounding.
     .EXAMPLE
         Get-LocalBaseDocument -Collection "users" -Id "usr_100"
     .EXAMPLE
@@ -397,16 +463,15 @@ function Get-LocalBaseDocument {
         if ($Select) {
             $q = $q.select($Select)
         }
-        $doc = $q.get()
-        if ($null -ne $doc) {
-            Add-Member -InputObject $doc -NotePropertyName '_localbase_collection' -NotePropertyValue $Collection -Force
-            Add-Member -InputObject $doc -NotePropertyName '_localbase_key' -NotePropertyValue $Id -Force
-            if (-not $doc.PSObject.Properties['id']) {
-                Add-Member -InputObject $doc -NotePropertyName 'id' -NotePropertyValue $Id -Force
-            }
-            return $doc
+        $entry = $q.get(@{ keys = $true })
+        if ($null -ne $entry) {
+            $doc = $entry.data
+            $wrapped = $null -eq $doc -or $doc -isnot [System.Management.Automation.PSCustomObject]
+            if ($wrapped) { $doc = [pscustomobject]@{ Value = $doc } }
+            Register-LocalBaseDocumentIdentity -Document $doc -Collection $Collection -Id $Id -Wrapped $wrapped
+            $PSCmdlet.WriteObject($doc, $false)
         }
-        return $null
+        return
     }
 
     $q = $col
@@ -463,18 +528,15 @@ function Get-LocalBaseDocument {
     $results = $q.get(@{ keys = $true })
     if ($null -eq $results) { return }
 
-    # Stream results through the pipeline
+    # Emit the already materialized results through the pipeline
     foreach ($entry in $results) {
         if ($null -ne $entry) {
             $item = $entry.data
-            if ($null -eq $item) { $item = [PSCustomObject]@{} }
+            $wrapped = $null -eq $item -or $item -isnot [System.Management.Automation.PSCustomObject]
+            if ($wrapped) { $item = [pscustomobject]@{ Value = $item } }
 
-            Add-Member -InputObject $item -NotePropertyName '_localbase_collection' -NotePropertyValue $Collection -Force
-            Add-Member -InputObject $item -NotePropertyName '_localbase_key' -NotePropertyValue $entry.key -Force
-            if (-not $item.PSObject.Properties['id']) {
-                Add-Member -InputObject $item -NotePropertyName 'id' -NotePropertyValue $entry.key -Force
-            }
-            Write-Output $item
+            Register-LocalBaseDocumentIdentity -Document $item -Collection $Collection -Id $entry.key -Wrapped $wrapped
+            $PSCmdlet.WriteObject($item, $false)
         }
     }
 }
@@ -495,6 +557,8 @@ function Add-LocalBaseDocument {
         [string]$Collection,
 
         [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 1)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
         [object]$Data,
 
         [Parameter(Position = 2)]
@@ -505,25 +569,13 @@ function Add-LocalBaseDocument {
     )
 
     process {
-        if ($null -eq $Data) { return }
-
-        $cleanData = $Data
-        if ($Data -is [System.Management.Automation.PSCustomObject]) {
-            $cleanData = $Data.PSObject.Copy()
-            if ($cleanData.PSObject.Properties['_localbase_collection']) {
-                $cleanData.PSObject.Properties.Remove('_localbase_collection')
-            }
-            if ($cleanData.PSObject.Properties['_localbase_key']) {
-                $cleanData.PSObject.Properties.Remove('_localbase_key')
-            }
-        }
+        $cleanData = ConvertTo-LocalBasePayload $Data
 
         $ctx = Get-LocalBaseExecutionContext -Database $Database
         $col = $ctx.collection($Collection)
 
         if ($Id) {
-            $col.doc($Id).set($cleanData)
-            return $Id
+            return $col.add($cleanData, $Id)
         } else {
             return $col.add($cleanData)
         }
@@ -540,16 +592,18 @@ function Set-LocalBaseDocument {
         $user.status = 'Inactive'
         $user | Set-LocalBaseDocument
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     [Alias('sld')]
     param(
-        [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 0)]
         [string]$Collection,
 
-        [Parameter(Position = 1, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 1)]
         [string]$Id,
 
         [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 2)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
         [object]$Data,
 
         [Parameter()]
@@ -557,23 +611,9 @@ function Set-LocalBaseDocument {
     )
 
     process {
-        if ($null -eq $Data) { return }
-
-        $targetCollection = $Collection
-        $targetId = $Id
-
-        if (-not $targetCollection) {
-            if ($Data.PSObject.Properties['Collection']) { $targetCollection = $Data.Collection }
-            elseif ($Data.PSObject.Properties['collection']) { $targetCollection = $Data.collection }
-            elseif ($Data.PSObject.Properties['_localbase_collection']) { $targetCollection = $Data._localbase_collection }
-        }
-
-        if (-not $targetId) {
-            if ($Data.PSObject.Properties['id']) { $targetId = $Data.id }
-            elseif ($Data.PSObject.Properties['_localbase_key']) { $targetId = $Data._localbase_key }
-            elseif ($Data.PSObject.Properties['_key']) { $targetId = $Data._key }
-            elseif ($Data.PSObject.Properties['key']) { $targetId = $Data.key }
-        }
+        $identity = Resolve-LocalBaseDocumentIdentity -Document $Data -Collection $Collection -Id $Id
+        $targetCollection = $identity.Collection
+        $targetId = $identity.Id
 
         if (-not $targetCollection) {
             throw [System.ArgumentException]::new("Collection name must be specified via -Collection or pipeline object.")
@@ -583,20 +623,11 @@ function Set-LocalBaseDocument {
         }
 
         # Strip internal decoration metadata if piped from Get-LocalBaseDocument
-        $cleanData = $Data
-        if ($Data -is [System.Management.Automation.PSCustomObject]) {
-            $cleanData = $Data.PSObject.Copy()
-            if ($cleanData.PSObject.Properties['_localbase_collection']) {
-                $cleanData.PSObject.Properties.Remove('_localbase_collection')
-            }
-            if ($cleanData.PSObject.Properties['_localbase_key']) {
-                $cleanData.PSObject.Properties.Remove('_localbase_key')
-            }
-        }
+        $cleanData = ConvertTo-LocalBasePayload $Data
 
         $ctx = Get-LocalBaseExecutionContext -Database $Database
         $col = $ctx.collection($targetCollection)
-        $null = $col.doc($targetId).set($cleanData)
+        if ($PSCmdlet.ShouldProcess("$targetCollection/$targetId", "Set document")) { $null = $col.doc($targetId).set($cleanData) }
     }
 }
 
@@ -613,10 +644,10 @@ function Update-LocalBaseDocument {
     [CmdletBinding(SupportsShouldProcess = $true)]
     [Alias('uld')]
     param(
-        [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 0)]
         [string]$Collection,
 
-        [Parameter(Position = 1, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 1)]
         [string]$Id,
 
         [Parameter(Mandatory = $true, Position = 2)]
@@ -630,22 +661,9 @@ function Update-LocalBaseDocument {
     )
 
     process {
-        $targetCollection = $Collection
-        $targetId = $Id
-
-        if ($InputObject) {
-            if (-not $targetCollection) {
-                if ($InputObject.PSObject.Properties['Collection']) { $targetCollection = $InputObject.Collection }
-                elseif ($InputObject.PSObject.Properties['collection']) { $targetCollection = $InputObject.collection }
-                elseif ($InputObject.PSObject.Properties['_localbase_collection']) { $targetCollection = $InputObject._localbase_collection }
-            }
-            if (-not $targetId) {
-                if ($InputObject.PSObject.Properties['_localbase_key']) { $targetId = $InputObject._localbase_key }
-                elseif ($InputObject.PSObject.Properties['id']) { $targetId = $InputObject.id }
-                elseif ($InputObject.PSObject.Properties['_key']) { $targetId = $InputObject._key }
-                elseif ($InputObject.PSObject.Properties['key']) { $targetId = $InputObject.key }
-            }
-        }
+        $identity = Resolve-LocalBaseDocumentIdentity -Document $InputObject -Collection $Collection -Id $Id
+        $targetCollection = $identity.Collection
+        $targetId = $identity.Id
 
         if (-not $targetCollection) {
             throw [System.ArgumentException]::new("Collection name must be specified via -Collection or pipeline object.")
@@ -656,7 +674,7 @@ function Update-LocalBaseDocument {
 
         if ($PSCmdlet.ShouldProcess("$targetCollection/$targetId", "Update document fields")) {
             $ctx = Get-LocalBaseExecutionContext -Database $Database
-            $null = $ctx.collection($targetCollection).doc($targetId).update($Data)
+            $null = $ctx.collection($targetCollection).doc($targetId).update((ConvertTo-LocalBasePayload $Data))
         }
     }
 }
@@ -674,10 +692,10 @@ function Remove-LocalBaseDocument {
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     [Alias('rld')]
     param(
-        [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 0)]
         [string]$Collection,
 
-        [Parameter(Position = 1, ValueFromPipelineByPropertyName = $true)]
+        [Parameter(Position = 1)]
         [string]$Id,
 
         [Parameter(ValueFromPipeline = $true)]
@@ -691,22 +709,9 @@ function Remove-LocalBaseDocument {
     )
 
     process {
-        $targetCollection = $Collection
-        $targetId = $Id
-
-        if ($InputObject) {
-            if (-not $targetCollection) {
-                if ($InputObject.PSObject.Properties['Collection']) { $targetCollection = $InputObject.Collection }
-                elseif ($InputObject.PSObject.Properties['collection']) { $targetCollection = $InputObject.collection }
-                elseif ($InputObject.PSObject.Properties['_localbase_collection']) { $targetCollection = $InputObject._localbase_collection }
-            }
-            if (-not $targetId) {
-                if ($InputObject.PSObject.Properties['_localbase_key']) { $targetId = $InputObject._localbase_key }
-                elseif ($InputObject.PSObject.Properties['id']) { $targetId = $InputObject.id }
-                elseif ($InputObject.PSObject.Properties['_key']) { $targetId = $InputObject._key }
-                elseif ($InputObject.PSObject.Properties['key']) { $targetId = $InputObject.key }
-            }
-        }
+        $identity = Resolve-LocalBaseDocumentIdentity -Document $InputObject -Collection $Collection -Id $Id
+        $targetCollection = $identity.Collection
+        $targetId = $identity.Id
 
         $ctx = Get-LocalBaseExecutionContext -Database $Database
 
@@ -815,15 +820,28 @@ function Invoke-LocalBaseTransaction {
     )
 
     $ctx = Get-LocalBaseExecutionContext -Database $Database
+    # Reject same-connection nesting before changing ambient state.
     $null = $ctx.beginTransaction()
+    $previousConnection = $script:CurrentLocalBaseConnection
+    $previousPreference = $ErrorActionPreference
     try {
-        $result = & $ScriptBlock
+        $script:CurrentLocalBaseConnection = $ctx
+        $ErrorActionPreference = 'Stop'
+        # Caller-created scriptblocks retain their session state. Inject the
+        # preference into the invocation scope instead of only this module scope.
+        $variables = [System.Collections.Generic.List[System.Management.Automation.PSVariable]]::new()
+        $variables.Add([System.Management.Automation.PSVariable]::new('ErrorActionPreference', 'Stop'))
+        $result = $ScriptBlock.InvokeWithContext($null, $variables, @())
         $null = $ctx.commit()
         return $result
     }
     catch {
-        try { $null = $ctx.rollback() } catch { }
+        try { $null = $ctx.rollback() } catch { Write-Verbose "Rollback failed: $($_.Exception.Message)" }
         throw
+    }
+    finally {
+        $script:CurrentLocalBaseConnection = $previousConnection
+        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -832,11 +850,11 @@ function Start-LocalBaseTransaction {
     .SYNOPSIS
         Manually starts an atomic transaction on the database.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter()]$Database)
 
     $ctx = Get-LocalBaseExecutionContext -Database $Database
-    $null = $ctx.beginTransaction()
+    if ($PSCmdlet.ShouldProcess("Database", "Begin transaction")) { $null = $ctx.beginTransaction() }
 }
 
 function Complete-LocalBaseTransaction {

@@ -50,7 +50,8 @@ Check 'H2 writes leave the query they were called on unchanged' {
     if ($doc.get().extra -ne 1) { throw 'doc().update() reset the target key' }
     $q = $db.collection('c').where('n', '<=', 3)
     [void]$q.add(@{ n = 99 })
-    [void]$q.upsert(@{ id = 'u1'; n = 100 })
+    Assert-Throws { [void]$q.upsert(@{ id = 'u1'; n = 100 }) } 'filtered upsert must not ignore its filter'
+    [void]$db.collection('c').upsert(@{ id = 'u1'; n = 100 })
     if ($q.count() -ne 2) { throw "add()/upsert() cleared the filter: count=$($q.count())" }
     $doc.delete()
     if ($db.collection('c').count() -ne 5) { throw 'delete() after set() removed more than its document' }
@@ -229,7 +230,9 @@ Check 'S3 oversized or deeply nested documents fail without leaking content' {
     if ($db.collection('c').doc('ok').get().v -ne 1) { throw 'A healthy document became unreadable' }
     $small = New-LocalBase -Path ':memory:' -Options @{ maxDocumentBytes = 64 }
     try {
-        $small.collection('c').doc('big').set(@{ v = ('x' * 200) })
+        Assert-Throws { $small.collection('c').doc('big').set(@{ v = ('x' * 200) }) } 'write maxDocumentBytes'
+        # Raw SQL can still introduce oversized external data; reads must guard it.
+        [void]$small.query('INSERT INTO c (key, doc) VALUES (?, ?);', @('big', ('{"v":"' + ('x' * 200) + '"}')))
         Assert-Throws { [void]$small.collection('c').doc('big').get() } 'maxDocumentBytes'
     } finally { $small.close() }
     $caseSensitive = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
