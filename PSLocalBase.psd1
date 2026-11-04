@@ -3,7 +3,7 @@
     RootModule           = 'PSLocalBase.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '2.0.3'
+    ModuleVersion        = '2.1.0'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop', 'Core')
@@ -81,7 +81,7 @@
             Tags         = @('Database', 'NoSQL', 'LocalDB', 'DocumentDB', 'SQLite', 'EmbeddedDB', 'Windows', 'JSON', 'DocumentStore', 'WinSqlite3')
             ProjectUri   = 'https://github.com/cmartineztech/PSLocalBase'
             LicenseUri   = 'https://github.com/cmartineztech/PSLocalBase/blob/main/LICENSE'
-            ReleaseNotes = '2.0.3: Engine hardening (Bridge v5 with pslocalbase_numeric native numeric guard, doc()/where() AND intersection, serialization size/depth limits, not-like normalization), complete native Cmdlets pipeline integration (22 cmdlets, 7 aliases), and 22 isolated test suites (100% pass in PS 5.1 & PS 7+).'
+            ReleaseNotes = '2.1.0: Introduces 22 native PowerShell cmdlets and 7 aliases with pipeline support, hardened database engine (Bridge v5 with pslocalbase_numeric native numeric guard, mandatory empty delete filter rejection, SessionState relative path resolution, and ConditionalWeakTable identity isolation). Clean, verified lightweight package distribution (~55 KB).'
         }
     }
 }
