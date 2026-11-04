@@ -2,6 +2,40 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-04
+
+### Added
+- Complete native PowerShell Cmdlets layer (22 approved cmdlets, 7 aliases) with advanced pipeline streaming support and `-WhatIf`/`-Confirm` handling.
+- Automated pipeline identity tracking decoupled from user payloads via `ConditionalWeakTable`.
+- Transaction script block execution with automatic rollback via `Invoke-LocalBaseTransaction`.
+
+### Fixed & Hardened
+- Mandatory rejection of empty `-Filter @{}` without `-Id` in `Remove-LocalBaseDocument` to prevent accidental mass deletion.
+- Logical AND conjunction for point lookup + filter in both Fluent queries and Cmdlet deletions (`-Id` with `-Filter`).
+- Resolution of relative backup paths against PowerShell session location (`SessionState`) in `Backup-LocalBaseDatabase`.
+- Auxiliary table filtering in `collectionGroup()` via `_IsDocumentTable` contract qualification.
+- Native numeric guard in C# Bridge v5 (`pslocalbase_numeric`) preserving IEEE 754 precision and rejecting unsafe comparisons.
+
+### Packaging
+- Verified lightweight package distribution containing exclusively the 7 core engine, cmdlet, and metadata files (~55 KB).
+- Automated pre-upload validation asserting zero extraneous files (excluding `.codegraph`, `_TESTS`, `_DOCS`, `Playground`, and CI).
+
+## [2.0.5] - 2026-11-04
+
+### Packaging
+- Build the NuGet archive in a temporary local repository and inspect its actual entries before uploading.
+- Block publication unless the archive contains exactly the seven runtime/metadata files, the generated nuspec and standard NuGet infrastructure metadata.
+- Upload the inspected archive itself and verify its SHA256 immediately before sending, rather than rebuilding a package during Gallery publication.
+- Keep `PSLocalBase.Cmdlets.ps1` separate. No database engine or cmdlet behavior changes.
+
+## [2.0.4] - 2026-11-04
+
+### Packaging
+- Prepare Gallery publication from a validated staging directory containing only `PSLocalBase.psd1`, `PSLocalBase.psm1`, `PSLocalBase.Cmdlets.ps1`, `InitWinSqlite3Native.ps1`, `LICENSE`, `README.md` and `CHANGELOG.md`.
+- Keep the cmdlet adapter separate, preserving the source layout and all 22 functions and 7 aliases.
+- Exclude repository-only assets, including `.codegraph`, CI configuration, tests, Playground, extended documentation, local databases, logs and temporary benchmark outputs.
+- Retain the 2.0.3 runtime behavior and native bridge version 5; this release corrects packaging only.
+
 ## [2.0.3] - 2026-11-04
 
 The numeric guard requires native bridge version 5. Restart PowerShell after upgrading an already loaded module.

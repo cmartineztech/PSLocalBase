@@ -109,4 +109,4 @@ try {
 - [Technical Specification](SPECIFICATION.md): storage model and API contract.
 - [Security Policy](../SECURITY.md): threat model and safe use of `query()`.
 - [Playground](../Playground/README.md): a WPF app to explore a database visually.
-- [Changelog](../CHANGELOG.md): what changed in 2.0.0.
+- [Changelog](../CHANGELOG.md): what changed in 2.1.0.
