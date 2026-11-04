@@ -2,7 +2,7 @@
 
 All notable changes to PSLocalBase are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.3] - 2026-11-04
 
 The numeric guard requires native bridge version 5. Restart PowerShell after upgrading an already loaded module.
 
