@@ -7,9 +7,9 @@
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-brightgreen.svg)](#zero-dependencies-guarantee)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **PSLocalBase** is a lightweight, zero-dependency embedded document (NoSQL / Key-Value) database engine for PowerShell, inspired by the JavaScript library [Localbase](https://github.com/samuk190/localbase).<br>
+> **PSLocalBase** is a local JSON document database for PowerShell—not just a SQLite wrapper. Store, query, and pipe documents as native PowerShell objects, making structured data in automation easier to manage than hand-maintained JSON or CSV files.
 >
-> Under the hood, it operates as a native NoSQL Document Store built on top of Windows' pre-installed SQLite engine (`winsqlite3.dll`) using its built-in JSON functions. It incurs zero overhead by running in-memory P/Invoke directly in C, returns native PowerShell objects (`[PSCustomObject]`) with seamless dot-notation access, and provides full support for arrays and nested document structures.<br>
+> It uses Windows' built-in SQLite engine (`winsqlite3.dll`) and its JSON functions under the hood, with no external dependencies. Documents can include arrays and nested structures.
 >
 > 📖 **Full Documentation:** For step-by-step walkthroughs, full code examples, and advanced usage, see the [Full Documentation (_DOCS/)](_DOCS/).
 
