@@ -677,7 +677,7 @@ Measure-LocalBaseDocument -Collection "processes" -Field "CPU" -Average -Maximum
 Disconnect-LocalBase
 ```
 
-> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for the complete reference of all 24 cmdlets, parameter sets, installation from the GitHub `dev` branch, short interactive aliases (`gld`, `ald`, `uld`, `rld`), and operational automation scripts.
+> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for the complete reference of all 22 cmdlets, parameter sets, installation from the GitHub `dev` branch, short interactive aliases (`gld`, `ald`, `uld`, `rld`), and operational automation scripts.
 
 ---
 

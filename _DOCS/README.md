@@ -150,7 +150,7 @@ Import-Module PSLocalBase
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 * **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows; importing on Linux or macOS throws `PlatformNotSupportedException`.
-* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 19-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
+* **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 22-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.
 * **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---

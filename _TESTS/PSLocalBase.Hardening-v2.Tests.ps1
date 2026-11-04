@@ -183,6 +183,8 @@ Check 'M6 collectionGroup resolves tables at query time and exposes _collection 
     $group = $db.collectionGroup('logs_*')
     $db.collection('logs_2').drop()
     $db.collection('logs_3').doc('c').set(@{ n = 3 })
+    # Create a non-document SQLite table matching the pattern (lacks key and doc columns)
+    $null = $db.query("CREATE TABLE logs_custom (id INTEGER PRIMARY KEY, note TEXT);")
     $keys = (@($group.get(@{ keys = $true })).key | Sort-Object) -join ','
     if ($keys -ne 'a,c' -or $group.count() -ne 2) { throw "Stale group tables: $keys" }
     if (@($group.where('_collection', '=', 'logs_3').get()).Count -ne 1) { throw '_collection filter never matched' }

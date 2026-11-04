@@ -292,7 +292,7 @@ All serialized writes enforce `maxDocumentBytes` (default 16MB, UTF-16 code unit
 
 ## 6. Acceptance Criteria Verification Matrix
 
-The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1) (84 of 84 passing on both PowerShell 5.1 and PowerShell 7+). The full runner executes 19 suites in total (see [_TESTS/README.md](../_TESTS/README.md)).
+The core acceptance criteria below are verified by [_TESTS/PSLocalBase.Tests.ps1](../_TESTS/PSLocalBase.Tests.ps1) (84 of 84 passing on both PowerShell 5.1 and PowerShell 7+). The full runner executes 22 suites in total (see [_TESTS/README.md](../_TESTS/README.md)).
 
 | ID | Test Category | Specification & Verification Criteria | Status |
 | :--- | :--- | :--- | :---: |

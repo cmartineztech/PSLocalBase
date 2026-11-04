@@ -240,6 +240,17 @@ Test-CmdletCase 'C05 - Pipeline Chaining (Get -> Remove) & -WhatIf Safety' {
     Remove-LocalBaseDocument -Collection 'tasks' -Filter @{ done = $false } -Confirm:$false
     $finalCount = Get-LocalBaseDocument -Collection 'tasks' -Count
     if ($finalCount -ne 0) { throw "Expected 0 tasks after filter deletion, got $finalCount" }
+
+    # Combined Id and Filter: does NOT delete if filter does not match
+    $null = Add-LocalBaseDocument -Collection 'tasks' -Id 't_cond' -Data @{ role = 'admin' }
+    Remove-LocalBaseDocument -Collection 'tasks' -Id 't_cond' -Filter @{ role = 'guest' } -Confirm:$false
+    $survived = Get-LocalBaseDocument -Collection 'tasks' -Id 't_cond'
+    if ($null -eq $survived) { throw "Remove-LocalBaseDocument with non-matching filter deleted the document!" }
+
+    # Combined Id and Filter: DOES delete when filter matches
+    Remove-LocalBaseDocument -Collection 'tasks' -Id 't_cond' -Filter @{ role = 'admin' } -Confirm:$false
+    $deleted = Get-LocalBaseDocument -Collection 'tasks' -Id 't_cond'
+    if ($null -ne $deleted) { throw "Remove-LocalBaseDocument with matching filter failed to delete document!" }
 }
 
 # ---------------------------------------------------------------------------
@@ -429,6 +440,24 @@ Test-CmdletCase 'C11 - Backup-LocalBaseDatabase (Hot Snapshot)' {
         $bSecret = $bDb.collection('vault').first()
         if ($bSecret.secret -ne 'TopSecretData') { throw "Backup content mismatch" }
         $bDb.close()
+
+        # Relative destination path test
+        $tempDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString('N'))
+        $null = [System.IO.Directory]::CreateDirectory($tempDir)
+        try {
+            Push-Location $tempDir
+            $relBackup = ".\vault_relative.db"
+            Backup-LocalBaseDatabase -DestinationPath $relBackup
+            if (-not (Test-Path $relBackup)) { throw "Relative path backup was not created at current location" }
+            $relDb = New-LocalBase -Path $relBackup
+            if ($relDb.collection('vault').first().secret -ne 'TopSecretData') { throw "Relative backup content mismatch" }
+            $relDb.close()
+        } finally {
+            Pop-Location
+            if (Test-Path $tempDir) {
+                [System.IO.Directory]::Delete($tempDir, $true)
+            }
+        }
     } finally {
         if (Test-Path $backupPath) { Remove-LocalBaseDatabase -Path $backupPath -Confirm:$false }
     }

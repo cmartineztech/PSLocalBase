@@ -277,22 +277,25 @@ class PSLocalBase : System.IDisposable {
     # -----------------------------------------------------------------------
     # Fluent Navigation Methods
     # -----------------------------------------------------------------------
+    hidden [bool] _IsDocumentTable([string]$tableName) {
+        if ($tableName -notmatch [PSLocalBase]::IdentifierPattern) { return $false }
+        $cols = $this._ExecuteBoundQuery("SELECT name FROM pragma_table_info(?);", @($tableName))
+        $hasKey = $false
+        $hasDoc = $false
+        foreach ($c in $cols) {
+            if ($c[0] -eq "key") { $hasKey = $true }
+            if ($c[0] -eq "doc") { $hasDoc = $true }
+        }
+        return ($hasKey -and $hasDoc)
+    }
+
     [string[]] getCollections() {
         $this._EnsureOpen()
         $rows = $this._ExecuteBoundQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", @())
         $names = [System.Collections.Generic.List[string]]::new()
         foreach ($r in $rows) {
             $tableName = $r[0]
-            # Names come from the database file, which may be untrusted.
-            if ($tableName -notmatch [PSLocalBase]::IdentifierPattern) { continue }
-            $cols = $this._ExecuteBoundQuery("SELECT name FROM pragma_table_info(?);", @($tableName))
-            $hasKey = $false
-            $hasDoc = $false
-            foreach ($c in $cols) {
-                if ($c[0] -eq "key") { $hasKey = $true }
-                if ($c[0] -eq "doc") { $hasDoc = $true }
-            }
-            if ($hasKey -and $hasDoc) {
+            if ($this._IsDocumentTable($tableName)) {
                 $names.Add($tableName)
             }
         }
@@ -2480,7 +2483,7 @@ class PSLocalBase : System.IDisposable {
         $matched = [System.Collections.Generic.List[string]]::new()
         foreach ($row in $allTables) {
             $tableName = $row[0]
-            if ($tableName -match $patternRegex -and $tableName -match [PSLocalBase]::IdentifierPattern) {
+            if ($tableName -match $patternRegex -and $this._IsDocumentTable($tableName)) {
                 $matched.Add($tableName)
             }
         }

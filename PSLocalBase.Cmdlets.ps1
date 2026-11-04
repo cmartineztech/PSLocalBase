@@ -199,7 +199,8 @@ function Backup-LocalBaseDatabase {
     )
 
     $ctx = Get-LocalBaseExecutionContext -Database $Database
-    $cleanPath = $DestinationPath -replace "'", "''"
+    $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationPath)
+    $cleanPath = $resolvedPath -replace "'", "''"
     $null = $ctx.query("VACUUM INTO '$cleanPath';")
 }
 
@@ -719,8 +720,15 @@ function Remove-LocalBaseDocument {
             if (-not $targetCollection) {
                 throw [System.ArgumentException]::new("Collection name must be specified via -Collection or pipeline object.")
             }
-            if ($PSCmdlet.ShouldProcess("$targetCollection/$targetId", "Delete document")) {
-                $null = $ctx.collection($targetCollection).doc($targetId).delete()
+            $target = $ctx.collection($targetCollection).doc($targetId)
+            if ($Filter) {
+                foreach ($k in $Filter.Keys) {
+                    $target = $target.where($k, '==', $Filter[$k])
+                }
+            }
+            $desc = if ($Filter) { "$targetCollection/$targetId (filtered by $(($Filter.Keys -join ', ')))" } else { "$targetCollection/$targetId" }
+            if ($PSCmdlet.ShouldProcess($desc, "Delete document")) {
+                $null = $target.delete()
             }
         }
         elseif ($Filter -and $targetCollection) {

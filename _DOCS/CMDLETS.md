@@ -72,10 +72,10 @@ Import-Module .\PSLocalBase.psd1 -Force
 
 ### Verification & Get-Help
 
-Once imported, verify that all 24 cmdlets and aliases are active, and test the native `Get-Help` integration:
+Once imported, verify that all 22 cmdlets and 7 aliases are active, and test the native `Get-Help` integration:
 
 ```powershell
-# List all 24 native cmdlets:
+# List all 22 native cmdlets:
 Get-Command -Module PSLocalBase -CommandType Function
 
 # List short interactive aliases (gld, ald, sld, uld, rld):
@@ -322,7 +322,7 @@ Update-LocalBaseDocument -Collection "users" -Id "usr_1" -Data @{
 ```
 
 #### `Remove-LocalBaseDocument` (Alias: `rld`)
-Deletes documents by ID, by filter, or via the pipeline with `-WhatIf` and `-Confirm` safety.
+Deletes documents by ID, by filter, or via the pipeline with `-WhatIf` and `-Confirm` safety. When both `-Id` and `-Filter` are specified, deletion uses logical AND semantics matching the Fluent API (`$col.doc($Id).where(...)`), deleting the document only if it satisfies the filter criteria.
 
 ```powershell
 Remove-LocalBaseDocument [[-Collection] <string>] `
@@ -337,6 +337,9 @@ Remove-LocalBaseDocument [[-Collection] <string>] `
 ```powershell
 # By ID:
 Remove-LocalBaseDocument -Collection "users" -Id "usr_100" -Confirm:$false
+
+# By ID with Filter (conditional point deletion):
+Remove-LocalBaseDocument -Collection "users" -Id "usr_100" -Filter @{ role = 'guest' } -Confirm:$false
 
 # Pipeline deletion with simulation:
 Get-LocalBaseDocument -Collection "temp" -Filter @{ expired = $true } |
