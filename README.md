@@ -696,19 +696,33 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
 For the complete breakdown of all 84 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
-### Independent Security & Quality Audit (Multi-Agent Evaluation)
+### Independent Security & Quality Audit (Multi-Agent Evaluations)
 
-> ℹ️ **Multi-Agent Evaluation:** The evaluation scorecard below reflects the latest independent multi-agent audit (Gemini High) on the `dev` branch with 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For detailed historical defect resolution matrices, see [_DOCS/FINAL-VERIFICATION-REPORT-v2.md](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
+> ℹ️ **Multi-Agent Cross-Model Validation:** The evaluation scorecards below reflect independent multi-agent audits conducted on the `dev` branch using both **Gemini High** and **ChatGPT Sol (GPT-6.1 Sol)** with 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For detailed defect resolution and historical matrices, see [_DOCS/FINAL-VERIFICATION-REPORT-v2.md](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
 
-| Category | Score | Status |
-|---|:---:|:---:|
-| **Security** | **100/100** | ✅ Exceptional (0 critical/high vulnerabilities, SQL injection immunity, pre-compilation single-statement isolation, empty filter rejection) |
-| **Code Quality** | **99/100** | ✅ Exceptional (Zero PSScriptAnalyzer warnings/errors, SafeHandle lifecycle, unmanaged memory determinism, C# P/Invoke interop) |
-| **Functionality** | **100/100** | ✅ Exceptional (Full 22 native cmdlets pipeline & 7 aliases, atomic array mutations, AND query intersections, -WhatIf support) |
-| **Architecture** | **98/100** | ✅ Solid & Resilient (Clean 3-tier modular separation, immutable Query Builder, ConditionalWeakTable identity decoupling) |
-| **Documentation** | **99.5/100** | ✅ Comprehensive (Synchronized suite/cmdlet metrics, executable end-to-end service management and audit workflows) |
-| **Test Coverage** | **100/100** | ✅ Flawless (22/22 suites PASS on PS 7 & PS 5.1, 320+ test scenarios, multi-process inter-edition WAL concurrency, 84/84 acceptance criteria) |
-| **Overall Score** | **99.4/100** | ✅ **Enterprise / Production Ready (Grade A+ Certified)** |
+#### 1. Gemini High Multi-Agent Evaluation (Overall: 99.4 / 100 — Grade A+ Certified)
+
+| Category | Score | Status | Highlights |
+|---|:---:|:---:|---|
+| **Security** | **100/100** | ✅ Exceptional | 0 vulnerabilities, SQL injection immunity, single-statement isolation, empty filter rejection |
+| **Code Quality** | **99/100** | ✅ Exceptional | Zero PSScriptAnalyzer warnings/errors, SafeHandle lifecycle, C# P/Invoke interop |
+| **Functionality** | **100/100** | ✅ Exceptional | Full 22 native cmdlets pipeline & 7 aliases, atomic array mutations, AND query intersections |
+| **Architecture** | **98/100** | ✅ Solid & Resilient | Clean 3-tier modular separation, immutable Query Builder, ConditionalWeakTable |
+| **Documentation** | **99.5/100** | ✅ Comprehensive | Synchronized suite/cmdlet metrics, executable service management and audit workflows |
+| **Test Coverage** | **100/100** | ✅ Flawless | 22/22 suites PASS on PS 7 & PS 5.1, 320+ test scenarios, multi-process WAL concurrency |
+| **Overall Score** | **99.4/100** | ✅ **Certified** | **Enterprise / Production Ready** |
+
+#### 2. ChatGPT Sol (GPT-6.1 Sol Medium) Multi-Agent Evaluation (Overall: 89.7 / 100)
+
+| Category | Score | Status | Highlights |
+|---|:---:|:---:|---|
+| **Security** | **85/100** | ✅ Hardened | Excellent injection defense, immediate WAL locking, verified index creation |
+| **Code Quality** | **90/100** | ✅ High Quality | Defensive P/Invoke, SafeHandle determinism, SessionState path handling |
+| **Functionality** | **96/100** | ✅ Robust | Solid document engine, strict `-Filter @{}` guard, explicit key pipeline flow |
+| **Architecture** | **80/100** | ✅ Modular | Native WinSqlite3 bridge, decoupled identity tracking, single-class engine |
+| **Documentation** | **95/100** | ✅ Comprehensive | Exact 22 suites / 84 TC / 22 cmdlets count, executable automation scripts |
+| **Test Coverage** | **92/100** | ✅ High Coverage | 22/22 suites PASS, extensive acceptance & edge case validation |
+| **Overall Score** | **89.7/100** | ✅ **Approved** | **Production Acceptable (Hardened v2.0.3)** *(Baseline pre-fixes: 84.3 / 100)* |
 
 ---
 
