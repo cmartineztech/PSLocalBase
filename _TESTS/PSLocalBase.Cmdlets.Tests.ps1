@@ -251,6 +251,22 @@ Test-CmdletCase 'C05 - Pipeline Chaining (Get -> Remove) & -WhatIf Safety' {
     Remove-LocalBaseDocument -Collection 'tasks' -Id 't_cond' -Filter @{ role = 'admin' } -Confirm:$false
     $deleted = Get-LocalBaseDocument -Collection 'tasks' -Id 't_cond'
     if ($null -ne $deleted) { throw "Remove-LocalBaseDocument with matching filter failed to delete document!" }
+
+    # Empty filter without Id must be rejected and preserve all documents
+    $null = Add-LocalBaseDocument -Collection 'tasks' -Id 't_preserved1' -Data @{ v = 1 }
+    $null = Add-LocalBaseDocument -Collection 'tasks' -Id 't_preserved2' -Data @{ v = 2 }
+    $preCount = Get-LocalBaseDocument -Collection 'tasks' -Count
+    $threwEmpty = $false
+    try {
+        Remove-LocalBaseDocument -Collection 'tasks' -Filter @{} -Confirm:$false
+    } catch [System.ArgumentException] {
+        if ($_.Exception.Message -match 'Clear-LocalBaseCollection') {
+            $threwEmpty = $true
+        }
+    }
+    if (-not $threwEmpty) { throw "Remove-LocalBaseDocument with empty filter must throw ArgumentException directing to Clear-LocalBaseCollection" }
+    $postCount = Get-LocalBaseDocument -Collection 'tasks' -Count
+    if ($postCount -ne $preCount) { throw "Empty filter rejection must preserve all documents in collection; expected $preCount, got $postCount" }
 }
 
 # ---------------------------------------------------------------------------

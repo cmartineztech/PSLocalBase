@@ -79,7 +79,7 @@ Once imported, verify that all 22 cmdlets and 7 aliases are active, and test the
 Get-Command -Module PSLocalBase -CommandType Function
 
 # List short interactive aliases (gld, ald, sld, uld, rld):
-Get-Alias -Module PSLocalBase
+Get-Command -Module PSLocalBase -CommandType Alias
 
 # Test built-in native PowerShell Get-Help:
 Get-Help Get-LocalBaseDocument -Full
@@ -485,16 +485,21 @@ Import-Module PSLocalBase -Force
 # 1. Connect via Cmdlet
 Connect-LocalBase -Path "./mixed.db"
 
-# 2. Use Cmdlet pipeline to ingest initial data
-Get-Service | Select-Object -First 20 Name, Status | 
+# 2. Use Cmdlet pipeline to ingest initial data (convert enum properties to string for clean querying)
+Get-Service | Select-Object -First 20 Name, @{ N='Status'; E={ $_.Status.ToString() } } | 
     Add-LocalBaseDocument -Collection "services"
 
-# 3. Retrieve database handle and execute advanced Fluent query
+# 3. Retrieve database handle and execute advanced Fluent query with storage keys
 $db = Get-LocalBaseConnection
-$runningServices = $db.collection("services").where("Status", "==", "Running").get()
+$runningServices = $db.collection("services").where("Status", "==", "Running").get(@{ keys = $true })
 
-# 4. Pipe Fluent query output back into a Cmdlet!
-$runningServices | Update-LocalBaseDocument -Data @{ audited = $true }
+# 4. Update documents via Cmdlet with explicit Collection and storage Key
+$runningServices | ForEach-Object {
+    Update-LocalBaseDocument -Collection "services" -Id $_.key -Data @{ audited = $true }
+}
+
+# (Alternative) Query and update directly via Cmdlet pipeline with automatic identity tracking:
+# Get-LocalBaseDocument -Collection "services" -Filter @{ Status = 'Running' } | Update-LocalBaseDocument -Data @{ audited = $true }
 
 # 5. Disconnect
 Disconnect-LocalBase
@@ -523,8 +528,9 @@ try {
     Write-Host "Creating index on service Name..." -ForegroundColor Cyan
     New-LocalBaseIndex -Collection "services" -Field "Name" -Unique
 
-    Write-Host "Streaming current services into database..." -ForegroundColor Cyan
-    Get-Service | Select-Object Name, DisplayName, Status, StartType | 
+    Write-Host "Clearing previous snapshot and streaming current services into database..." -ForegroundColor Cyan
+    Clear-LocalBaseCollection -Collection "services" -Confirm:$false
+    Get-Service | Select-Object Name, DisplayName, @{ N='Status'; E={ $_.Status.ToString() } }, @{ N='StartType'; E={ $_.StartType.ToString() } } | 
         Add-LocalBaseDocument -Collection "services"
 
     Write-Host "Detecting automatic services that are stopped..." -ForegroundColor Yellow

@@ -732,6 +732,9 @@ function Remove-LocalBaseDocument {
             }
         }
         elseif ($Filter -and $targetCollection) {
+            if ($Filter.Count -eq 0) {
+                throw [System.ArgumentException]::new("Empty -Filter is not allowed when deleting without -Id. To delete all documents in a collection, use Clear-LocalBaseCollection.")
+            }
             $col = $ctx.collection($targetCollection)
             $q = $col
             foreach ($k in $Filter.Keys) {

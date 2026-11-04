@@ -123,7 +123,7 @@
 
 ### 17. Session Hygiene
 - The native bridge script runs inside a script block, so importing the module leaves no helper variables (such as `$csharpCode`) in the caller's session.
-- The bridge exposes `BridgeVersion`; version 4 or newer is required. If an older bridge is already loaded in the session, opening a connection fails with a request to restart PowerShell instead of running against mismatched native code. The failed initialization closes its connection.
+- The bridge exposes `BridgeVersion`; version 5 or newer is required. If an older bridge is already loaded in the session, opening a connection fails with a request to restart PowerShell instead of running against mismatched native code. The failed initialization closes its connection.
 
 ---
 

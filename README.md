@@ -88,7 +88,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
-- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 19-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
+- **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 22-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.
 - **Engine Dependency:** Relies strictly on Microsoft's native `C:\Windows\System32\winsqlite3.dll`, pre-installed on modern Windows installations.
 
 ---
@@ -129,7 +129,7 @@ cd PSLocalBase
 # 2. Import directly from the local manifest:
 Import-Module .\PSLocalBase.psd1 -Force
 
-# 3. (Optional) Run the complete 19-suite test runner:
+# 3. (Optional) Run the complete 22-suite test runner:
 .\_TESTS\run-tests.ps1
 
 # 4. (Optional) Launch the visual GUI Playground:
@@ -696,9 +696,9 @@ pwsh -ExecutionPolicy Bypass -File .\_TESTS\run-tests.ps1
 
 For the complete breakdown of all 84 verified acceptance criteria, test categories, and validations, see the [Test Suite Documentation](_TESTS/README.md).
 
-### Independent Security & Quality Audit (Hardened Release)
+### Independent Security & Quality Audit (Historical Baseline v2.0)
 
-PSLocalBase underwent an exhaustive audit and multi-agent review across security, data integrity, concurrency, memory safety, and documentation, achieving a **98.8/100 (Enterprise / Production Ready)** rating with 22 out of 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For historical details and defect resolution matrices, see the [Final Verification Report](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
+> ℹ️ **Historical Baseline:** The evaluation scorecard below reflects the v2 release audit documented in [_DOCS/FINAL-VERIFICATION-REPORT-v2.md](_DOCS/FINAL-VERIFICATION-REPORT-v2.md) with 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. Subsequent development commits undergo ongoing automated multi-agent assessments. For historical defect resolution matrices, see the [Final Verification Report](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
 
 | Category | Score | Status |
 |---|:---:|:---:|
