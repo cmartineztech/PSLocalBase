@@ -84,9 +84,9 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 | Tier | Operating System / Environment | Testing & Support Status |
 | :--- | :--- | :--- |
-| **Automated validation** | Windows x64 | GitHub Actions uses `windows-latest`; local suites cover PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). This does not establish coverage of every Windows version. |
-| **Requires environment validation** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Requires a compatible native `winsqlite3.dll` with the JSON functions used by the module, plus a working PowerShell/.NET environment. These environments are not separately covered by the CI matrix. |
-| **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
+| **Automated validation** | Windows x64 & Windows ARM64 | GitHub Actions matrix runs in parallel on `windows-latest` (x64) and `windows-11-arm` (native ARM64); suites cover PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop) in both architectures. |
+| **Requires environment validation** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Requires a compatible native `winsqlite3.dll` with the JSON functions used by the module, plus a working PowerShell/.NET environment. |
+| **Architectural Bounds** | UNC / SMB shares, Non-Windows OS | Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. Linux/macOS are unsupported due to the native Windows `winsqlite3.dll` dependency. |
 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
 - **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, executes the 22-suite test runner (`_TESTS/run-tests.ps1`) on both PowerShell 7 and Windows PowerShell 5.1, and verifies the Playground in both editions on every push and pull request.

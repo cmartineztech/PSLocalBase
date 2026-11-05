@@ -144,9 +144,9 @@ Import-Module PSLocalBase
 
 | Tier | Operating System / Environment | Testing & Support Status |
 | :--- | :--- | :--- |
-| **Verified in CI & Local Suites** | Windows 10 / 11 (x64) | Tested on GitHub Actions (`windows-latest`) and local workstations across PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). |
+| **Verified in CI & Local Suites** | Windows 10 / 11 (x64 & ARM64) | Tested on GitHub Actions in parallel on `windows-latest` (x64) and `windows-11-arm` (native ARM64) across PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). |
 | **Supported by Design** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Supported by design via native System32 `winsqlite3.dll` and .NET Framework 4.5+ / .NET Core runtime. |
-| **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
+| **Architectural Bounds** | UNC / SMB shares, Non-Windows OS | Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. Linux and macOS are unsupported. |
 
 * **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows; importing on Linux or macOS throws `PlatformNotSupportedException`.
 * **CI Test Suite:** Continuous integration validates the manifest, runs PSScriptAnalyzer, and executes the 22-suite test runner (`_TESTS/run-tests.ps1`) and the Playground verification on both PowerShell 7 and Windows PowerShell 5.1 on every push and pull request.

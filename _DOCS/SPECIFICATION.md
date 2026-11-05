@@ -20,7 +20,7 @@
 * **Supported PowerShell Editions:**
   * Windows PowerShell 5.1 (Desktop Edition / .NET Framework 4.x).
   * PowerShell 7.x+ (Core Edition / .NET 6+).
-* **Processor Architectures:** x64 is verified in CI and local suites. ARM64 is supported by design (the native `winsqlite3.dll` of matching bitness is resolved from System32) but is not verified in CI.
+* **Processor Architectures:** x64 and ARM64 are both verified in continuous integration via parallel GitHub Actions matrix runners (`windows-latest` for x64, `windows-11-arm` for native ARM64). The native `winsqlite3.dll` of matching bitness is resolved dynamically from System32.
 * **Not supported:** Linux and macOS. Importing on a non-Windows PowerShell 7 host throws `PlatformNotSupportedException`.
 
 ---
