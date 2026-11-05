@@ -33,3 +33,6 @@ _TESTS/temp_bench_*/
 # Release and publish scripts
 Publish-PSLocalBase.ps1
 *.nupkg
+
+# Review and audit working files
+_DOCS/reviews/
