@@ -24,6 +24,7 @@
 - [System Requirements & Compatibility](#system-requirements--compatibility)
 - [Interactive GUI Playground (WPF)](#interactive-gui-playground-wpf)
 - [Quick Start](#quick-start)
+- [Native PowerShell Cmdlets & Pipeline](#native-cmdlets)
 - [Core API Reference](#core-api-reference)
   - [Initialization](#initialization)
   - [Collections & Documents](#collections--documents)
@@ -38,7 +39,7 @@
   - [Resource Cleanup & Disposal](#resource-cleanup--disposal)
   - [Production Best Practices & Crash Resilience](#production-best-practices--crash-resilience)
 - [Test Suite & Quality Verification](#test-suite--quality-verification)
-  - [Independent Security & Quality Audit](#independent-security--quality-audit)
+  - [Independent Security & Quality Audit](#independent-security--quality-audit-multi-agent-evaluations)
 - [Architecture & Performance](#architecture--performance)
 - [Full Documentation](_DOCS/)
 - [Technical Specification](_DOCS/SPECIFICATION.md)
@@ -73,7 +74,7 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 - **No External Packages:** No NuGet packages, no PowerShell Gallery modules (`System.Data.SQLite`, `Microsoft.Data.Sqlite`), and no third-party binary downloads required.
 - **Native OS Engine:** Interacts with the native Windows library `C:\Windows\System32\winsqlite3.dll` using dynamic C# and P/Invoke compiled at runtime via `Add-Type`.
-- **Pure Unicode UTF-16:** Guaranteed non-corrupt storage and retrieval of special characters, accents, nested quotes, and multi-byte emojis (🚀🔥).
+- **Unicode UTF-16:** Native text bindings preserve special characters, accents, nested quotes, embedded NULs, and emojis (🚀🔥).
 
 ---
 
@@ -83,8 +84,8 @@ Supports 1-click **Dark Mode** & **Light Mode**, live multi-collection DataGrid 
 
 | Tier | Operating System / Environment | Testing & Support Status |
 | :--- | :--- | :--- |
-| **Verified in CI & Local Suites** | Windows 10 / 11 (x64) | Tested on GitHub Actions (`windows-latest`) and local workstations across PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). |
-| **Supported by Design** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Supported by design via native System32 `winsqlite3.dll` and .NET Framework 4.5+ / .NET Core runtime. |
+| **Automated validation** | Windows x64 | GitHub Actions uses `windows-latest`; local suites cover PowerShell 7.x (Core) and Windows PowerShell 5.1 (Desktop). This does not establish coverage of every Windows version. |
+| **Requires environment validation** | Windows Server 2019, 2022, 2025 (x64); WinPE x64 | Requires a compatible native `winsqlite3.dll` with the JSON functions used by the module, plus a working PowerShell/.NET environment. These environments are not separately covered by the CI matrix. |
 | **Unverified / Architectural Bounds** | ARM64 architectures, UNC / SMB shares | ARM64 is not currently verified in CI. Remote network shares (`\\server\share`) are explicitly blocked by design for WAL database persistence. |
 
 - **Windows only:** "PowerShell 7+" means PowerShell 7 on Windows. Importing on Linux or macOS throws `PlatformNotSupportedException`.
@@ -241,7 +242,7 @@ if (-not $db.collectionExists("users")) {
 ```
 
 #### `doc([object]$keyOrCriteria)`
-Targets a specific document by its key or by an object/hashtable that names it with a `key`, `id`, or `_key` property (other properties are rejected rather than guessed). Targeting is lazy: the collection table is created by the first write (`set`, `add`, `upsert`, `update`), never by `.doc()` or a read.
+Targets a specific document by its key or by an object/hashtable that names it with a `key`, `id`, or `_key` property, in that precedence order. Other properties are ignored; criteria without an identity property are rejected. Targeting is lazy: the collection table is created by the first write (`set`, `add`, `upsert`, `update`), never by `.doc()` or a read.
 ```powershell
 # By string key
 $db.collection("orders").doc("ord-001")
@@ -310,7 +311,7 @@ $db.collection("users").doc("usr-100").update(@{
 
 ### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
 
-Modify arrays inside documents atomically and idempotently without having to read-modify-write the full document.
+Modify arrays inside documents without implementing the read/merge/write yourself. `update()` reads, merges, and rewrites the document inside a transaction; array union/remove operations are idempotent.
 
 #### `[PSLocalBase]::ArrayUnion([object[]]$values)`
 Adds elements to an array only if they are not already present (set union).
@@ -344,7 +345,7 @@ $db.collection("users").doc("usr-100").update(@{
 
 ### Secondary Expression Indexes (`createIndex`, `dropIndex`)
 
-Speed up high-volume JSON lookups or enforce data integrity (like unique emails or usernames) using SQLite JSON1 expression indexes.
+Enforce uniqueness (such as unique emails or usernames) using SQLite JSON expression indexes. Compatible raw SQL can use them for lookups; current fluent queries wrap JSON extraction with a numeric guard and generally cannot use these indexes for filtering or sorting. See the [index tradeoff](_DOCS/SPECIFICATION.md#numeric-comparison-domain).
 
 #### `createIndex([string]$field, [hashtable]$options)`
 Creates a B-Tree index on a JSON field. Supports `unique = $true` and `order = "asc"|"desc"`.
@@ -381,7 +382,7 @@ Supported Operators:
 - Array Intersection: `array-contains-any` (matches if document array contains ANY of the given values)
 - Exclusion: `not-in`, `-notin` (matches documents where the field is present, not null, and not in the set; `$null` members are ignored)
 - Array length and JSON type: `length`, `length>`, ... and `type` (`null`, `integer`, `real`, `number`, `text`, `array`, `object`, `true`, `false`, `boolean`), also available as `whereLength()` and `whereType()`
-- Field Existence: `exists`, `-exists`, `missing`, `-missing` (checks field presence; `$true` matches explicit null and non-null values, `$false` matches missing fields), also available as `whereExists()` and `whereMissing()`
+- Field Existence: `exists`, `-exists`, `missing`, `-missing`. For `exists`, `$true` matches present fields (including explicit null) and `$false` matches missing fields; `missing` reverses this. Helpers `whereExists()` and `whereMissing()` express the positive tests.
 
 ```powershell
 # Boolean filter
@@ -403,10 +404,10 @@ $multiTag = $db.collection("articles").where("tags", "array-contains-any", @("de
 $nonFruit = $db.collection("products").where("category", "not-in", @("fruit", "dairy")).get()
 
 # Multiple chained filters (AND)
-$result = $db.collection("products") `
-    .where("category", "=", "Electronics") `
-    .where("price", "<", 500) `
-    .get()
+$result = $db.collection("products").
+    where("category", "=", "Electronics").
+    where("price", "<", 500).
+    get()
 
 # Field existence & missing checks
 $unassigned = $db.collection("tasks").whereMissing("assignee").get()
@@ -433,7 +434,7 @@ $page2 = $db.collection("products").orderBy("price", "asc").skip(10).limit(10).g
 ```
 
 #### `count()`
-Returns the total count of documents in the collection or matching `.where()` filters directly in SQL without loading rows into memory.
+Returns the count matching the query, including its filters and `limit()`/`skip()` window, directly in SQL without loading documents into memory.
 ```powershell
 # Total count in collection
 $total = $db.collection("users").count()
@@ -443,7 +444,7 @@ $activeAdmins = $db.collection("users").where("active", "=", $true).where("role"
 ```
 
 #### `get([hashtable]$options)`
-Executes the query and returns data deserialized as `[PSCustomObject]`.
+Executes the query and deserializes JSON. Object documents become `[PSCustomObject]`; arrays, scalars, and null retain their JSON value shape. A point lookup returns the document or `$null`; collection queries return an array.
 ```powershell
 # Standard retrieval (array of PSCustomObjects)
 $docs = $db.collection("users").get()
@@ -478,7 +479,7 @@ $activeUsers = $db.query("SELECT key, json_extract(doc, '$.role') AS role FROM u
 
 `query()` executes exactly one statement; text after the first `;` other than whitespace or comments is rejected. It is a trusted-code escape hatch: never build its SQL from user input, pass values through the parameter array.
 
-> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), instant boolean verification (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type/existence queries (`whereLength()`, `whereType()`, `whereExists()`, `whereMissing()`), see the [Full Documentation (`_DOCS/`)](_DOCS/#4-querying--filtering).
+> 💡 **Advanced Query Operators & Aggregations:** For selective field projections (`.select()`), first-item retrieval (`.first()`), existence checks (`.exists()`), unique values (`.distinct()`), numeric aggregations (`.sum()`, `.avg()`, `.min()`, `.max()`), and array/type/existence queries (`whereLength()`, `whereType()`, `whereExists()`, `whereMissing()`), see the [Full Documentation (`_DOCS/`)](_DOCS/#4-querying--filtering).
 
 ---
 
@@ -492,11 +493,11 @@ $order = $db.collection("orders").doc("ord-001").populate("customerId", "users",
 Write-Host "Order amount: $($order.amount) | Customer: $($order.customer.name)"
 
 # Populate during collection queries with orderBy/limit
-$orders = $db.collection("orders") `
-    .populate("customerId", @{ from = "users"; as = "customer" }) `
-    .orderBy("amount", "desc") `
-    .limit(10) `
-    .get()
+$orders = $db.collection("orders").
+    populate("customerId", @{ from = "users"; as = "customer" }).
+    orderBy("amount", "desc").
+    limit(10).
+    get()
 ```
 
 ---
@@ -506,7 +507,7 @@ $orders = $db.collection("orders") `
 Combine query results across different collections or query sharded collections matching a pattern.
 
 #### `.union($otherQuery)` and `.unionAll($otherQuery)`
-Merges results of two queries directly in SQL. `union` deduplicates identical records; `unionAll` keeps all records for maximum throughput.
+Merges results of two queries directly in SQL. `union` deduplicates identical `(key, doc)` SQL rows, so equal payloads with different keys remain separate; `unionAll` keeps all rows.
 
 Modifiers before composition belong to their branch. Modifiers after `union()`/`unionAll()` apply once to the combined result. Both branch plans are captured independently; a branch's existing pagination or projection is not reused as global state.
 ```powershell
@@ -524,14 +525,14 @@ $totalActive = $qNorth.union($qSouth).count()
 ```
 
 #### `.collectionGroup([string]$pattern)`
-Queries across multiple collections matching a wildcard pattern (e.g. date-sharded collections or category tables). Matching tables are resolved each time the query runs. Each returned document includes a `._collection` property indicating its origin table, which can also be used in `where()`. A collection group cannot be combined with `union()`/`unionAll()`.
+Queries across multiple collections matching a wildcard pattern (e.g. date-sharded collections or category tables). Matching tables are resolved each time the query runs. The returned view adds `._collection` indicating the origin table, replacing any stored property of that name; projections can omit it. It can also be used in `where()`. A collection group cannot be combined with `union()`/`unionAll()`.
 ```powershell
 # Search all monthly log collections for critical errors
-$errors = $db.collectionGroup("logs_2026_*") `
-    .where("level", "==", "ERROR") `
-    .orderBy("timestamp", "desc") `
-    .limit(25) `
-    .get()
+$errors = $db.collectionGroup("logs_2026_*").
+    where("level", "==", "ERROR").
+    orderBy("timestamp", "desc").
+    limit(25).
+    get()
 
 foreach ($err in $errors) {
     Write-Host "[$($err._collection)] $($err.timestamp): $($err.message)"
@@ -561,11 +562,11 @@ $db.collection("temporary_data").drop()
 $db.collection("temporary_data").delete()
 ```
 > [!NOTE]
-> * **Accidental data loss protection:** Calling `.delete()` with pagination (`.limit()`, `.skip()`) is rejected with an `InvalidOperationException` to guarantee targeted deletions never unintentionally purge an entire collection.
+> * **Mutation modifiers:** Calling `.delete()` with `.orderBy()`, `.limit()`, or `.skip()` is rejected with an `InvalidOperationException`. An unfiltered collection `.delete()` explicitly removes every document.
 > * **Collection-level `deleteDatabase()` guard:** `.deleteDatabase()` must be invoked on the root `$db` instance (`$db.deleteDatabase()`). Invoking it on a child collection (`$col.deleteDatabase()`) is explicitly rejected with `InvalidOperationException` to prevent Windows file-lock conflicts.
 
 #### Deleting the Entire Database File
-Closes all connections and deletes the database file, along with any `-wal`, `-shm` and `-journal` files. The path is taken from SQLite itself, not from a property that could have been modified:
+Closes this root connection (invalidating its child query references) and attempts to delete the database file and any `-wal`, `-shm` and `-journal` files. Independently opened connections are not closed; close those first. Deletion failures throw an `IOException`. The path is taken from SQLite itself:
 ```powershell
 # Must be executed on the root instance:
 $db.deleteDatabase()
@@ -611,7 +612,7 @@ The native connection is owned by a `SafeHandle`, so an instance that is never c
 
 #### Guaranteed Cleanup with `try / finally`
 
-When writing production scripts, background jobs, or automation pipelines, always encapsulate database operations in a `try / finally` block. The `finally` block is guaranteed by PowerShell to execute even if an unhandled error or exception aborts the script, ensuring disk file locks are released instantly:
+When writing production scripts, background jobs, or automation pipelines, encapsulate database operations in a `try / finally` block. PowerShell runs `finally` during normal completion and exception unwinding so the connection is released promptly. Forced process termination or a machine outage can prevent the block from running.
 
 ```powershell
 Import-Module .\PSLocalBase.psd1
@@ -634,7 +635,7 @@ try {
 
 #### What Happens if a Script Crashes Without Calling `.close()`?
 
-* **Data Integrity & Zero Corruption:** PSLocalBase operates in SQLite's Write-Ahead Logging (`WAL`) mode with full ACID compliance and `synchronous = NORMAL`. If a PowerShell process or script crashes mid-execution, uncommitted transactions are cleanly discarded upon recovery. With `synchronous = NORMAL`, SQLite syncs the WAL file during checkpoints, providing optimal write throughput while completely protecting against process crashes (for systems requiring strict power-loss durability across sudden physical outages, `synchronous = FULL` is available via configuration options).
+* **Recovery and durability:** File databases default to WAL with `synchronous = NORMAL`. SQLite recovers interrupted transactions after a process crash. A script error in an interactive host can leave a live transaction open until rollback or close. `NORMAL` can lose recent committed transactions after a power outage; use `synchronous = FULL` when stronger commit durability is needed. Hardware, filesystem failures, and unsafe custom SQL can still compromise data; maintain backups.
 * **Process Exit Cleanup:** When a PowerShell process terminates (e.g. running via `powershell -File script.ps1`, GitHub Actions, or Windows Scheduled Tasks), the Windows kernel automatically reclaims all unmanaged handles and closes all file descriptors.
 * **Interactive Sessions:** If a script fails inside an interactive session (VS Code or PowerShell console), the handle stays open while a variable still references the instance. Invoke `$db.close()` to release the file lock immediately; unreferenced instances are closed by the finalizer.
 
@@ -646,14 +647,16 @@ try {
 
 ---
 
+<a id="native-cmdlets"></a>
+
 ## 🛠️ Native PowerShell Cmdlets & Pipeline (DevOps Mode)
 
 > [!NOTE]
-> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+> **Available in 2.1.0 and `main`:** Install from PowerShell Gallery or import the manifest from a clone of `main`. The package includes the cmdlet adapter.
 
 Prefer idiomatic PowerShell cmdlets with pipeline integration (`|`), `-WhatIf`, `-Confirm`, and native `Get-Help`?
 
-In addition to the primary Fluent API (`$db.collection().where().get()`), PSLocalBase includes a **100% native PowerShell Cmdlet adapter** (`PSLocalBase.Cmdlets.ps1`). Both styles share the exact same C# SQLite engine and can even be mixed:
+In addition to the primary Fluent API (`$db.collection().where().get()`), PSLocalBase exports **22 PowerShell advanced functions**. The adapter (`PSLocalBase.Cmdlets.ps1`) and Fluent API share the native SQLite engine through the C# interop bridge and can be mixed:
 
 ```powershell
 # 1. Connect to session
@@ -677,7 +680,7 @@ Measure-LocalBaseDocument -Collection "processes" -Field "CPU" -Average -Maximum
 Disconnect-LocalBase
 ```
 
-> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for the complete reference of all 22 cmdlets, parameter sets, installation from the GitHub `dev` branch, short interactive aliases (`gld`, `ald`, `sld`, `uld`, `rld`), and operational automation scripts.
+> 📖 **Full Cmdlets Documentation:** See [_DOCS/CMDLETS.md](_DOCS/CMDLETS.md) for all 22 cmdlets, parameter sets, installation, seven aliases (including `Open-LocalBase` and `Close-LocalBase`), and operational automation scripts. Connection, collection, and transaction cmdlets complement the document pipeline. Advanced fluent features such as `populate`, unions, collection groups, and custom SQL remain available through the connection object; cmdlet projections use `Get-LocalBaseDocument -Select`.
 
 ---
 
@@ -698,36 +701,11 @@ For the complete breakdown of all 84 verified acceptance criteria, test categori
 
 ### Independent Security & Quality Audit (Multi-Agent Evaluations)
 
-> ℹ️ **Multi-Agent Cross-Model Validation:** The evaluation scorecards below reflect independent multi-agent audits conducted on the `dev` branch using both **Gemini High** and **ChatGPT Sol (GPT-6.1 Sol)** with 22 automated suites passing on both PowerShell Core 7 and Windows PowerShell 5.1. For detailed defect resolution and historical matrices, see [_DOCS/FINAL-VERIFICATION-REPORT-v2.md](_DOCS/FINAL-VERIFICATION-REPORT-v2.md).
+The [consolidated review table](_DOCS/CONSOLIDATED-REVIEW.md) is the single scorecard for the historical Gemini High and Sol reviews and the new six-area Sol Medium reassessment of the current `main` working copy. It records each baseline, scoring scope, findings and validation evidence. The new Antigravity reviews could not start because the provider failed to open its sessions; no new Antigravity scores are claimed.
 
-#### 1. Gemini High Multi-Agent Evaluation (Overall: 99.4 / 100 — Grade A+ Certified)
-
-| Category | Score | Status | Highlights |
-|---|:---:|:---:|---|
-| **Security** | **100/100** | ✅ Exceptional | 0 vulnerabilities, SQL injection immunity, single-statement isolation, empty filter rejection |
-| **Code Quality** | **99/100** | ✅ Exceptional | Zero PSScriptAnalyzer warnings/errors, SafeHandle lifecycle, C# P/Invoke interop |
-| **Functionality** | **100/100** | ✅ Exceptional | Full 22 native cmdlets pipeline & 7 aliases, atomic array mutations, AND query intersections |
-| **Architecture** | **98/100** | ✅ Solid & Resilient | Clean 3-tier modular separation, immutable Query Builder, ConditionalWeakTable |
-| **Documentation** | **99.5/100** | ✅ Comprehensive | Synchronized suite/cmdlet metrics, executable service management and audit workflows |
-| **Test Coverage** | **100/100** | ✅ Flawless | 22/22 suites PASS on PS 7 & PS 5.1, 320+ test scenarios, multi-process WAL concurrency |
-| **Overall Score** | **99.4/100** | ✅ **Certified** | **Enterprise / Production Ready** |
-
-#### 2. ChatGPT Sol (GPT-6.1 Sol Medium) Multi-Agent Evaluation (Overall: 94 / 100)
-
-Final review dated November 4, 2026, of commit `e93d1ac33137522380d26ee355ac92bc75a9ae9b`: three specialist agents reviewed security, code and documentation, while the coordinating agent verified functionality and ran the full validation. The four areas have equal weight: `(96 + 90 + 96 + 93) / 4 = 93.75`, rounded to **94/100**. These are review judgments, not coverage percentages or a security certification. Architecture and test coverage were not assigned separate scores in this evaluation.
-
-| Category | Score | Status | Highlights |
-|---|:---:|:---:|---|
-| **Security** | **96/100** | ✅ Verified | Empty-filter rejection, ID/filter intersection and pipeline identity verified in both editions; no new confirmed security defects in the reviewed changes |
-| **Code Quality** | **90/100** | ✅ High Quality | Defensive P/Invoke, SafeHandle determinism, SessionState path handling |
-| **Functionality** | **96/100** | ✅ Robust | Solid document engine, strict `-Filter @{}` guard, explicit key pipeline flow |
-| **Documentation** | **93/100** | ✅ Verified | Corrected service enums, explicit fluent keys, alias command, suite counts and bridge requirement; a minor historical score discrepancy remained at the reviewed commit |
-| **Overall Score** | **94/100** | ✅ **Technical review closed** | **93.75/100 before rounding; equal weight across the four areas** |
-
-Validation for this review: **22/22 suites passed in PowerShell 7.6.9 and 22/22 in Windows PowerShell 5.1.26100.9843**, without retries; Playground verification passed in both editions, PSScriptAnalyzer 1.25.0 reported zero errors/warnings, and additional SQLite integrity checks returned `ok`. The documented secondary-index performance tradeoff remains accepted. No critical defects or data corruption were observed in the checks performed; the review does not establish universal absence of defects or exhaustive API parity.
+The new Sol reviews found one low-severity constructor-options validation inconsistency and several minor documentation discrepancies, which were corrected afterward. Both full 22-suite runners, both Playground automation checks, manifest validation, static analysis and local package inspection passed. Scores are reviewer judgments rather than coverage percentages or certification. See the [historical release record](_DOCS/FINAL-VERIFICATION-REPORT-v2.md) for the earlier validation provenance.
 
 ---
-
 ## Architecture & Performance
 
 ```mermaid
@@ -751,7 +729,7 @@ flowchart TD
 #### 1. Embedded NoSQL Document Model
 * **Dedicated Collection Tables:** Every collection is an isolated table structured as `(key TEXT PRIMARY KEY, doc TEXT)`.
 * **Zero-Schema Overhead:** Documents are stored as standard JSON payloads, allowing arbitrary schema evolution without migrations.
-* **Instant Key Access:** Single document queries (`.doc("id").get()`) leverage SQLite's B-Tree primary key index for $O(1)$ / $O(\log N)$ sub-millisecond retrieval.
+* **Indexed Key Access:** Single document queries (`.doc("id").get()`) use SQLite's B-Tree primary key index with $O(\log N)$ lookup; latency depends on workload and environment.
 
 #### 2. SQLite JSON1 Engine (`json_extract`)
 * **Pushdown Query Execution:** Filters created with `.where()` evaluate properties inside the SQLite engine via `json_extract(doc, '$.field')`, completely bypassing the overhead of deserializing unneeded rows into PowerShell memory.
@@ -760,15 +738,15 @@ flowchart TD
 * **Type-Aware Evaluations:** Translates PowerShell booleans (`$true`/`$false`) to SQLite JSON integer representations (`1`/`0`), supports SQL `IN` array operators, string `LIKE` wildcards, and `NULL` checks.
 
 #### 3. Native Concurrency & PRAGMA Tuning
-* **`PRAGMA journal_mode = WAL;`** Activates Write-Ahead Logging. Readers never block writers, and writers never block readers across processes.
-* **`PRAGMA synchronous = NORMAL;`** Optimizes I/O throughput by eliminating redundant disk sync flushes while maintaining complete ACID crash-safety.
-* **`PRAGMA busy_timeout = 5000;`** Automatically waits up to 5,000 milliseconds when multiple threads or processes write concurrently, avoiding `SQLITE_BUSY` errors.
-* **`PRAGMA cache_size = -16000;`** Reserves a 16 MB in-memory page cache for high-throughput query execution.
+* **`PRAGMA journal_mode = WAL;`** Default for file databases, allowing readers alongside a writer. Writes remain serialized and operations can still encounter locks. `wal = $false` selects DELETE mode; in-memory databases use MEMORY mode.
+* **`PRAGMA synchronous = NORMAL;`** Default with WAL; `FULL` is the default with `wal = $false`. See the durability limits above.
+* **`PRAGMA busy_timeout = 5000;`** Default lock wait of up to 5,000 milliseconds; operations can still fail with `SQLITE_BUSY`.
+* **`PRAGMA cache_size = -16384;`** Default page-cache target of 16 MiB, allocated as needed.
 
 #### 4. Low-Level C UTF-16 Interoperability
 * Interacts directly with `C:\Windows\System32\winsqlite3.dll` via UTF-16 APIs (`sqlite3_open16`, `sqlite3_prepare16_v2`, `sqlite3_bind_text16`, `sqlite3_column_text16`, `sqlite3_errmsg16`).
-* 100% immune to ANSI/UTF-8 conversion data corruption or multi-byte emoji truncation.
-* Fully parameterized SQL queries prevent SQL injection attacks.
+* Length-aware UTF-16 bindings preserve Unicode text and embedded NULs.
+* Fluent values use bound parameters and identifiers are validated. Custom `query()` SQL remains trusted code; bind its values and never concatenate untrusted SQL fragments.
 
 ---
 

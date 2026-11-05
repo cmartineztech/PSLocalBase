@@ -53,12 +53,14 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 22 suites, including
 
 ---
 
-## Verified Acceptance Criteria (84/84 Passed)
+## Core Acceptance Criteria (84 scenarios)
+
+The statuses below record the previously reported successful acceptance run; they are not code-coverage percentages or a guarantee that every possible input has been tested. Run the commands above to validate the current checkout. Additional suites cover behavior outside TC-01 through TC-84.
 
 | Test ID | Test Category | Validation Criteria | Status |
 | :--- | :--- | :--- | :--- |
 | **TC-01** | **Zero Dependencies** | Imports cleanly in clean PS 5.1 & PS 7+ hosts without missing assembly errors | **PASSED** |
-| **TC-02** | **PSCustomObject Typing** | All queries return `[PSCustomObject]` supporting nested dot navigation (`$obj.a.b`) | **PASSED** |
+| **TC-02** | **PSCustomObject Typing** | Object-shaped document reads return `[PSCustomObject]` supporting nested dot navigation (`$obj.a.b`); other JSON shapes retain their types | **PASSED** |
 | **TC-03** | **Unicode Integrity** | Stores and retrieves accents, quotes, and multi-byte emojis (🚀🔥🌙) identically | **PASSED** |
 | **TC-04** | **Cross-Connection Visibility** | Two connections to one WAL file see each other's commits (sequential; concurrency is covered by `WalMultiProcess`) | **PASSED** |
 | **TC-05** | **Pointer Release** | Calling `.close()` unbinds file handles so `Remove-Item` succeeds immediately | **PASSED** |
@@ -106,15 +108,15 @@ The automated test runner (`_TESTS/run-tests.ps1`) executes 22 suites, including
 | **TC-47** | **Array Operator 'array-contains'** | Native array membership testing using SQLite `json_each` for strings and numbers | **PASSED** |
 | **TC-48** | **Array Operator 'array-contains-any'** | Set intersection between document arrays and query value sets via `json_each` subqueries | **PASSED** |
 | **TC-49** | **'not-in' Operator & Null Safety** | Set exclusion with strict null-safety exclusion directly in SQLite SQL | **PASSED** |
-| **TC-50** | **Atomic Array Mutations** | In-place atomic and idempotent `ArrayUnion` and `ArrayRemove` via static sentinels and descriptors | **PASSED** |
+| **TC-50** | **Atomic Array Mutations** | Transactional document read/merge/write with idempotent `ArrayUnion` and `ArrayRemove` sentinels and descriptors | **PASSED** |
 | **TC-51** | **Relational .populate() Joins** | Dynamic `LEFT JOIN` and `json_set` compilation resolving foreign keys without N+1 overhead | **PASSED** |
 | **TC-52** | **Compound Queries (.union() / .unionAll())** | Pure SQL `UNION` (deduplication) and `UNION ALL` across collections with ordering and count | **PASSED** |
 | **TC-53** | **Sharded collectionGroup()** | Wildcard multi-collection querying (`audit_*`) with automated `._collection` origin metadata | **PASSED** |
 | **TC-54** | **Atomic Upsert** | Single-step atomic `INSERT ... ON CONFLICT(key) DO UPDATE` inserting or updating records | **PASSED** |
 | **TC-55** | **Selective Field Projection** | Native `json_object` and `json_extract` field filtering in SQL, eliminating unselected field memory overhead | **PASSED** |
 | **TC-56** | **First Result Retrieval** | Single document cursor retrieval with `LIMIT 1` returning PSCustomObject or null | **PASSED** |
-| **TC-57** | **O(1) Existence Verification** | Instant boolean verification (`SELECT 1 ... LIMIT 1`) on point lookups and filtered queries | **PASSED** |
-| **TC-58** | **Unique Values Extraction** | Native `SELECT DISTINCT json_extract()` leveraging B-Tree index scans for unique sets | **PASSED** |
+| **TC-57** | **Existence Verification** | Boolean verification (`SELECT 1 ... LIMIT 1`) on point lookups and filtered queries; no constant-time guarantee for filters | **PASSED** |
+| **TC-58** | **Unique Values Extraction** | Native `SELECT DISTINCT` extracts unique non-null values; index use is not asserted | **PASSED** |
 | **TC-59** | **Mathematical Aggregations** | Direct in-engine `SUM`, `AVG`, `MIN`, and `MAX` calculations without PowerShell memory deserialization | **PASSED** |
 | **TC-60** | **Array Length Filtering** | Evaluates array cardinality directly in C via SQLite's `json_array_length()` (`length`, `whereLength`) | **PASSED** |
 | **TC-61** | **Polymorphic Type Filtering** | Inspects dynamic NoSQL document schemas using SQLite's `json_type()` (`type`, `whereType`) | **PASSED** |

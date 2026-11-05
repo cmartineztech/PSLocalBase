@@ -8,7 +8,7 @@ Features a modern dual-pane desktop workspace built entirely with native **Power
 * **Left Pane (Interactive Code Cards):** Interactive tutorial cards for **Adding Data**, **Getting Data**, **Updating Data**, **Deleting Data**, and **Custom PowerShell Script** with live editable code snippets, target collection synchronization, and `RUN CODE ▶` buttons.
 * **Right Pane (Database Explorer & Execution Console):**
   * **Database Explorer:** Multi-collection inspector (`users`, `products`, `orders`), live DataGrid with `#`, `Document ID / Key`, and formatted JSON payloads, real-time search by key or text value, and double-click document inspection.
-  * **Execution Console:** Real-time log stream showing formatted JSON representations, execution timestamps, status badges, and sub-millisecond execution times.
+  * **Execution Console:** Log stream showing formatted JSON representations, execution timestamps, status badges, and measured execution durations in milliseconds.
   * **Live CLI Prompt:** Type any ad-hoc `$db` expression at the bottom `>` prompt and press <kbd>Enter</kbd> to execute immediately!
 * **Full Path Display:** The footer status bar and storage metrics explicitly display the canonical full path to the active SQLite database file.
 
@@ -42,6 +42,8 @@ The code cards and the `>` prompt execute whatever PowerShell you enter, with yo
 > **Zero Configuration:** The Playground automatically imports `PSLocalBase` from the local repository directory or, if downloaded standalone, from your globally installed module (`Install-Module PSLocalBase`).
 
 From PowerShell 7+ or Windows PowerShell 5.1:
+
+The Playground and its screenshots are repository companion assets and are excluded from the Gallery package. Clone/download the repository to use the launch paths below. The default database is `playground.db`; use `-DatabasePath` to select another file. `-DarkMode` takes precedence over `-Theme Light|Dark`, which takes precedence over Windows theme detection.
 
 ```powershell
 # Launch in default theme (auto-detects Windows dark mode):
@@ -93,7 +95,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 
 ## Automated Verification
 
-To run automated headless verification of all UI elements, XAML controls, theme switching, and database operations:
+To run automated headless checks of the expected named XAML controls, theme switching, and selected database operations (this is not manual visual inspection of every UI state):
 
 ```powershell
 pwsh -ExecutionPolicy Bypass -File .\Playground\verify-playground.ps1

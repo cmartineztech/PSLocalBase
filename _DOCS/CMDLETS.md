@@ -1,27 +1,28 @@
 # Native PowerShell Cmdlets & Pipeline Reference Guide
 
-PSLocalBase provides a **100% native PowerShell Cmdlet and Pipeline adapter** (`PSLocalBase.Cmdlets.ps1`). While the primary interface is a modern Fluent API (`$db.collection().where().get()`), this cmdlet layer offers an idiomatic PowerShell experience designed specifically for **DevOps automation**, **system administration scripts**, and **interactive console workflows**.
+PSLocalBase exports **22 PowerShell advanced functions and 7 aliases**, referred to as cmdlets throughout this guide. `New-LocalBase` is the connection factory; `PSLocalBase.Cmdlets.ps1` provides the remaining 21 adapter functions. While the primary interface is a modern Fluent API (`$db.collection().where().get()`), this cmdlet layer offers an idiomatic PowerShell experience for **DevOps automation**, **system administration scripts**, and **interactive console workflows**.
 
-Both styles execute on the exact same high-speed, zero-dependency C# native SQLite engine (`winsqlite3.dll`) and can be seamlessly combined within the same script.
+Both styles use the same native SQLite engine (`winsqlite3.dll`) through the module's C# interop bridge and can be combined within the same script without external database dependencies.
 
 > 🔗 **Looking for the Primary Fluent API?** If you are building applications or prefer the object-oriented NoSQL method-chaining syntax (`$db.collection().where().get()`), see the [Full PSLocalBase Fluent API Documentation](README.md) or the [Main Project README](../README.md).
 
 > [!NOTE]
-> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it today, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+> **Available in 2.1.0 and `main`:** The published module and the `main` branch include the cmdlet adapter. Windows with Windows PowerShell 5.1 or PowerShell 7+ is required; the engine uses Windows' native `winsqlite3.dll`.
 
 ---
 
 ## Table of Contents
 
-- [Installation & Setup (from GitHub `dev` Branch)](#installation--setup-from-github-dev-branch)
-  - [Option A: Clone into User Module Directory (Global Access)](#option-a-clone-into-user-module-directory-global-access)
-  - [Option B: Clone into Local Workspace](#option-b-clone-into-local-workspace)
+- [Installation & Setup](#installation--setup)
+  - [Option A: Install from PowerShell Gallery (Recommended)](#option-a-install-from-powershell-gallery-recommended)
+  - [Option B: Clone into User Module Directory from GitHub `main` Branch](#option-b-clone-into-user-module-directory-from-github-main-branch)
+  - [Option C: Clone into Local Workspace](#option-c-clone-into-local-workspace)
   - [Verification & Get-Help](#verification--get-help)
 - [Core Concepts & Architecture](#core-concepts--architecture)
   - [Session Context Management](#session-context-management)
   - [Pipeline Materialization and Bounded Reads](#pipeline-materialization-and-bounded-reads)
   - [Automatic Property Binding](#automatic-property-binding)
-  - [Safety Mechanics: `-WhatIf` & `-Confirm`](#safety-mechanics--whatif--confirm)
+  - [Safety Mechanics: `-WhatIf` & `-Confirm`](#safety-mechanics--whatif---confirm)
   - [Short Interactive Aliases](#short-interactive-aliases)
 - [Cmdlet Reference](#cmdlet-reference)
   - [1. Connection & Database Management](#1-connection--database-management)
@@ -47,7 +48,7 @@ Install-Module -Name PSLocalBase -Repository PSGallery -Scope CurrentUser
 Import-Module PSLocalBase -Force
 ```
 
-### Option B: Clone into User Module Directory from GitHub `dev` Branch
+### Option B: Clone into User Module Directory from GitHub `main` Branch
 Cloning directly into your PowerShell `$env:PSModulePath` allows you to run `Import-Module PSLocalBase` from **any** terminal or script without specifying file paths:
 
 ```powershell
@@ -58,8 +59,8 @@ $moduleDir = if ($PSVersionTable.PSEdition -eq 'Core') {
     Join-Path ([Environment]::GetFolderPath('MyDocuments')) "WindowsPowerShell\Modules\PSLocalBase"
 }
 
-# 2. Clone the 'dev' branch directly into the module folder:
-git clone -b dev https://github.com/cmartineztech/PSLocalBase.git $moduleDir
+# 2. Clone the 'main' branch directly into the module folder:
+git clone -b main https://github.com/cmartineztech/PSLocalBase.git $moduleDir
 
 # 3. Import and start using:
 Import-Module PSLocalBase -Force
@@ -69,8 +70,8 @@ Import-Module PSLocalBase -Force
 If you prefer to keep the repository in a development or working directory:
 
 ```powershell
-# 1. Clone 'dev' branch:
-git clone -b dev https://github.com/cmartineztech/PSLocalBase.git
+# 1. Clone 'main' branch:
+git clone -b main https://github.com/cmartineztech/PSLocalBase.git
 cd PSLocalBase
 
 # 2. Import directly from the downloaded location:
@@ -117,7 +118,7 @@ Get-LocalBaseDocument -Collection "nodes"
 Disconnect-LocalBase
 ```
 
-If you are working with multiple databases concurrently, simply pass `-Database $dbInstance` explicitly to any cmdlet.
+If you are working with multiple databases concurrently, pass `-Database $dbInstance` to commands that operate on a connection. `Connect-LocalBase`, `New-LocalBase`, `Get-LocalBaseConnection`, and path-based `Remove-LocalBaseDatabase` do not accept that parameter. A successful `Connect-LocalBase` replaces and closes the previous ambient connection, rolling back its uncommitted work. Use `New-LocalBase` for independent connections.
 
 ### Pipeline Materialization and Bounded Reads
 
@@ -144,7 +145,9 @@ Get-LocalBaseDocument -Collection "users" -Filter @{ status = 'Inactive' } |
 
 ### Safety Mechanics: `-WhatIf` & `-Confirm`
 
-Destructive operations (`Remove-LocalBaseDocument`, `Remove-LocalBaseCollection`, `Clear-LocalBaseCollection`) implement `[CmdletBinding(SupportsShouldProcess)]`:
+`Remove-LocalBaseDatabase`, `Remove-LocalBaseDocument`, `Remove-LocalBaseCollection`, `Clear-LocalBaseCollection`, `New-LocalBaseCollection`, `New-LocalBaseIndex`, `Remove-LocalBaseIndex`, `Set-LocalBaseDocument`, `Update-LocalBaseDocument`, and `Start-LocalBaseTransaction` support `-WhatIf` and `-Confirm`. Database and collection removal have high confirmation impact; the others use medium impact. Confirmation depends on `$ConfirmPreference` unless explicitly requested or suppressed.
+
+`Add-LocalBaseDocument`, `Connect-LocalBase`, `New-LocalBase`, `Backup-LocalBaseDatabase`, `Invoke-LocalBaseTransaction`, `Complete-LocalBaseTransaction`, and `Undo-LocalBaseTransaction` do not support these switches.
 
 ```powershell
 # Simulate deletion without modifying data:
@@ -166,12 +169,23 @@ For fast typing in the interactive PowerShell console, PSLocalBase exports stand
 | `sld` | `Set-LocalBaseDocument` | Replace / Put document |
 | `uld` | `Update-LocalBaseDocument` | Partial merge update |
 | `rld` | `Remove-LocalBaseDocument` | Delete document |
+| `Open-LocalBase` | `Connect-LocalBase` | Set ambient connection |
+| `Close-LocalBase` | `Disconnect-LocalBase` | Close connection |
 
 ---
 
 ## Cmdlet Reference
 
 ### 1. Connection & Database Management
+
+#### `New-LocalBase`
+Returns a new `[PSLocalBase]` connection without setting or replacing the ambient connection. The default path is `:memory:`. Close this connection explicitly when finished.
+
+```text
+$db = New-LocalBase [-Path <string>] [-Options <hashtable>]
+```
+
+`-Options` accepts the fluent engine's connection settings, including `wal`, `synchronous`, `busyTimeout`, `cacheSizeMB`, `depth`, `maxDocumentBytes`, `maxReadDepth`, and `debug`; see [connection options](README.md). Pass `$db` with `-Database` to use it with adapter commands.
 
 #### `Connect-LocalBase` (Alias: `Open-LocalBase`)
 Connects to an embedded SQLite database and sets it as the ambient session connection.
@@ -181,7 +195,7 @@ Connects to an embedded SQLite database and sets it as the ambient session conne
 
 All subsequent pipeline cmdlets (`Get-LocalBaseDocument`, `Add-LocalBaseDocument`, etc.) automatically route to this active connection without requiring `-Database`.
 
-```powershell
+```text
 Connect-LocalBase [-Path] <string> `
     [-BusyTimeoutMs <int>] `
     [-JournalMode <WAL|DELETE>] `
@@ -190,6 +204,8 @@ Connect-LocalBase [-Path] <string> `
 ```
 
 File-backed databases support WAL and DELETE. Unsupported journal modes are rejected before changing the ambient connection. In-memory databases use SQLite's MEMORY journal; inspect the returned connection's `JournalMode` for the effective mode.
+
+Defaults are `-BusyTimeoutMs 5000`, `-JournalMode WAL`, and `-Synchronous NORMAL`. Busy timeout must be a nonnegative 32-bit integer. Without `-PassThru`, this command emits no connection object; `-PassThru` returns the new `[PSLocalBase]` connection.
 
 *Examples:*
 ```powershell
@@ -203,12 +219,14 @@ Connect-LocalBase -Path ":memory:"
 #### `Disconnect-LocalBase` (Alias: `Close-LocalBase`)
 Closes the active database connection, checks in all resources, and releases SQLite disk file locks.
 
-```powershell
+```text
 Disconnect-LocalBase [[-Database] <PSLocalBase>]
 ```
 
 #### `Get-LocalBaseConnection`
 Returns the currently active `[PSLocalBase]` database session object.
+
+Returns no object if there is no ambient connection. If an ambient object was closed directly with `.close()`, this getter still returns that object; database commands reject a closed ambient connection.
 
 ```powershell
 $currentDb = Get-LocalBaseConnection
@@ -217,14 +235,16 @@ $currentDb = Get-LocalBaseConnection
 #### `Backup-LocalBaseDatabase`
 Performs an online, transactionally consistent live backup using SQLite `VACUUM INTO`.
 
-```powershell
+Relative destinations resolve from the current PowerShell location. The parent directory must exist; the destination must be absent or empty. `VACUUM INTO` cannot run inside an active transaction and requires support from the Windows-provided SQLite version. The command returns no object and does not support `-WhatIf` or `-Confirm`.
+
+```text
 Backup-LocalBaseDatabase [-DestinationPath] <string> [[-Database] <PSLocalBase>]
 ```
 
 #### `Remove-LocalBaseDatabase`
 Permanently deletes the database and its `-wal`, `-shm`, and `-journal` sidecars. Close all connections first (including explicit connections opened with `New-LocalBase`). Active or inaccessible files cause an actionable terminating error; the cmdlet does not disconnect them. `-Force` permits removing read-only files, but never bypasses active-file protection, `-WhatIf`, or confirmation. Missing files are a no-op; directories are rejected. Files are checked before removal, but multi-file deletion is not atomic: a later filesystem failure is reported and can leave some sidecars. Do not open new connections concurrently with removal.
 
-```powershell
+```text
 Remove-LocalBaseDatabase [-Path] <string> [-Force] [-WhatIf] [-Confirm]
 ```
 
@@ -235,7 +255,7 @@ Remove-LocalBaseDatabase [-Path] <string> [-Force] [-WhatIf] [-Confirm]
 #### `Get-LocalBaseDocument` (Alias: `gld`)
 Queries documents from a collection. Supports point lookups, filter hashtables, comparison operators, field existence, sorting, pagination, and projections.
 
-```powershell
+```text
 # Parameter Set 1: Point Lookup
 Get-LocalBaseDocument [-Collection] <string> [-Id] <string> `
     [-Select <string[]>] [[-Database] <PSLocalBase>]
@@ -252,6 +272,12 @@ Get-LocalBaseDocument [-Collection] <string> `
     [-Count] `
     [[-Database] <PSLocalBase>]
 ```
+
+Query predicates are combined with logical AND. `-Filter` entries use equality; `-Field`/`-Operator`/`-Value` accepts the fluent [filter operators](README.md#filtering-with-where), defaulting to `==`. `-Operator` and `-Value` have no effect without `-Field`; `-Descending` requires `-OrderBy` to affect ordering. An empty `-Filter` adds no predicate. Null equality matches both missing and explicit JSON-null fields; `-Exists` includes explicit null and `-Missing` tests absence.
+
+`-First` and `-Skip` must be nonnegative; `-First 0` returns no documents. `-Count` returns the count after pagination, takes precedence over `-Distinct`, and ignores `-Select`. Without `-Count`, `-Distinct` returns sorted non-null field values, ignores `-Select`, and rejects `-First`, `-Skip`, and `-OrderBy` even when paging is zero. Do not combine count, distinct, and projection when their results are intended separately.
+
+Ordinary reads emit document objects with `_localbase_collection`, `_localbase_key`, and a synthetic `id` only when the payload has no `id`. Non-object JSON documents use a `Value` envelope; see [Second-review contracts](#second-review-contracts). A missing point lookup emits nothing. Projections retain storage identity but contain only the selected payload fields: piping a projection into `Set-LocalBaseDocument` replaces the document with that projected payload.
 
 *Examples:*
 ```powershell
@@ -279,7 +305,7 @@ $total = Get-LocalBaseDocument -Collection "events" -Count
 #### `Add-LocalBaseDocument` (Alias: `ald`)
 Inserts one or more documents into a collection. Accepts objects via the PowerShell pipeline (`ValueFromPipeline = $true`) and returns each inserted key. An explicit `-Id` must be new: duplicates throw and preserve the existing document. Use `Set-LocalBaseDocument` to replace/upsert. If `-Id` is omitted, a GUID is generated. Wrap a multi-item pipeline in `Invoke-LocalBaseTransaction` when the entire batch must be atomic.
 
-```powershell
+```text
 Add-LocalBaseDocument [-Collection] <string> `
     [-Data] <object> `
     [[-Id] <string>] `
@@ -297,19 +323,21 @@ Get-Process | Select-Object ProcessName, Id, CPU |
 ```
 
 #### `Set-LocalBaseDocument` (Alias: `sld`)
-Replaces or upserts a document with an explicit target key.
+Replaces the entire document, creating it if the key is absent. Collection and key may be explicit or resolved from pipeline identity. Accepts JSON null and empty arrays. Emits no result object; use Get to read the stored document.
 
-```powershell
-Set-LocalBaseDocument [-Collection] <string> `
-    [-Id] <string> `
+```text
+Set-LocalBaseDocument [[-Collection] <string>] `
+    [[-Id] <string>] `
     [-Data] <object> `
-    [[-Database] <PSLocalBase>]
+    [[-Database] <PSLocalBase>] [-WhatIf] [-Confirm]
 ```
 
 #### `Update-LocalBaseDocument` (Alias: `uld`)
 Performs a deep recursive partial JSON merge into target documents. Supports pipeline forwarding from `Get-LocalBaseDocument`.
 
-```powershell
+Creates a document from the merge if the key is absent. `-Data` is the patch; pipeline objects bind to `-InputObject` to identify targets. Emits no result object. Use `Set-LocalBaseDocument` to replace the entire payload.
+
+```text
 Update-LocalBaseDocument [[-Collection] <string>] `
     [[-Id] <string>] `
     [-Data] <object> `
@@ -333,7 +361,9 @@ Update-LocalBaseDocument -Collection "users" -Id "usr_1" -Data @{
 #### `Remove-LocalBaseDocument` (Alias: `rld`)
 Deletes documents by ID, by filter, or via the pipeline with `-WhatIf` and `-Confirm` safety. When both `-Id` and `-Filter` are specified, deletion uses logical AND semantics matching the Fluent API (`$col.doc($Id).where(...)`), deleting the document only if it satisfies the filter criteria.
 
-```powershell
+An empty filter is rejected when there is no resolved ID; use `Clear-LocalBaseCollection` to delete every document. With an ID, an empty filter adds no restriction. Emits no count or deleted document.
+
+```text
 Remove-LocalBaseDocument [[-Collection] <string>] `
     [[-Id] <string>] `
     [-Filter <hashtable>] `
@@ -358,7 +388,9 @@ Get-LocalBaseDocument -Collection "temp" -Filter @{ expired = $true } |
 #### `Measure-LocalBaseDocument`
 Calculates mathematical aggregations (`Sum`, `Average`, `Minimum`, `Maximum`, `Count`) directly via SQLite engine primitives.
 
-```powershell
+Returns one object containing `Collection`, `Field`, and `Count`, plus only the explicitly requested aggregate properties. There is no `-Count` switch: `Count` is always included and counts all matching documents. Sum and Average use only JSON numbers (not numeric strings or booleans) and return zero if there are none. Minimum and Maximum prefer numeric values; if no numeric values exist, they compare text values, otherwise return null. Unsupported numeric values throw. Each aggregate runs as a separate query; use a transaction when a consistent view across concurrent writes is required.
+
+```text
 Measure-LocalBaseDocument [-Collection] <string> `
     [-Field] <string> `
     [-Filter <hashtable>] `
@@ -378,39 +410,39 @@ Measure-LocalBaseDocument -Collection "orders" -Field "total" -Sum -Average -Max
 #### `Get-LocalBaseCollection`
 Lists all collection tables provisioned in the database schema.
 
-```powershell
+```text
 Get-LocalBaseCollection [[-Database] <PSLocalBase>]
 ```
 
 #### `New-LocalBaseCollection`
 Explicitly provisions a collection table in the SQLite schema before inserting records.
 
-```powershell
-New-LocalBaseCollection [-Name] <string> [[-Database] <PSLocalBase>]
+```text
+New-LocalBaseCollection [-Name] <string> [[-Database] <PSLocalBase>] [-WhatIf] [-Confirm]
 ```
 
 #### `Clear-LocalBaseCollection`
 Truncates all documents in a collection while preserving the table schema and secondary indexes.
 
-```powershell
+```text
 Clear-LocalBaseCollection [-Collection] <string> [[-Database] <PSLocalBase>] [-WhatIf] [-Confirm]
 ```
 
 #### `Remove-LocalBaseCollection`
 Drops the collection table and associated SQLite index metadata.
 
-```powershell
+```text
 Remove-LocalBaseCollection [-Collection] <string> [[-Database] <PSLocalBase>] [-WhatIf] [-Confirm]
 ```
 
 #### `New-LocalBaseIndex`
 Creates a secondary expression index or unique constraint on a JSON field.
 
-```powershell
+```text
 New-LocalBaseIndex [-Collection] <string> `
     [-Field] <string> `
     [-Unique] `
-    [[-Database] <PSLocalBase>]
+    [[-Database] <PSLocalBase>] [-WhatIf] [-Confirm]
 ```
 
 *Example:*
@@ -421,7 +453,7 @@ New-LocalBaseIndex -Collection "users" -Field "email" -Unique
 #### `Remove-LocalBaseIndex`
 Drops a secondary index from a collection.
 
-```powershell
+```text
 Remove-LocalBaseIndex [-Collection] <string> `
     [-Field] <string> `
     [[-Database] <PSLocalBase>] `
@@ -437,7 +469,7 @@ Executes a scriptblock inside an atomic SQLite transaction (`BEGIN IMMEDIATE`). 
 
 Same-connection nesting is rejected before entering the inner block and does not roll back the outer transaction by itself. Nested blocks on different databases restore their respective contexts; they are independent transactions, not a distributed atomic commit. Successful pipeline output is returned only after commit.
 
-```powershell
+```text
 Invoke-LocalBaseTransaction [-ScriptBlock] <scriptblock> [[-Database] <PSLocalBase>]
 ```
 
@@ -451,13 +483,24 @@ Invoke-LocalBaseTransaction {
 
 #### Manual Transaction Commands
 For advanced scenarios requiring explicit multi-step boundary control:
+
 - `Start-LocalBaseTransaction`: Begins `IMMEDIATE` transaction.
 - `Complete-LocalBaseTransaction`: Commits changes.
 - `Undo-LocalBaseTransaction`: Rolls back changes.
 
+```text
+Start-LocalBaseTransaction [-Database <PSLocalBase>] [-WhatIf] [-Confirm]
+Complete-LocalBaseTransaction [-Database <PSLocalBase>]
+Undo-LocalBaseTransaction [-Database <PSLocalBase>]
+```
+
+All three emit no result object. Starting an already active transaction throws; committing or rolling back without an active transaction also throws. These commands act on their selected connection without changing the ambient connection.
+
 ---
 
 ## Feature Parity Matrix (Fluent vs Cmdlet)
+
+The adapter covers the operations below. Advanced fluent features such as `populate()`, `union()`, `collectionGroup()`, `replaceAll()`, `upsert()` with criteria, `validate()`, and raw `query()` have no dedicated adapter command; obtain the connection with `Get-LocalBaseConnection` and call its methods.
 
 | Capability | Primary Fluent API | Native PowerShell Cmdlet API |
 | :--- | :--- | :--- |

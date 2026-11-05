@@ -4,8 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.0.x   | :white_check_mark: |
-| 1.0.x   | :x: (upgrade to 2.0; see [CHANGELOG.md](CHANGELOG.md)) |
+| 2.1.x   | :white_check_mark: (current release series) |
+| 2.0.x   | :white_check_mark: (upgrade to 2.1 recommended) |
+| 1.0.x   | :x: (upgrade to 2.1; see [CHANGELOG.md](CHANGELOG.md)) |
 
 ---
 
@@ -24,13 +25,13 @@
 
 ### 1. Zero External Dependencies & System32 Search Path Isolation
 - Relies exclusively on `winsqlite3.dll`, a trusted native Windows system binary maintained and patched directly by Microsoft via Windows Update.
-- Eliminates software supply chain risks associated with third-party NuGet packages, external binaries, or unsigned dependencies.
-- Enforces assembly-level `[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]` to completely eliminate DLL preloading and search-order hijacking vulnerabilities.
+- Avoids shipping third-party SQLite packages or native binaries; the module and its distribution still require trusted sources.
+- Enforces assembly-level `[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]` to restrict native DLL resolution to System32.
 
-### 2. Complete Anti-SQL Injection & Strongly-Typed Parameter Defense
+### 2. Parameterized SQL & Strongly-Typed Parameter Defense
 - **Strongly-Typed Parameter Binding:** Document writes (`.set()`, `.add()`, `.update()`), custom SQL operations (`.query()`), and filter values in `.where()` are bound as prepared statement parameters (`?`) with native SQLite type affinities. The only values written into SQL text are type-checked integers (`LIMIT`/`OFFSET`, array lengths) and the boolean literals `1`/`0`:
   - Integer numbers (`int32`, `int64`, `byte`, `sbyte`, `uint16`, `uint32`, `uint64` up to `Int64.MaxValue`, `bool`) are bound with `sqlite3_bind_int64`.
-  - Floating point numbers (`single`, `double`, `decimal`, larger `uint64`) are bound with `sqlite3_bind_double`.
+  - Supported nonintegral `single`, `double` and `decimal` values are bound with `sqlite3_bind_double`; integral decimals within Int64 range are normalized to Int64. UInt64 values above Int64.MaxValue are rejected. The native numeric guard rejects unsupported JSON numbers and floating parameters (see [numeric comparison domain](_DOCS/SPECIFICATION.md#numeric-comparison-domain)).
   - `DateTime`/`DateTimeOffset` values are bound as ISO-8601 UTC text.
   - Nulls are bound with `sqlite3_bind_null`.
   - Strings are bound with exact Unicode byte length via `sqlite3_bind_text16` using `SQLITE_TRANSIENT`.
@@ -55,7 +56,7 @@
 - **Fluent API State Isolation:** Query branches are independent copies. Writes preserve their document target and query scope, including after errors.
 - **WAL Storage Boundary Validation:** Explicitly rejects UNC paths (`\\server\share`) and mapped network drives (`DriveType.Network`) to prevent SQLite shared-memory (`-shm`) corruption over SMB shares.
 - **Safe Transaction Rollback Isolation:** Handlers wrap rollback calls in guarded blocks to ensure engine-level auto-rollbacks (e.g. `SQLITE_FULL`) do not mask root exceptions.
-- **Concurrency & Lock Contention Mitigation:** Implements Write-Ahead Logging (`WAL`), configurable `synchronous` (`NORMAL` by default), and an automated 5,000 ms busy handler (`busy_timeout`). In WAL mode, readers never block writers and writers never block readers. Explicit transactions, bulk replacement and `update()` start with `BEGIN IMMEDIATE`, so concurrent writers wait for the busy timeout instead of failing on a lock upgrade; a clear error is thrown if the timeout is exceeded. The multi-process WAL suite verifies this with a Windows PowerShell 5.1 and a PowerShell 7 process writing to one file concurrently.
+- **Concurrency & Lock Contention Mitigation:** Implements Write-Ahead Logging (`WAL`), configurable `synchronous` (`NORMAL` by default with WAL), and a default 5,000 ms busy handler (`busy_timeout`). WAL permits readers and a writer to operate concurrently; writers still serialize, checkpoints can be delayed by readers, and operations can fail with lock errors. Explicit transactions, bulk replacement and `update()` default to `BEGIN IMMEDIATE`, acquiring the write lock before read-modify-write work. The multi-process WAL suite verifies concurrent Windows PowerShell 5.1 and PowerShell 7 writers for its tested workload. Durability during power loss also depends on synchronous mode, filesystem and hardware behavior.
 
 ### 5. NUL Character Defense & Identifier Integrity
 - Document keys passed to `.doc('key')`, `.add(data, 'key')`, `.insert(data)`, `.upsert()`, and bulk `.replaceAll($array)` / `.set($array)` are explicitly validated against embedded NUL bytes (`\0` / `U+0000`).
@@ -84,7 +85,7 @@
 - **Parent-Child Lifecycle Guarding:** Child collection instances (`IsChildInstance = $true`) share the underlying SQLite native handle (`DbHandle`) with the root `PSLocalBase` instance without owning connection termination.
 - **Immediate Closure Detection:** When the root database connection is closed (`.close()` or `.Dispose()`), child collections validate parent connection health on all operations via `_EnsureOpen()`. A child is rejected when the root handle is zero, differs from the child's handle, or the root's `HandleGeneration` (advanced on every open and close) differs from the generation the child was created with. The child then zeroes its local `DbHandle` and raises `[System.InvalidOperationException]: Database connection is closed.`.
 - **No Reopen:** A closed instance cannot be reopened (`Init()` is `hidden` and refuses a second call). In 1.0.x, reopening let older children pass the closure check with a freed pointer that could belong to another connection.
-- **Memory Safety Guarantee:** Stale or orphaned collection instances are blocked from calling unmanaged SQLite C APIs (`sqlite3_step`, `sqlite3_exec`, `sqlite3_get_autocommit`) even when the native address has been reused, preventing use-after-free.
+- **Stale-Handle Defense:** Stale or orphaned collection instances are blocked from calling unmanaged SQLite C APIs (`sqlite3_step`, `sqlite3_exec`, `sqlite3_get_autocommit`) when the root is closed or its generation differs, including when a native address is reused.
 
 ### 10. Cross-Edition Serialization Depth Protection (Data Loss Prevention)
 - **Pre-Flight Depth Inspection:** Windows PowerShell 5.1's built-in `ConvertTo-Json` silently truncates objects exceeding `-Depth` into .NET type name strings (such as `"System.Collections.Hashtable"`) without raising errors or warnings.
@@ -118,7 +119,7 @@
 - **`PRAGMA trusted_schema = OFF`** is set on every connection. Triggers, views, CHECK constraints and index expressions stored in the file can only call functions SQLite marks as innocuous.
 - **`pslocalbase_like` is registered with `SQLITE_DIRECTONLY`**, so stored triggers and views cannot invoke the managed callback.
 - **Schema names are not trusted:** table names from `sqlite_master` are filtered and bound as parameters (section 2), so names such as `a]b` cannot break `getCollections()`.
-- **Bounded deserialization:** documents larger than `maxDocumentBytes` (16 MB by default) or nested deeper than `maxReadDepth` (100 by default) are rejected before `ConvertFrom-Json` runs, keeping memory use bounded and both PowerShell editions consistent.
+- **Bounded document deserialization:** documents larger than `maxDocumentBytes` (16 MB of UTF-16 JSON by default) or nested deeper than `maxReadDepth` (100 by default) are rejected before `ConvertFrom-Json` runs. These are per-document limits; they do not bound total result-set memory, and native retrieval can materialize text before this check. Use bounded paging for large collections.
 - **`deleteDatabase()` path:** the files to delete are derived from `sqlite3_db_filename`, not from the instance's `FilePath` field, and include the `-journal` file.
 
 ### 17. Session Hygiene

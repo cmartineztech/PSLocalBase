@@ -5,7 +5,7 @@ All notable changes to PSLocalBase are documented here. The project follows [Sem
 ## [2.1.0] - 2026-11-04
 
 ### Added
-- Complete native PowerShell Cmdlets layer (22 approved cmdlets, 7 aliases) with advanced pipeline streaming support and `-WhatIf`/`-Confirm` handling.
+- Complete native PowerShell cmdlet layer (22 exported advanced functions, 7 aliases) with pipeline input/output and `-WhatIf`/`-Confirm` handling on supported operations. Reads materialize the selected query result before emitting pipeline objects; this is not a database cursor stream.
 - Automated pipeline identity tracking decoupled from user payloads via `ConditionalWeakTable`.
 - Transaction script block execution with automatic rollback via `Invoke-LocalBaseTransaction`.
 

@@ -75,7 +75,7 @@ $total  = $db.collection("users").count()
 $recent = $db.collection("audit_logs").where("at", ">=", (Get-Date).AddDays(-1)).count()
 ```
 
-Queries are immutable: `where()`, `orderBy()`, `limit()` and the other modifiers return a new query, and writing through a query does not change it, so you can keep and reuse them.
+Queries are immutable: `where()`, `orderBy()`, `limit()` and the other modifiers return a new query, so you can keep and reuse them. `set()`, `update()` and `upsert()` reject filtered queries; select an unfiltered `.doc(key)` for those writes. Filters can be used with `delete()`.
 
 ## 4. Delete
 
@@ -84,6 +84,8 @@ $db.collection("users").doc("usr-100").delete()             # one document
 $db.collection("audit_logs").where("action", "=", "Login").delete()   # matching documents
 $db.collection("audit_logs").drop()                           # the whole collection
 ```
+
+Calling `.collection(name).delete()` without a document key or filter clears every document but retains the table and indexes. `delete()` rejects `orderBy()`, `limit()` and `skip()`, including `limit(0)`.
 
 ## 5. Transactions
 
@@ -99,7 +101,7 @@ try {
 }
 ```
 
-`beginTransaction()` takes the write lock immediately, so other processes writing to the same file wait (up to `busyTimeout`, 5 seconds by default) instead of failing.
+`beginTransaction()` takes the write lock immediately. Competing writers can wait up to `busyTimeout` (5 seconds by default); a lock that remains unavailable causes an error. With the default WAL settings, committed data survives an application crash, but a power failure can lose recent commits; use `-Options @{ synchronous = 'FULL' }` when that durability is required.
 
 ---
 

@@ -33,7 +33,7 @@ Welcome to the comprehensive **PSLocalBase** documentation guide! This document 
   - [Point Lookups](#point-lookups)
   - [Collection-Wide Retrieval](#collection-wide-retrieval)
   - [First Matching Record (`first`)](#first-matching-record-first)
-  - [O(1) Existence Verification (`exists`)](#o1-existence-verification-exists)
+  - [Existence Verification (`exists`)](#existence-verification-exists)
   - [Selective Field Projection (`select`)](#selective-field-projection-select)
   - [Distinct Values (`distinct`)](#distinct-values-distinct)
   - [Filtering with `where()`](#filtering-with-where)
@@ -129,7 +129,6 @@ powershell.exe -ExecutionPolicy Bypass -File .\Playground\Playground.ps1
 PSLocalBase requires **zero external dependencies**, no NuGet packages, and no binary downloads. It uses Windows' native, pre-installed SQLite engine (`winsqlite3.dll`).
 
 ```powershell
-# Option A: Install from PowerShell Gallery (Recommended)
 # Install from PowerShell Gallery (Recommended):
 Install-Module -Name PSLocalBase -Scope CurrentUser
 Import-Module PSLocalBase
@@ -313,7 +312,7 @@ $db.collection("users").doc("usr-100").update(@{
 ```
 
 ### Atomic Array Mutations (`ArrayUnion`, `ArrayRemove`)
-Atomically mutate arrays inside documents without reading-modifying-writing the whole document:
+Apply array mutations as part of `update()`'s transactional read, deep merge and whole-document write:
 
 ```powershell
 # Add tags without duplicates
@@ -336,7 +335,7 @@ $db.collection("users").doc("usr-100").update(@{
 > **Numeric Precision & Subnormals:** `ArrayUnion` and `ArrayRemove` perform exact 64-bit integer comparisons and preserve floating-point values below Decimal resolution (`|Double| < 1e-28`), preventing quantization loss and collisions between `Double` and `Decimal` types.
 
 ### Secondary Expression Indexes (`createIndex`, `dropIndex`)
-Create native B-Tree indexes on document JSON fields for sub-millisecond querying over millions of records:
+Create native B-Tree expression indexes on document JSON fields. Query speed depends on the plan and dataset; guarded fluent extraction may not use these indexes (see the [numeric comparison domain](SPECIFICATION.md#numeric-comparison-domain)):
 
 ```powershell
 # Standard secondary expression index on a JSON field
@@ -359,7 +358,7 @@ Every collection table is created with a strict table-level constraint:
 ```sql
 doc TEXT NOT NULL CHECK (json_valid(doc))
 ```
-To run an instant health audit on any collection, call `validate()`. It returns a `[bool]`: `$true` when no document is NULL or invalid JSON (and for a collection that does not exist yet), `$false` otherwise:
+To scan a collection's JSON validity, call `validate()`. It returns a `[bool]`: `$true` when no document is NULL or invalid JSON (and for a collection that does not exist yet), `$false` otherwise. It does not validate the entire SQLite file or enforce an application schema:
 ```powershell
 if (-not $db.collection("users").validate()) {
     $bad = $db.query("SELECT key FROM users WHERE doc IS NULL OR json_valid(doc) = 0;")
@@ -382,12 +381,14 @@ $db.collection("temporary_data").delete()
 $db.collection("temporary_data").drop()
 ```
 
+`drop()` always removes the entire selected table, even if a key, filter, ordering or pagination is present. It is rejected on union and collection-group queries. `delete()` rejects ordering/pagination and composite queries; a key and filters are combined with AND. Filtered point `set()`, `update()` and `upsert()` are rejected rather than ignoring filters.
+
 ---
 
 ## 4. Querying & Filtering
 
 ### Point Lookups
-Retrieves a single document by key as a native `[PSCustomObject]`, or `$null` if not found. Point lookups honor `limit()` and `skip()` clauses (for example, `.limit(0)` or `.skip(1)` returns `$null`).
+Retrieves the stored JSON value by key: object documents become `[PSCustomObject]`, while arrays, scalars and null retain their value shape. A missing document also returns `$null`; use `get(@{ keys = $true })` or `exists()` to distinguish stored null from absence. Point lookups honor `limit()` and `skip()` clauses (for example, `.limit(0)` or `.skip(1)` returns `$null`).
 ```powershell
 $user = $db.collection("users").doc("usr-100").get()
 
@@ -399,13 +400,13 @@ $allUsers = $db.collection("users").get()
 ```
 
 ### First Matching Record (`first`)
-Retrieves the first matching document or returns `$null` without buffering arrays:
+Applies `limit(1)` to a cloned query and returns the first result or `$null`. For an array-valued point document, `first()` returns the array's first element; use point `get()` or `first(@{ keys = $true })` to preserve the whole document. The selected result is still materialized:
 ```powershell
 $admin = $db.collection("users").where("role", "==", "Admin").first()
 ```
 
-### O(1) Existence Verification (`exists`)
-Instantly checks if a record exists using `SELECT 1 ... LIMIT 1`:
+### Existence Verification (`exists`)
+Checks whether a matching record exists. Ordinary unpaged collection queries use `SELECT 1 ... LIMIT 1`; point and paged queries use a count, while unions can retrieve and deserialize a result. Key lookups use the primary-key index; an unindexed filter can scan records:
 ```powershell
 # Point lookup existence
 if ($db.collection("users").doc("usr-100").exists()) {
@@ -424,10 +425,13 @@ Extracts and builds smaller JSON objects directly inside SQLite's C engine, redu
 $users = $db.collection("users").select("name", "department").get()
 ```
 
+Repeated `select()` calls accumulate fields. A dotted path such as `profile.city` becomes a literal output property named `profile.city` (access it as `$user.'profile.city'`), rather than rebuilding a nested object.
+
 ### Distinct Values (`distinct`)
 
 `distinct()` rejects limit, skip and orderBy modifiers rather than ignoring them; point keys and filters are respected. See the [numeric comparison domain](SPECIFICATION.md#numeric-comparison-domain) for precision limits.
-Retrieves deduplicated unique values leveraging SQLite B-Tree index scans:
+It excludes null/missing values, sorts ascending using SQLite ordering, and rejects union and collection-group queries.
+Retrieves deduplicated typed values using SQLite `DISTINCT`; an index scan is not guaranteed:
 ```powershell
 $roles = $db.collection("users").distinct("role")
 # Returns: @("Admin", "Developer", "Manager")
@@ -459,7 +463,9 @@ $db.collection("audit_logs").where("timestamp", ">=", (Get-Date).AddDays(-7)).ge
 $db.collection("orders").where("shipping.address.city", "==", "Seattle").get()
 ```
 
-`IN` with a `$null` member also matches documents where the field is null or missing. `not-in` only matches documents where the field is present and not null (an empty list therefore returns every document that has the field); `$null` members are ignored.
+`IN` with a `$null` member also matches documents where the field is null or missing. `not-in` only matches documents where the field is present and not null (an empty list therefore returns every document with a present, non-null field); `$null` members are ignored.
+
+Numeric parameters and stored values used by guarded JSON extraction must satisfy the [numeric comparison domain](SPECIFICATION.md#numeric-comparison-domain). Unsupported values raise errors instead of silently rounding; this can also affect sorting, projection, membership, aggregates and index creation.
 
 Scalar null comparisons follow SQLite JSON semantics: `.where("field", "=", $null)` matches both explicit JSON nulls and missing fields; `.where("field", "!=", $null)` matches only present, non-null values. `.whereType("field", "null")` matches explicit JSON nulls only. These rules also apply to deep dot paths.
 
@@ -484,7 +490,7 @@ $db.collection("users").where("skills", "length", 5).get()
 $db.collection("orders").where("items", "length>", 3).get()
 ```
 
-Unknown `whereLength()` operators throw `ArgumentException`.
+Missing fields, JSON null and non-array values are treated as length zero. Unknown `whereLength()` operators throw `ArgumentException`.
 
 ### Data Type Filtering (`whereType`, `type`)
 Inspects dynamic document schemas using SQLite's `json_type()` (`null`, `integer`, `real`, `text`, `array`, `object`, `true`, `false`), plus the groups `number` (integer or real) and `boolean` (true or false):
@@ -535,14 +541,16 @@ $latestDate = $db.collection("audit_logs").max("timestamp")
 
 `sum()` and `avg()` only use JSON numbers; text, booleans and nulls are ignored rather than counted as `0`. `min()` and `max()` compare JSON numbers numerically and return them as `[long]` or `[double]`; when a field holds no numbers they compare text and return a string (which is how ISO-8601 dates work).
 
+Empty numeric input returns `0.0` for `sum()`/`avg()`; no numeric or text input returns `$null` for `min()`/`max()`. These four methods reject pagination, union and collection-group queries, and honor point keys and filters. `count()` separately supports pagination and composite queries.
+
 ### Sorting & Pagination (`orderBy`, `skip`, `limit`)
 ```powershell
-$pagedUsers = $db.collection("users") `
-    .where("active", "==", $true) `
-    .orderBy("name", "asc") `
-    .skip(20) `
-    .limit(10) `
-    .get()
+$pagedUsers = $db.collection("users").`
+    where("active", "==", $true).`
+    orderBy("name", "asc").`
+    skip(20).`
+    limit(10).`
+    get()
 ```
 
 ### Exposing Primary Keys (`keys = $true`)
@@ -581,11 +589,13 @@ $customBranch = $activeUsers.clone().orderBy("name", "asc")
 
 Resolve foreign keys and joins across collections in a single native SQLite query, completely eliminating N+1 loop queries:
 
+The foreign field stores the other document's storage key. A missing match produces a null populated property. `populate()` is rejected on `union()` and `collectionGroup()` queries.
+
 ```powershell
 # Embed customer user document into the order object
-$ordersWithCustomers = $db.collection("orders") `
-    .populate("customerId", "users", "customer") `
-    .get()
+$ordersWithCustomers = $db.collection("orders").`
+    populate("customerId", "users", "customer").`
+    get()
 
 foreach ($order in $ordersWithCustomers) {
     Write-Host "Order: $($order.orderId) | Placed By: $($order.customer.name)"
@@ -610,13 +620,13 @@ $allOrders = $activeQuery.unionAll($archiveQuery).get()
 ```
 
 ### Sharded Querying (`collectionGroup`)
-Query across multiple collections matching a wildcard pattern (e.g. date-sharded logs or region tables). Matching tables are resolved each time the query runs, so collections created or dropped later are reflected. Each returned object includes an origin property `._collection`, which can also be filtered with `where("_collection", "=", "logs_2026_01")`. A collection group cannot be combined with `union()`/`unionAll()`:
+Query across multiple collections matching a wildcard pattern (e.g. date-sharded logs or region tables). Matching tables are resolved each time the query runs, so collections created or dropped later are reflected. The returned view adds `._collection` with the origin table, replacing any stored property of that name; projections can omit it. It can also be filtered with `where("_collection", "=", "logs_2026_01")`. A collection group cannot be combined with `union()`/`unionAll()`:
 ```powershell
-$criticalErrors = $db.collectionGroup("logs_2026_*") `
-    .where("level", "==", "CRITICAL") `
-    .orderBy("timestamp", "desc") `
-    .limit(50) `
-    .get()
+$criticalErrors = $db.collectionGroup("logs_2026_*").`
+    where("level", "==", "CRITICAL").`
+    orderBy("timestamp", "desc").`
+    limit(50).`
+    get()
 
 foreach ($err in $criticalErrors) {
     Write-Host "[$($err._collection)] $($err.timestamp): $($err.message)"
@@ -709,9 +719,9 @@ An instance that is never closed is released by the garbage collector through a 
 
 ## 10. PowerShell Pipeline Integration & Object Standard
 
-Every single query method in PSLocalBase (`get()`, `first()`, `select()`, `populate()`, `collectionGroup()`, `union()`) returns **100% native PowerShell `[PSCustomObject]` instances**.
+Query builders (`select()`, `populate()`, `collectionGroup()`, `union()`) return `PSLocalBase` query instances; call `get()` or `first()` to materialize results. Object-shaped JSON documents become native `[PSCustomObject]` values, while arrays, scalars and null retain their JSON shape. Aggregates and `exists()` return their own scalar types.
 
-No raw JSON strings, no custom dictionaries, and no manual conversion steps required:
+`get()` materializes its selected result set before passing values down a PowerShell pipeline. Use bounded paging for large collections:
 
 ```powershell
 # 1. Filter and export directly to CSV
@@ -730,8 +740,7 @@ $db.collectionGroup("logs_2026_*").get() |
 
 ### 🛠️ Native PowerShell Cmdlets (`PSLocalBase.Cmdlets.ps1`)
 
-> [!NOTE]
-> **Currently Available in `dev`:** This feature is currently available in the `dev` branch. To use it, download or clone the repository from the `dev` branch and import the module directly from the location downloaded (`Import-Module .\PSLocalBase.psd1 -Force`).
+The adapter is included in release **2.1.0** on `main` and in the PowerShell Gallery package; no `dev` checkout is required.
 
 In addition to the Fluent API, PSLocalBase includes a 100% native PowerShell Cmdlet adapter with pipeline integration (`Add-LocalBaseDocument`, `Get-LocalBaseDocument`, `Update-LocalBaseDocument`, `Remove-LocalBaseDocument`), `-WhatIf` safety, and short interactive aliases (`gld`, `ald`, `uld`, `rld`).
 
@@ -753,18 +762,21 @@ To safely distribute databases across network shares, the writer process exports
 
 ```powershell
 # 1. On the writer server: export consistent snapshot from live WAL DB
-$db.query("VACUUM INTO 'C:\Staging\catalog_snapshot.db';")
+$snapshot = 'C:\Staging\catalog_snapshot.db' # Parent must exist; destination must not already exist
+$db.query('VACUUM INTO ?;', @($snapshot)) # Run outside an active transaction
 
-# 2. Atomically publish the completed snapshot to the SMB share
-Move-Item -LiteralPath "C:\Staging\catalog_snapshot.db" -Destination "\\server\share\catalog.db" -Force
+# 2. Publish under a unique name; clients consume only after this copy completes
+$published = "\\server\share\catalog_$([guid]::NewGuid().ToString('N')).db"
+Copy-Item -LiteralPath $snapshot -Destination $published -ErrorAction Stop
+# Make $published available to clients only after Copy-Item succeeds.
 ```
 
 ### Client Pattern: Safe Local Temp Consumption
 
-Clients query published snapshots by copying them to a unique local temporary file, executing queries at full local NVMe speeds (**100,000+ ops/sec**) with zero network lock contention, and cleaning up in `finally`:
+Clients copy a completed, immutable published snapshot to a unique local temporary file, query the local copy, and clean up in `finally`. A cross-volume `Move-Item` or overwrite of a shared filename does not guarantee atomic publication. Coordinate distribution of the completed snapshot path with clients:
 
 ```powershell
-$smbSnapshot = "\\server\share\catalog.db"
+$smbSnapshot = $published # Completed immutable path supplied by the publisher
 $tempPath    = Join-Path ([System.IO.Path]::GetTempPath()) ("pslocalbase_" + [System.Guid]::NewGuid().ToString("N") + ".db")
 
 try {
@@ -790,6 +802,8 @@ try {
 
 ## Related Documentation
 
+* [Consolidated Multi-Agent Review and Score Table](CONSOLIDATED-REVIEW.md)
+* [Documentation Alignment Audit](DOCUMENTATION-AUDIT.md)
 * [Technical Architecture Specification](SPECIFICATION.md)
 * [Performance Benchmarks (10k Records)](BENCHMARKS.md)
 * [Security Policy & Threat Model](../SECURITY.md)

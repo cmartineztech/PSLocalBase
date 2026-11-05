@@ -100,6 +100,11 @@ function Connect-LocalBase {
         Opens an existing SQLite database file or automatically creates and provisions
         a new database file on demand if it does not yet exist. Sets the connection
         as the ambient session default for all downstream pipeline cmdlets.
+        Successful replacement closes the previous ambient connection and rolls back
+        its uncommitted work. Failed opening leaves the previous connection intact.
+        Defaults: BusyTimeoutMs 5000, JournalMode WAL, Synchronous NORMAL.
+        Emits no object unless -PassThru is specified. Use New-LocalBase to create
+        independent connections without replacing the ambient connection.
     .EXAMPLE
         Connect-LocalBase -Path "./data.db"
     .EXAMPLE
@@ -175,6 +180,9 @@ function Get-LocalBaseConnection {
     <#
     .SYNOPSIS
         Gets the active PSLocalBase connection for the current session.
+    .DESCRIPTION
+        Returns the ambient object, or nothing if none is set. Closing it directly
+        with .close() does not clear this reference; Disconnect-LocalBase does.
     #>
     [CmdletBinding()]
     param()
@@ -186,6 +194,10 @@ function Backup-LocalBaseDatabase {
     <#
     .SYNOPSIS
         Performs a live, consistent online backup using SQLite VACUUM INTO.
+    .DESCRIPTION
+        Resolves relative destinations from the current PowerShell location.
+        Requires an existing parent directory and an absent or empty destination.
+        Cannot run inside an active transaction. Returns no object.
     .EXAMPLE
         Backup-LocalBaseDatabase -DestinationPath "./backup.db"
     #>
@@ -207,7 +219,12 @@ function Backup-LocalBaseDatabase {
 function Remove-LocalBaseDatabase {
     <#
     .SYNOPSIS
-        Deletes a PSLocalBase database file and its associated journal files (.db-wal, .db-shm).
+        Deletes a database file and its -wal, -shm, and -journal sidecars.
+    .DESCRIPTION
+        Close all connections first. Active or inaccessible files cause an error;
+        this command does not close connections. Force permits read-only removal,
+        but does not bypass active-file checks, WhatIf, or confirmation. Missing
+        files are ignored; directories are rejected. Multi-file removal is not atomic.
     .EXAMPLE
         Remove-LocalBaseDatabase -Path "./old.db" -Confirm:$false
     #>
@@ -396,6 +413,10 @@ function Get-LocalBaseDocument {
         expose the payload in Value. Set/Add unwrap these trusted envelopes; Remove uses
         their private identity. Missing point reads emit no item. Distinct rejects paging
         and ordering modifiers. Unsupported numeric comparisons throw instead of rounding.
+        Filter entries use equality and combine with Field, Exists and Missing using AND.
+        Operator defaults to ==. Count counts after First/Skip, takes precedence over
+        Distinct, and ignores Select. Distinct ignores Select. A projected document
+        piped to Set replaces the entire stored payload with that projection.
     .EXAMPLE
         Get-LocalBaseDocument -Collection "users" -Id "usr_100"
     .EXAMPLE
@@ -546,6 +567,10 @@ function Add-LocalBaseDocument {
     <#
     .SYNOPSIS
         Inserts one or more documents into a collection. Supports pipeline streaming.
+    .DESCRIPTION
+        Returns one storage key for each insert. Id must be new; duplicates throw.
+        Without Id a GUID is generated. Accepts JSON null and empty arrays. Each
+        input is written independently; use Invoke-LocalBaseTransaction for a batch.
     .EXAMPLE
         Add-LocalBaseDocument -Collection "users" -Data @{ name = 'Carlos'; role = 'Admin' }
     .EXAMPLE
@@ -587,6 +612,10 @@ function Set-LocalBaseDocument {
     <#
     .SYNOPSIS
         Sets/replaces a document with a specific key, or upserts if it does not exist.
+    .DESCRIPTION
+        Collection and Id may be explicit or resolved from each input object's
+        identity. Data binds from the pipeline and replaces the entire payload.
+        Accepts JSON null and empty arrays. Emits no result object.
     .EXAMPLE
         Set-LocalBaseDocument -Collection "users" -Id "usr_1" -Data @{ name = 'Carlos'; active = $true }
     .EXAMPLE
@@ -636,6 +665,9 @@ function Update-LocalBaseDocument {
     <#
     .SYNOPSIS
         Updates documents with partial recursive JSON merge. Supports pipeline forwarding.
+    .DESCRIPTION
+        Data is the patch; pipeline input binds to InputObject to identify the target.
+        Creates a document if the key is absent. Emits no result object.
     .EXAMPLE
         Update-LocalBaseDocument -Collection "users" -Id "usr_1" -Data @{ active = $true }
     .EXAMPLE
@@ -684,6 +716,9 @@ function Remove-LocalBaseDocument {
     <#
     .SYNOPSIS
         Deletes documents by ID, pipeline, or filter with -WhatIf and -Confirm safety.
+    .DESCRIPTION
+        Id and Filter combine using AND. An empty Filter without a resolved Id is
+        rejected; use Clear-LocalBaseCollection to remove all documents. Emits no count.
     .EXAMPLE
         Remove-LocalBaseDocument -Collection "users" -Id "usr_1" -Confirm:$false
     .EXAMPLE
@@ -753,7 +788,13 @@ function Remove-LocalBaseDocument {
 function Measure-LocalBaseDocument {
     <#
     .SYNOPSIS
-        Calculates mathematical aggregations (Sum, Average, Min, Max, Count) on a numeric field.
+        Returns document count and requested Sum, Average, Minimum and Maximum field aggregates.
+    .DESCRIPTION
+        Always returns Collection, Field and Count; requested switches add aggregate
+        properties. Count includes every matching document. Sum/Average use JSON
+        numbers only and return zero with no numbers. Minimum/Maximum prefer numbers,
+        fall back to text, then null. Queries execute separately; use a transaction
+        for a consistent view across concurrent writes.
     .EXAMPLE
         Measure-LocalBaseDocument -Collection "sales" -Field "amount" -Sum -Average
     #>
@@ -815,6 +856,12 @@ function Invoke-LocalBaseTransaction {
     <#
     .SYNOPSIS
         Executes a scriptblock inside an atomic SQLite transaction (BEGIN IMMEDIATE / COMMIT / ROLLBACK).
+    .DESCRIPTION
+        Uses the selected database as the ambient connection for the block, restores
+        the previous connection afterward, and returns output only after commit.
+        Invokes the block with ErrorActionPreference Stop; unhandled errors roll back.
+        Same-connection nesting is rejected. Different databases use independent
+        transactions and do not form a distributed atomic commit.
     .EXAMPLE
         Invoke-LocalBaseTransaction {
             Add-LocalBaseDocument -Collection "accounts" -Data @{ id = 1; balance = 90 }
@@ -860,6 +907,10 @@ function Start-LocalBaseTransaction {
     <#
     .SYNOPSIS
         Manually starts an atomic transaction on the database.
+    .DESCRIPTION
+        Begins IMMEDIATE on the explicit or ambient connection without replacing
+        the ambient context. Nested transactions on the same connection throw.
+        Supports WhatIf and Confirm. Emits no object.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter()]$Database)
@@ -872,6 +923,9 @@ function Complete-LocalBaseTransaction {
     <#
     .SYNOPSIS
         Commits all pending changes in the current transaction.
+    .DESCRIPTION
+        Uses the explicit or ambient connection. Throws if there is no active
+        transaction. Emits no object; does not support WhatIf or Confirm.
     #>
     [CmdletBinding()]
     param([Parameter()]$Database)
@@ -884,6 +938,9 @@ function Undo-LocalBaseTransaction {
     <#
     .SYNOPSIS
         Rolls back all pending changes in the current transaction.
+    .DESCRIPTION
+        Uses the explicit or ambient connection. Throws if there is no active
+        transaction. Emits no object; does not support WhatIf or Confirm.
     #>
     [CmdletBinding()]
     param([Parameter()]$Database)

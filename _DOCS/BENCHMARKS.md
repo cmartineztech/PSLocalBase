@@ -2,6 +2,8 @@
 
 This document provides a comprehensive empirical performance and architectural evaluation comparing **PSLocalBase** (embedded SQLite NoSQL engine via Windows native `winsqlite3.dll`) against **Native PowerShell Flat JSON file persistence** (`ConvertTo-Json`, `ConvertFrom-Json`, `Get-Content`, `Set-Content`).
 
+**Historical measurements:** The tables retain the results reported on October 30, 2026. They have not been rerun for 2.1.0 and do not establish current performance guarantees. In particular, the current numeric guard changes JSON extraction and expression-index use; rerun the scripts on the intended host and version before using these ratios for capacity planning.
+
 Tests were conducted across both **5,000 records** and **10,000 records** across two distinct operational paradigms:
 1. **Persistent Disk Storage:** Direct on-disk operations (`.db` with WAL mode vs `.json` file on disk).
 2. **In-Memory Engine & Local Disk Sync:** Working purely in RAM (`:memory:` vs in-memory object arrays) and synchronizing dirty state back to persistent disk storage (`VACUUM INTO` vs full JSON serialization).
@@ -17,21 +19,21 @@ Tests were conducted across both **5,000 records** and **10,000 records** across
 | **PowerShell Version** | PowerShell 7.6.9 Core (tested also on Windows PowerShell 5.1.26100) |
 | **Native Engine** | Windows native `C:\Windows\System32\winsqlite3.dll` (Zero External Dependencies) |
 | **Storage Modes** | Persistent WAL Disk (`.db`) & High-Performance In-Memory (`:memory:`) |
-| **Disk Sync Strategy** | SQLite atomic `VACUUM INTO` vs PowerShell `ConvertTo-Json -Depth 20` |
+| **Disk Sync Strategy** | SQLite `VACUUM INTO` snapshot vs PowerShell `ConvertTo-Json -Compress -Depth 10` and `WriteAllText` |
 | **Test Suites** | `_TESTS/benchmark-comparison.ps1` (5k) & `_TESTS/benchmark-10k.ps1` (10k) |
 | **Measurement Date** | Updated 2026-10-30 |
 
 ### Benchmark Methodology & Scope
 
 - **Hardware & OS Profile:** Benchmarks were captured on a modern 64-bit Windows workstation (Windows 10/11 x64) backed by a high-throughput NVMe SSD storage subsystem and the operating system's native `winsqlite3.dll` library.
-- **Warm-Up Iterations & Execution Measurement:**
+- **Execution Measurement:**
   - Measurements utilize high-resolution `[System.Diagnostics.Stopwatch]` timing windows with pre-run memory stabilization via `[System.GC]::Collect()` and `[System.GC]::WaitForPendingFinalizers()`.
-  - Initial pipeline warm-ups ensure that dynamic P/Invoke compilation (via `Add-Type`) and .NET JIT optimization overhead are excluded from timing measurements.
-  - Figures reported in the tables below represent reproducible benchmark executions recorded via `_TESTS/benchmark-comparison.ps1` and `_TESTS/benchmark-10k.ps1` on local NVMe disk.
+  - Module import occurs before timing, but the scripts do not perform explicit per-operation warm-ups or repeated statistical samples. First-use JIT and cache effects can therefore remain in timed operations.
+  - Figures below are reported single-run totals from `_TESTS/benchmark-comparison.ps1` and `_TESTS/benchmark-10k.ps1` on local NVMe disk, not medians or confidence intervals. Individual operation blocks can include loops; compare their actual workloads in the scripts.
 - **Scope of Comparison:**
   - This benchmark evaluates the embedded SQLite NoSQL document model (`PSLocalBase`) against PowerShell's standard flat JSON document persistence paradigm (`Get-Content`, `ConvertFrom-Json`, `ConvertTo-Json`, `Set-Content`).
   - The persistent disk comparison focuses on the architectural cost of individual record mutations: PSLocalBase performs $O(\log N)$ in-place B-Tree page modifications appended to a WAL log, whereas naive flat JSON persistence requires reading, deserializing, modifying, re-serializing, and overwriting the entire multi-megabyte JSON array to update or delete a single document.
-  - The in-memory comparison contrasts SQLite's unmanaged C memory engine (`:memory:`) and atomic binary page dump (`VACUUM INTO`) against managed .NET heap object scans and full string serialization.
+  - The in-memory comparison contrasts SQLite's in-memory database (`:memory:`) and binary snapshot (`VACUUM INTO`) against managed .NET heap object scans and full string serialization.
 
 ---
 
@@ -54,7 +56,7 @@ At 10,000 records, the fundamental architectural differences between an indexed 
 * 🔎 **Multi-filter Query (`active` AND `score >= 80`):** PSLocalBase is **2.39x faster** (126.71 ms vs 302.94 ms).
 
 ### ⚡ Part 2: In-Memory Engine & Disk Sync (10,000 Records)
-* 💾 **Disk Synchronization Flush:** PSLocalBase's native atomic `VACUUM INTO` is **16.66x faster** than serializing and writing flat JSON to disk (24.34 ms vs 405.54 ms).
+* 💾 **Disk Snapshot Export:** PSLocalBase's `VACUUM INTO` was **16.66x faster** in the reported run than serializing and writing flat JSON to disk (24.34 ms vs 405.54 ms).
 * 🎯 **In-Memory Point Lookups (100 random IDs):** PSLocalBase is **8.07x faster** (25.53 ms vs 206.00 ms) due to primary key B-Tree index lookup vs PowerShell collection scans.
 * 📑 **In-Memory Sorting & Pagination:** PSLocalBase is **4.82x faster** (13.36 ms vs 64.38 ms).
 * ✏️ **In-Memory Document Updates (100 docs):** PSLocalBase is **2.65x faster** (102.75 ms vs 272.69 ms).
@@ -85,10 +87,10 @@ Direct persistence to disk (`PSLocalBase` SQLite `.db` in WAL mode vs flat `.jso
 
 ## Part 2: In-Memory Engine & Local Disk Sync (10,000 Records)
 
-Both systems operate with the entire dataset pre-loaded in memory. Modifications happen in RAM, followed by an atomic disk synchronization to persist the dataset.
+Both systems operate with the entire dataset pre-loaded in memory. Modifications happen in RAM, followed by a timed export to persist the dataset. The JSON write is not an atomic replacement, and neither export is a crash-durability benchmark.
 
-* **PSLocalBase Strategy:** `[PSLocalBase]::new(":memory:")` executes all queries and updates in unmanaged C RAM, and calls `VACUUM INTO 'disk.db'` to perform an atomic, compacted flush to disk.
-* **Flat JSON Strategy:** An in-memory `List[hashtable]` or array of `PSCustomObject` mutated in RAM, then flushed to disk via `ConvertTo-Json -Depth 20 | [System.IO.File]::WriteAllText()`.
+* **PSLocalBase Strategy:** `[PSLocalBase]::new(":memory:")` uses SQLite's in-memory database and calls `VACUUM INTO 'disk.db'` to create a consistent, compacted snapshot at a new destination. Wrapper serialization and deep merges still run in managed PowerShell/.NET code.
+* **Flat JSON Strategy:** An in-memory object list mutated in RAM, then serialized using `ConvertTo-Json -Compress -Depth 10` and written using `[System.IO.File]::WriteAllText()`.
 
 | Operation | PSLocalBase In-Memory (ms) | Flat JSON In-Memory (ms) | Speedup Factor | Winner |
 | :--- | :---: | :---: | :---: | :---: |
@@ -100,7 +102,7 @@ Both systems operate with the entire dataset pre-loaded in memory. Modifications
 | **Aggregate Count (Filter + Count)** | 11.26 ms | 3.54 ms | 0.31x | Flat JSON *(direct object property)* |
 | **Multi-filter Query (`active` AND `score >= 80`)** | 61.86 ms | 7.15 ms | 0.12x | Flat JSON *(direct object property)* |
 
-> **Analysis of In-Memory Filtering:** For pure in-memory read-only sequential scans across pre-allocated .NET objects, PowerShell's native pipeline can read existing object pointers without boundary transitions. However, as soon as indexing, lookups, sorting, data mutations, or disk persistence are required, PSLocalBase completely outclasses in-memory flat structures by **2.6x to 8x**, with **16.6x faster disk flushes**.
+> **Analysis of In-Memory Filtering:** Flat object lists were faster for the measured in-memory scans and ingestion, while PSLocalBase was faster for the reported lookup, sort, update and snapshot workloads. These ratios apply to these implementations, datasets and historical runs; indexed .NET dictionaries or another persistence strategy could produce different results.
 
 ---
 
@@ -132,8 +134,8 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 ### Why SQLite uses ~2.3x the disk space of flat JSON:
 1. **B-Tree Page Allocation:** SQLite structures data into fixed-size 4KB pages containing cell pointers, interior nodes, and leaf records for $O(\log N)$ access.
 2. **Primary Key Indexes:** Pre-computed index trees for fast point lookups and uniqueness validation.
-3. **Write-Ahead Logging (`WAL`):** Maintains transaction isolation and concurrency metadata.
-4. **Conclusion:** Spending ~2.7 MB of extra disk space yields **133x to 553x faster updates and deletes**, **16.6x faster disk synchronization**, and zero risk of JSON corruption.
+3. **WAL Sidecars:** The scripts measure the main `.db` file, not a combined `.db` + `-wal` + `-shm` footprint. WAL mode can consume additional temporary space, so these ratios do not represent peak storage use.
+4. **Observed Tradeoff:** The reported dataset used more SQLite storage while its measured mutation and snapshot workloads were faster. Transactions protect against partial logical updates, but do not eliminate all corruption risks.
 
 ---
 
@@ -154,7 +156,7 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 │           ▼ (O(N) linear search through 10,000 items to mutate 1 document)      │
 │  [Modified In-Memory Object Tree]                                               │
 │           │                                                                     │
-│           ▼ (ConvertTo-Json -Depth 20: Serializes ALL 10,000 Objects to JSON)   │
+│           ▼ (ConvertTo-Json -Depth 10: Serializes ALL 10,000 Objects to JSON)   │
 │  [2.0 MB JSON String in Managed Heap]                                           │
 │           │                                                                     │
 │           ▼ (WriteAllText: Replaces Entire File on Disk)                        │
@@ -168,7 +170,7 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                     PSLOCALBASE IN-PLACE B-TREE ARCHITECTURE                    │
 │                                                                                 │
-│  [Incoming Mutation Request: .update("usr-429", @{ score = 99 })]               │
+│  [Incoming Mutation: .doc("usr-429").update(@{ score = 99 })]                  │
 │           │                                                                     │
 │           ▼                                                                     │
 │  [SQLite B-Tree Index: O(log N) lookup directly to 4KB page]                    │
@@ -182,17 +184,19 @@ Empirical results from `_TESTS/benchmark-comparison.ps1`:
 ```
 
 ### Key Architectural Advantages of PSLocalBase:
-1. **$O(\log N)$ In-Place Mutations:** PSLocalBase never rewrites the entire database to update a single record. Only the affected 4KB page is updated in the WAL log.
-2. **Pushdown Filtering:** Query clauses executed inside `winsqlite3.dll` evaluate JSON paths using native C `json_extract()`. Discarded records are never instantiated in the .NET CLR heap, eliminating GC pressure.
-3. **Atomic `VACUUM INTO` for In-Memory DBs:** In-memory databases can be flushed to disk at any time using SQLite's native C page streamer, bypassing PowerShell string concatenation and JSON generation entirely.
-4. **Crash Safety & ACID Guarantees:** Power cuts or interrupted scripts during a flat JSON write will corrupt the JSON file. PSLocalBase uses atomic transactions with zero risk of partial file corruption.
-5. **Non-Blocking Multi-Process Concurrency:** Readers never block writers and writers never block readers in WAL mode, enabling multi-threaded or multi-process PowerShell automation.
+1. **Indexed Point Mutations:** A keyed update avoids rewriting the whole database. `update()` reads, merges and serializes the entire selected document; SQLite may modify multiple data/index pages, with page size and WAL volume depending on configuration and document size.
+2. **Pushdown Filtering:** Query clauses execute inside SQLite, reducing managed document deserialization for rows discarded there. The current managed numeric guard still inspects JSON text and can allocate memory; filtering does not eliminate GC pressure.
+3. **`VACUUM INTO` Snapshots:** A snapshot avoids reserializing every document through PowerShell. It requires no active transaction and a destination that does not already contain data; a snapshot interrupted before completion must not be published.
+4. **Transactional Writes:** SQLite transactions protect logical atomicity; power-loss durability depends on synchronous mode, filesystem and hardware. Directly overwriting a flat JSON file can leave a partial file after interruption.
+5. **WAL Concurrency:** Readers and one writer can operate concurrently. Writers serialize, readers can delay checkpoints, and busy/lock errors remain possible.
 
 ---
 
 ## Reproduction Instructions
 
 To reproduce these benchmarks on your local machine:
+
+Run from a repository checkout in a fresh PowerShell session on Windows. The scripts recreate `_TESTS/temp_bench_data` (5k) and `_TESTS/temp_bench_10k` (10k); keep user data outside these benchmark scratch directories. Record the commit, host, native SQLite version and repeated runs when comparing current results.
 
 ```powershell
 # Run the 10,000 Records Benchmark Suite (Part 1 Disk + Part 2 In-Memory & Sync):
